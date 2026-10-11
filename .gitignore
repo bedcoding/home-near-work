@@ -1,0 +1,7 @@
+node_modules/
+web/dist/
+data/
+config/local.json
+*-probe.mjs
+*.log
+.DS_Store
