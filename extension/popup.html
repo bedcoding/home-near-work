@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>회사근처 내집마련</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>회사근처 내집마련</h1>
+      <p class="hint">켠 사이트에서 지도 동그라미를 누르면 '봤음'이 붙습니다.</p>
+    </header>
+
+    <section class="go">
+      <div class="sec-head">
+        <h2>바로 가기</h2>
+        <select id="go-area" aria-label="어느 지역으로 열지" title="네이버·피터팬은 이 지역 가운데로, 집토스는 가까운 역 페이지로 엽니다"></select>
+      </div>
+      <button id="open-all" class="primary open-all" autofocus>한 번에 열기</button>
+      <p id="open-all-hint" class="hint open-hint"></p>
+      <div id="go-links" class="go-links"></div>
+    </section>
+    <p id="status" role="status"></p>
+
+    <section class="areas">
+      <div class="sec-head">
+        <h2>지역</h2>
+        <label class="option"><input type="checkbox" id="show-range" /> 지도에 점선 원으로 표시</label>
+      </div>
+      <ul id="areas"></ul>
+      <p id="areas-empty" class="hint" hidden>지역이 없습니다. 네이버 지도에서 보고 싶은 곳을 찍어 추가하세요.</p>
+      <button id="pick-area" class="primary">네이버 지도에서 찍어 추가</button>
+      <div id="station-add" class="station-add" hidden>
+        <select id="station" aria-label="추가할 역"><option value="">역으로 추가…</option></select>
+        <select id="station-radius" aria-label="반경"></select>
+        <button id="add-station">추가</button>
+      </div>
+      <p id="areas-sync" class="hint"></p>
+    </section>
+
+    <section>
+      <h2>사이트</h2>
+      <ul id="sites"></ul>
+      <p class="hint">켜거나 끈 뒤에는 그 사이트 탭을 새로고침해 주세요.</p>
+    </section>
+
+    <button id="snapshot" class="quiet">지금 화면 구조 보내기</button>
+    <script src="sites.js"></script>
+    <script src="areas.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
