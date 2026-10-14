@@ -24,19 +24,18 @@ const kindText: Record<'page' | 'data' | 'action', string> = { page: '페이지'
 
 <template>
   <section class="runs">
-    <h2>조회 기록</h2>
-    <p class="muted">조회마다 들른 페이지, 받은 건수, 그때 화면 스크린샷이 남습니다.</p>
-    <table>
+    <h2 title="조회마다 들른 페이지, 받은 건수, 그때 화면 스크린샷이 남습니다">조회 기록</h2>
+    <table class="list">
       <thead>
         <tr><th>번호</th><th>시작</th><th>상태</th><th>방식</th><th>사이트별 결과</th><th></th></tr>
       </thead>
       <tbody>
         <tr v-for="run in runs" :key="run.id">
-          <td class="num">#{{ run.id }}</td>
-          <td class="num">{{ dateTime(run.startedAt) }}</td>
-          <td>{{ statusText[run.status] }}<span v-if="run.error" class="muted">, {{ run.error }}</span></td>
-          <td>{{ run.auto ? '자동, ' : '' }}{{ run.noticesOnly ? '공고만, ' : '' }}{{ run.visible ? '보면서' : '조용히' }}</td>
-          <td>
+          <td class="num tight">#{{ run.id }}</td>
+          <td class="num tight">{{ dateTime(run.startedAt) }}</td>
+          <td class="words">{{ statusText[run.status] }}<span v-if="run.error" class="muted">, {{ run.error }}</span></td>
+          <td class="tight">{{ run.auto ? '자동, ' : '' }}{{ run.noticesOnly ? '공고만, ' : '' }}{{ run.visible ? '보면서' : '조용히' }}</td>
+          <td class="words">
             <div v-for="s in run.summary?.sources ?? []" :key="s.source" class="src">
               <strong>{{ SOURCE_LABEL[s.source] }}</strong>
               <template v-if="s.status === 'ok'">
@@ -110,6 +109,10 @@ p { margin: 0; }
 table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 th, td { padding: 10px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); font-size: 14px; }
 th { background: var(--surface-2); font-size: 13px; color: var(--ink-2); }
+/* 조회 목록: 칸 이름과 번호, 시각, 방식은 줄을 바꾸지 않고, 글은 낱말 단위로 바꾸되 띄어쓰기 없는 긴 글자(오류 속 주소 등)는 아무 데서나 끊어 표가 넓어지지 않게 한다. */
+.list thead th, .list .tight { white-space: nowrap; }
+.list .words { word-break: keep-all; overflow-wrap: anywhere; }
+.list td:nth-child(3) { min-width: 64px; }
 .src { margin-bottom: 2px; }
 .err { color: var(--new); }
 .overlay { position: fixed; inset: 0; background: rgba(22, 32, 46, .45); display: grid; place-items: center; padding: 24px; z-index: 50; }

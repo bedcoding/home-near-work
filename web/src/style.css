@@ -66,6 +66,7 @@ a { color: var(--accent); }
 .chip-kind { background: var(--ink); color: #fff; }
 .chip-kind.officetel { background: #5b3cc4; }
 .chip-kind.villa { background: #0f7a6c; }
+.chip-kind.house { background: #7a4f1f; }
 .chip-kind.shop { background: #a4520b; }
 .chip-kind.land { background: #4d7a1f; }
 .chip-kind.etc, .chip-kind.unknown { background: var(--surface-2); color: var(--muted); }
@@ -80,3 +81,25 @@ a { color: var(--accent); }
 
 .muted { color: var(--muted); }
 .num { font-variant-numeric: tabular-nums; }
+
+/* 접는 카드(details.fold > summary + .fold-body): 제목 줄을 누르면 펼친다. 펼치면 제목 줄 아래에 선을 긋는다. */
+.fold { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.fold > summary {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+  padding: 13px 16px; border-radius: var(--radius); list-style: none; cursor: pointer;
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::after { content: '▸'; margin-left: auto; padding-left: 8px; font-size: 13px; color: var(--muted); }
+.fold > summary:hover::after { color: var(--ink); }
+.fold[open] > summary { border-bottom: 1px solid var(--line); border-radius: var(--radius) var(--radius) 0 0; }
+.fold[open] > summary::after { content: '▾'; }
+.fold-body { padding: 14px 16px 16px; }
+.fold-name { font-size: 16px; font-weight: 800; }
+.fold-count { font-size: 14px; font-weight: 600; }
+
+/* 글자처럼 보이는 작은 버튼(머리 줄의 '모두 읽음' 등) */
+.link-btn {
+  padding: 2px 0; border: 0; background: none; font-size: 13px; font-weight: 600; color: var(--muted);
+  text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px;
+}
+.link-btn:hover { color: var(--ink); text-decoration-color: currentColor; }

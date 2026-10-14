@@ -221,6 +221,69 @@ export interface NoticeView {
   /** 청약 공고 상세(청약홈). */
   detail: SubscriptionDetail | null;
   facts: NoticeFacts | null;
+  /** 신탁 공매 공고의 첨부 공고문을 읽은 결과(아직 안 읽었으면 없음) */
+  doc?: TrustDocView | null;
+}
+
+/** 신탁 공매 공고문의 한 차수. 날짜는 YYYY-MM-DD, 금액은 만원. */
+export interface TrustDocRound {
+  no: number;
+  /** 입찰(공매) 날짜 */
+  bid: string | null;
+  /** 개찰 날짜 */
+  open: string | null;
+  /** 최저입찰가(공매예정가격). 물건이 여럿이면 그 차수에서 가장 낮은 값. */
+  price: number | null;
+  /** 이 차수에 적힌 가격 수(호실이 여럿이면 2 이상) */
+  count: number;
+}
+
+/** 신탁 공매 공고의 첨부 공고문(PDF, 한글)을 받아 읽은 결과. */
+export interface TrustDocView {
+  name: string;
+  /** 공고문 주소(받을 때 POST가 필요한 곳은 null) */
+  url: string | null;
+  readAt: string;
+  rounds: TrustDocRound[];
+  /** 읽은 글자 줄 수(0이면 그림만 든 PDF 등) */
+  lines: number;
+  /** 그림 PDF라 글자 인식으로 읽음(숫자가 틀릴 수 있음) */
+  ocr: boolean;
+  /** 받거나 읽지 못한 까닭 */
+  error: string | null;
+}
+
+/** 직접 받은 공고 첨부 파일에서 켜 둔 지역 근처나 근처 구가 나온 줄. */
+export interface NoticeFileLine {
+  /** 줄 글자. 표는 칸을 ' | '로 잇는다. */
+  text: string;
+  /** near: 근처 동이나 역, 지역 이름(match)이 들어 있음, gu: 근처 구 이름만 들어 있음 */
+  level: 'near' | 'gu';
+  match: string;
+  /** 그 줄 위에서 가장 가까운 표 머리 줄(주소, 보증금 같은 칸 이름). 없으면 null. */
+  header: string | null;
+}
+
+/** 직접 받은 공고 첨부 파일 하나를 읽은 결과. 근처 판단은 지금 켜 둔 지역 기준이다. */
+export interface NoticeFileView {
+  id: number;
+  name: string;
+  /** 받을 때 열려 있던 공고 화면 주소나 파일 이름으로 찾은 공고. 못 찾으면 null. */
+  noticeId: number | null;
+  noticeTitle: string | null;
+  downloadedAt: string;
+  /** ok: 읽음, unsupported: 읽을 수 없는 형식(까닭 error), error: 읽다가 실패 */
+  status: 'ok' | 'unsupported' | 'error';
+  error: string | null;
+  /** 파일에서 읽은 줄 수 */
+  lineCount: number;
+  /** 근처 동이나 이름이 나온 줄 수, 근처 구 이름만 나온 줄 수 */
+  nearCount: number;
+  guCount: number;
+  /** 서울 구마다 그 구 이름이 나온 줄 수(많은 순) */
+  byGu: { gu: string; count: number }[];
+  /** 근처 줄(near 먼저, 파일 순서), 100줄까지 */
+  lines: NoticeFileLine[];
 }
 
 /** 공고 수집 곳별 마지막 결과. */
@@ -400,6 +463,11 @@ export interface ListingView extends NormalizedListing {
 
 /** 경매 탭 칸(주거, 상가, 토지)에 맞춘 매각 결과 종류. other는 산업용, 용도복합용 등 세 칸에 들지 않는 것. */
 export type AuctionResultKind = 'home' | 'shop' | 'land' | 'other';
+/** 매각 결과 요약의 종류: 매각 결과 종류에 house(주거 중 단독주택, 다가구주택, 다중주택)를 더한 것 */
+export type AuctionSummaryKind = AuctionResultKind | 'house';
+
+/** 건물 용도 글자('단독주택다가구', '다가구주택' 등)가 단독주택 갈래(단독, 다가구, 다중주택)인지 */
+export const isDetachedHouseType = (text: string | null | undefined) => /단독|다가구|다중주택/.test(text ?? '');
 
 /**
  * 법원경매 물건 하나의 매각기일 결과. 금액은 만원.
@@ -454,7 +522,7 @@ export interface RatioStats {
  */
 export interface AuctionResultSummary {
   area: string;
-  kind: AuctionResultKind;
+  kind: AuctionSummaryKind;
   held: number;
   sold: number;
   from: string | null;
@@ -480,6 +548,50 @@ export interface CourtRegionStat {
   soldRate: number;
   amountRate: number;
   dongs: { name: string; auctions: number; sold: number; soldRate: number; amountRate: number }[];
+}
+
+/**
+ * 국토부 실거래가 단독주택 매매 한 건(화면용). date는 계약일(YYYY-MM-DD), price 매매가(만원), landM2 대지면적, floorM2 연면적(㎡),
+ * builtYear 건축년도(모르면 null), road 도로조건('8m미만' 등), dealType '중개거래'나 '직거래'.
+ */
+export interface HouseTradeView {
+  gu: string;
+  dong: string;
+  date: string;
+  price: number;
+  landM2: number | null;
+  floorM2: number | null;
+  builtYear: number | null;
+  road: string | null;
+  dealType: string | null;
+}
+
+/** 지역(구나 동) 하나의 오래된 단독주택 거래 요약. 금액은 만원, landPy는 대지 평당 중간값(만원, 대지면적을 모르면 null). */
+export interface HouseTradeGroup {
+  name: string;
+  count: number;
+  medianPrice: number;
+  landPy: number | null;
+  cheapest: HouseTradeView;
+}
+
+/**
+ * 오래된 단독주택 실거래 요약(서울, 계약일 from ~ to). maxBuiltYear 이 해까지 지은 단독주택만 센다(해제된 거래와 건축년도를 모르는 거래는 뺌).
+ * fetchedAt 마지막으로 받은 시각(ISO, 받은 적 없으면 null), error 마지막으로 받다가 난 오류.
+ * buckets 매매가 칸마다 서울 전체와 근처 구(near) 건수. gus는 구마다 요약(near 켜 둔 지역 근처 구), dongs는 그 구의 동마다 요약.
+ * cheapest 서울에서 싼 순 거래.
+ */
+export interface HouseTradeSummary {
+  fetchedAt: string | null;
+  error: string | null;
+  from: string;
+  to: string;
+  maxBuiltYear: number;
+  total: number;
+  medianPrice: number | null;
+  buckets: { label: string; seoul: number; near: number }[];
+  gus: (HouseTradeGroup & { near: boolean; dongs: HouseTradeGroup[] })[];
+  cheapest: HouseTradeView[];
 }
 
 export interface RunSourceSummary {

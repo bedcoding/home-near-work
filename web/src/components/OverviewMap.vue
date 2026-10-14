@@ -27,13 +27,15 @@ const props = withDefaults(
     selectedId: string | null;
     /** 옆에 매물 목록이 있으면 정보 창에 '목록에서 보기'를 둔다(지도 탭은 없음). */
     listMode?: boolean;
+    /** 접힌 지도는 크기가 0이므로, 보일 때까지 화면 맞추기를 미룬다. */
+    visible?: boolean;
     /**
      * 지도를 매물에 다시 맞추는 기준. 이 값이 바뀔 때(가격대를 펼치거나 접을 때, 종류나 지역을 고를 때)만 맞추고,
      * 같은 값에서 매물만 바뀌면(10초마다 상태를 받을 때, 버림, 필터) 사용자가 보던 확대와 위치를 그대로 둔다.
      */
     fitKey?: string;
   }>(),
-  { listMode: true, fitKey: '' },
+  { listMode: true, fitKey: '', visible: true },
 );
 const emit = defineEmits<{ select: [ListingView]; reveal: [ListingView[]]; open: [ListingView]; pick: [Point]; area: [Area]; station: [CatalogStation] }>();
 
@@ -53,6 +55,8 @@ const STATION_MIN_ZOOM = 12;
 const markerOf = new Map<string, { marker: L.Layer; group: Group }>();
 let selected: { marker: L.Layer; group: Group } | null = null;
 let resize: ResizeObserver | null = null;
+let fitPending = false;
+let panPending = false;
 
 interface Group {
   lat: number;
@@ -227,6 +231,11 @@ function drawBase() {
 
 function fitTo(points: L.LatLng[]) {
   if (!map) return;
+  if (!props.visible || !el.value?.clientWidth || !el.value.clientHeight) {
+    fitPending = true;
+    return;
+  }
+  fitPending = false;
   const bounds = L.latLngBounds(points);
   if (!points.length) for (const a of props.areas) bounds.extend(L.latLng(a.lat, a.lng).toBounds(a.radiusM * 2));
   if (bounds.isValid()) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
@@ -290,7 +299,23 @@ function highlight(pan: boolean) {
   if (!selected || !map) return;
   setSelected(selected, true);
   const at = L.latLng(selected.group.lat, selected.group.lng);
+  if (pan && !props.visible) {
+    panPending = true;
+    return;
+  }
   if (pan && !map.getBounds().pad(-0.15).contains(at)) map.panTo(at);
+}
+
+/** 숨김 중 생긴 맞추기 요청만 처리한다. 단순히 다시 열 때는 보던 위치와 확대를 유지한다. */
+function syncVisibleSize() {
+  if (!map || !props.visible || !el.value?.clientWidth || !el.value.clientHeight) return;
+  const size = map.getSize();
+  if (size.x !== el.value.clientWidth || size.y !== el.value.clientHeight) map.invalidateSize();
+  if (fitPending) fitTo(focusPoints());
+  if (panPending) {
+    panPending = false;
+    highlight(true);
+  }
 }
 
 function setSelected(s: { marker: L.Layer; group: Group }, on: boolean) {
@@ -341,7 +366,7 @@ onMounted(() => {
   fittedKey = props.fitKey;
   drawDots(true);
   // 칸 크기가 바뀌면(창 크기, 크게 보기) 지도를 다시 맞춘다.
-  resize = new ResizeObserver(() => map?.invalidateSize());
+  resize = new ResizeObserver(syncVisibleSize);
   resize.observe(el.value);
   window.addEventListener('keydown', onKey);
 });
@@ -368,10 +393,21 @@ watch(
   () => props.selectedId,
   () => highlight(true),
 );
+watch(
+  () => props.visible,
+  async (visible) => {
+    if (!visible) {
+      map?.stop();
+      return;
+    }
+    await nextTick();
+    syncVisibleSize();
+  },
+);
 // 크게 보기를 켜고 끌 때 지도 크기를 다시 재고, 매물이 크게 보이게 다시 맞춘다.
 watch(big, async () => {
   await nextTick();
-  map?.invalidateSize();
+  if (props.visible) map?.invalidateSize();
   fitTo(focusPoints());
   highlight(false);
 });
@@ -391,16 +427,15 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ovmap" :class="{ picking, big }">
-    <div class="top">
-      <span class="note">
-        <template v-if="picking">새 지역의 가운데를 누르세요 (Esc 취소)</template>
-        <template v-else>
-          {{ background.length }}건, 위치 {{ positions }}곳<template v-if="listings.length">, 펼친 목록 {{ listings.length }}건 진하게</template>
-        </template>
-      </span>
-      <button class="btn btn-sm" :aria-pressed="big" @click="big = !big">{{ big ? '작게 보기 (Esc)' : '크게 보기' }}</button>
+    <div class="map-wrap">
+      <div ref="el" class="map" role="region" aria-label="매물 위치 지도"></div>
+      <button
+        class="btn btn-sm big-btn" :aria-pressed="big"
+        :title="`${background.length}건, 위치 ${positions}곳${listings.length ? `, 펼친 목록 ${listings.length}건 진하게` : ''}`"
+        @click="big = !big"
+      >{{ big ? '작게 보기 (Esc)' : '크게 보기' }}</button>
+      <p v-if="picking" class="pick-note">새 지역의 가운데를 누르세요 (Esc 취소)</p>
     </div>
-    <div ref="el" class="map" role="region" aria-label="매물 위치 지도"></div>
     <div class="legend">
       <span><i style="background:#e5484d"></i>신규</span>
       <span><i style="background:#12825e"></i>가격 변동</span>
@@ -419,14 +454,19 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.ovmap { display: grid; grid-template-rows: auto 1fr auto auto; gap: 8px; height: 100%; background: var(--paper); }
+.ovmap { display: grid; grid-template-rows: 1fr auto auto; gap: 8px; height: 100%; background: var(--paper); }
 .ovmap.big {
   position: fixed; inset: 12px; z-index: 60; height: auto; padding: 12px;
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 12px 40px rgba(22, 32, 46, .3);
 }
-.top { display: flex; align-items: center; gap: 8px; }
-.note { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); }
+/* 지도 칸: 오른쪽 위 구석에 크게 보기 버튼, 위치 찍는 중이면 위 가운데에 안내(지도 조작은 막지 않음). 지도 컨트롤(z-index 1000) 위에 둔다. */
+.map-wrap { position: relative; display: grid; min-height: 280px; }
 .map { min-height: 280px; border: 1px solid var(--line-strong); border-radius: 12px; }
+.big-btn { position: absolute; top: 10px; right: 10px; z-index: 1001; box-shadow: 0 1px 4px rgba(22, 32, 46, .18); }
+.pick-note {
+  position: absolute; top: 10px; left: 50%; z-index: 1001; transform: translateX(-50%); margin: 0; padding: 6px 12px; pointer-events: none;
+  border-radius: 8px; background: var(--ink); color: #fff; font-size: 13px; font-weight: 600; white-space: nowrap;
+}
 .picking .map { cursor: crosshair; outline: 3px solid var(--accent); outline-offset: 2px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; color: var(--ink-2); align-items: center; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }

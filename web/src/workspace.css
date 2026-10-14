@@ -1,0 +1,1118 @@
+/* 화면 디자인 층: 컴포넌트 기본 스타일(style.css와 각 .vue) 위에 색, 글자 크기, 여백을 덮어쓴다. index.html의 html[data-design='workspace']에 걸린다. */
+html[data-design='workspace'] {
+  --ink: #1d2c43;
+  --ink-2: #43536b;
+  --muted: #6c7b90;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e2;
+  --paper: #f5f7fb;
+  --surface: #ffffff;
+  --surface-2: #eef2f7;
+  --accent: #355f98;
+  --accent-soft: #eaf0f9;
+  --new: #b74757;
+  --new-soft: #fbecef;
+  --down: #227356;
+  --down-soft: #e8f4ed;
+  --up: #98602a;
+  --up-soft: #fbf0e3;
+  --star: #8e650d;
+  --star-soft: #fff2cf;
+  --discard: #8791a0;
+  --seen: #4b6389;
+  --seen-soft: #eaf0f8;
+  --radius: 12px;
+  --workspace-selected: #213956;
+  --workspace-selected-ink: #f7faff;
+  color-scheme: light;
+}
+
+html[data-design='workspace'] body {
+  font-size: 14px;
+  line-height: 1.55;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+html[data-design='workspace'] :focus-visible {
+  outline: 3px solid #7d9bce;
+  outline-offset: 3px;
+}
+
+html[data-design='workspace'] button,
+html[data-design='workspace'] input,
+html[data-design='workspace'] select {
+  accent-color: var(--accent);
+}
+
+html[data-design='workspace'] .btn {
+  min-height: 40px;
+  border-color: var(--line-strong);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--surface);
+  color: var(--ink-2);
+  transition: background-color .12s, border-color .12s;
+}
+
+html[data-design='workspace'] .btn:hover:not(:disabled) {
+  border-color: #acbad0;
+  background: var(--surface-2);
+}
+
+html[data-design='workspace'] .btn-primary {
+  border-color: var(--workspace-selected);
+  background: var(--workspace-selected);
+  color: var(--workspace-selected-ink);
+}
+
+html[data-design='workspace'] .btn-primary:hover:not(:disabled) {
+  border-color: #304e72;
+  background: #304e72;
+  color: #fff;
+}
+
+html[data-design='workspace'] .btn-ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+html[data-design='workspace'] .btn-sm {
+  min-height: 34px;
+  padding-inline: 11px;
+  font-size: 12px;
+}
+
+html[data-design='workspace'] .chip {
+  padding: 3px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.45;
+  font-weight: 600;
+}
+
+html[data-design='workspace'] .chip-new {
+  background: var(--new-soft);
+  color: var(--new);
+}
+
+html[data-design='workspace'] .chip-near {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+html[data-design='workspace'] .chip-kind {
+  background: #e9eef5;
+  color: #4a5b73;
+}
+
+html[data-design='workspace'] .chip-kind.officetel,
+html[data-design='workspace'] .chip-kind.villa,
+html[data-design='workspace'] .chip-kind.house,
+html[data-design='workspace'] .chip-kind.shop,
+html[data-design='workspace'] .chip-kind.land {
+  background: #e9eef5;
+  color: #4a5b73;
+}
+
+html[data-design='workspace'] .field {
+  font-size: 12px;
+  gap: 6px;
+}
+
+html[data-design='workspace'] .field input[type='number'],
+html[data-design='workspace'] .field input[type='text'],
+html[data-design='workspace'] .field select,
+html[data-design='workspace'] .text-input,
+html[data-design='workspace'] .areas .search,
+html[data-design='workspace'] .alerts .time {
+  min-height: 38px;
+  border-color: var(--line-strong);
+  background: var(--surface);
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+html[data-design='workspace'] .check {
+  min-height: 32px;
+  font-size: 13px;
+  gap: 8px;
+}
+
+html[data-design='workspace'] .check input {
+  width: 16px;
+  height: 16px;
+}
+
+/* 보기 탭 줄: 필터 칸 오른쪽 위 흰 상자, 고른 탭은 짙은 바탕 */
+html[data-design='workspace'] .layout > .tabs {
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+html[data-design='workspace'] .layout > .tabs .tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  margin: 0;
+  padding: 9px 13px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--ink-2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+html[data-design='workspace'] .layout > .tabs .tab:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+html[data-design='workspace'] .layout > .tabs .tab.on {
+  color: var(--workspace-selected-ink);
+  background: var(--workspace-selected);
+}
+
+html[data-design='workspace'] .layout > .tabs .count {
+  font-size: 12px;
+  opacity: 1;
+  color: var(--muted);
+}
+
+html[data-design='workspace'] .layout > .tabs .tab.on .count {
+  color: #cfdef1;
+}
+
+html[data-design='workspace'] .layout > .tabs .tab-more {
+  padding-inline: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+html[data-design='workspace'] .layout > .tabs .tab-more.on {
+  color: var(--workspace-selected-ink);
+}
+
+html[data-design='workspace'] .layout > .tabs .tabs-gap {
+  align-self: stretch;
+  min-width: 13px;
+  margin-block: 7px;
+  border-right: 1px solid var(--line);
+}
+
+html[data-design='workspace'] .layout > .tabs .tab-news {
+  font-size: 10px;
+  padding: 2px 5px;
+}
+
+html[data-design='workspace'] .layout > .tabs .tab.on .chip-near {
+  color: #e3edfb;
+  background: #405b7d;
+}
+
+html[data-design='workspace'] .layout > .tabs .tab.on .chip-new {
+  color: #ffdde4;
+  background: #633f53;
+}
+
+html[data-design='workspace'] .show-filters {
+  min-height: 36px;
+  padding-inline: 11px;
+  border-color: var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+html[data-design='workspace'] .sites,
+html[data-design='workspace'] .area-chips,
+html[data-design='workspace'] .types,
+html[data-design='workspace'] .kinds {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+html[data-design='workspace'] .site,
+html[data-design='workspace'] .area-chip,
+html[data-design='workspace'] .rooms .type,
+html[data-design='workspace'] .kind-btn,
+html[data-design='workspace'] .sort-btn,
+html[data-design='workspace'] .chip-btn,
+html[data-design='workspace'] .menu-area {
+  min-height: 35px;
+  padding-inline: 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  box-shadow: none;
+}
+
+html[data-design='workspace'] .site.on,
+html[data-design='workspace'] .area-chip.on,
+html[data-design='workspace'] .rooms .type.on,
+html[data-design='workspace'] .sort-btn.on,
+html[data-design='workspace'] .chip-btn.on,
+html[data-design='workspace'] .menu-area.on {
+  border-color: #bbcae0;
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+html[data-design='workspace'] .kind-btn.on {
+  border-color: var(--workspace-selected);
+  background: var(--workspace-selected);
+  color: var(--workspace-selected-ink);
+}
+
+/* 필터 칸: 스크롤 막대를 얇게, 칸 테두리와 여백 */
+@media (min-width: 901px) {
+  html[data-design='workspace'] .panel.side {
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+    padding-right: 8px;
+    --filter-scroll-thumb: #c5cfdd;
+  }
+
+  html[data-design='workspace'] .panel.side:hover,
+  html[data-design='workspace'] .panel.side:focus-within {
+    --filter-scroll-thumb: #8e9fb5;
+  }
+
+  html[data-design='workspace'] .panel.side::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  html[data-design='workspace'] .panel.side::-webkit-scrollbar-track,
+  html[data-design='workspace'] .panel.side::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  html[data-design='workspace'] .panel.side::-webkit-scrollbar-thumb {
+    min-height: 40px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--filter-scroll-thumb);
+    background-clip: padding-box;
+  }
+
+  html[data-design='workspace'] .panel.side::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  @supports not selector(::-webkit-scrollbar) {
+    html[data-design='workspace'] .panel.side {
+      scrollbar-width: thin;
+      scrollbar-color: var(--filter-scroll-thumb) transparent;
+    }
+  }
+}
+
+html[data-design='workspace'] .panel {
+  gap: 13px;
+}
+
+html[data-design='workspace'] .panel h2 {
+  font-size: 15px;
+  letter-spacing: -.02em;
+}
+
+html[data-design='workspace'] .panel .sections {
+  gap: 8px;
+}
+
+html[data-design='workspace'] .fsec {
+  border-color: var(--line);
+  border-radius: 10px;
+}
+
+html[data-design='workspace'] .fsec-head {
+  min-height: 42px;
+  border-radius: 10px;
+}
+
+html[data-design='workspace'] .fsec-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+html[data-design='workspace'] .fsec-body {
+  padding: 1px 12px 13px;
+  gap: 9px;
+}
+
+html[data-design='workspace'] .fsec .grip {
+  color: #94a1b4;
+  font-size: 16px;
+}
+
+html[data-design='workspace'] .fsec .unit,
+html[data-design='workspace'] .fsec .chev,
+html[data-design='workspace'] .hidden-count {
+  font-size: 12px;
+}
+
+/* 한눈에 탭: 왼쪽 위 거래 유형 카드, 그 아래 가격대, 오른쪽 따라 내려오는 지도 */
+html[data-design='workspace'] .overview {
+  grid-template-columns: minmax(0, 1fr) clamp(360px, 42%, 760px);
+  grid-template-rows: min-content 1fr;
+  grid-template-areas: 'controls map' 'bands map';
+  gap: 16px 18px;
+  align-items: start;
+}
+
+html[data-design='workspace'] .overview .ov-controls {
+  grid-area: controls;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+html[data-design='workspace'] .overview .deals {
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 6px;
+}
+
+html[data-design='workspace'] .overview .deals > .deal {
+  min-height: 80px;
+  padding: 11px 10px;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  box-shadow: none;
+}
+
+html[data-design='workspace'] .overview .deals > .deal:hover {
+  border-color: #b7c6db;
+}
+
+html[data-design='workspace'] .overview .deals > .deal.on {
+  border-color: #9eb4d2;
+  background: #edf2fa;
+  box-shadow: none;
+}
+
+html[data-design='workspace'] .overview .deal-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+html[data-design='workspace'] .overview .deal-total {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -.045em;
+  color: var(--ink);
+}
+
+html[data-design='workspace'] .overview .deal-news {
+  min-height: 19px;
+}
+
+html[data-design='workspace'] .overview .deal-outside {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+html[data-design='workspace'] .overview .ov-split {
+  display: contents;
+}
+
+html[data-design='workspace'] .overview .ov-map {
+  grid-area: map;
+  position: sticky;
+  top: 125px;
+  order: 0;
+  height: var(--map-panel-height, calc(100dvh - 260px));
+  min-height: 400px;
+  min-width: 0;
+}
+
+html[data-design='workspace'] .overview .ov-map .ovmap:not(.big) {
+  height: 100%;
+}
+
+html[data-design='workspace'] .overview .ov-map .ovmap:not(.big) .map {
+  min-height: 300px;
+}
+
+html[data-design='workspace'] .ov-bands {
+  grid-area: bands;
+  gap: 11px;
+}
+
+html[data-design='workspace'] .bands-head {
+  min-height: 28px;
+}
+
+html[data-design='workspace'] .bands-tools .btn {
+  min-height: 29px;
+  padding-inline: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+html[data-design='workspace'] .bands {
+  gap: 9px;
+}
+
+html[data-design='workspace'] .band {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+html[data-design='workspace'] .band.open {
+  border-color: var(--line-strong);
+}
+
+html[data-design='workspace'] .band.zero {
+  background: transparent;
+}
+
+html[data-design='workspace'] .band-head {
+  min-height: 59px;
+  padding: 12px 14px 12px 6px;
+  gap: 6px 10px;
+  border-radius: 11px;
+}
+
+html[data-design='workspace'] .band-label {
+  min-width: 106px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+html[data-design='workspace'] .band-total {
+  min-width: 43px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+html[data-design='workspace'] .band-sub,
+html[data-design='workspace'] .band .chev {
+  font-size: 11px;
+}
+
+html[data-design='workspace'] .band-head .grip {
+  color: #95a2b5;
+  font-size: 16px;
+}
+
+html[data-design='workspace'] .band-body {
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+
+html[data-design='workspace'] .platforms {
+  padding-left: 0;
+  gap: 5px;
+}
+
+html[data-design='workspace'] .platform {
+  min-height: 33px;
+  padding-inline: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+html[data-design='workspace'] .platform.on {
+  border-color: var(--workspace-selected);
+  background: var(--workspace-selected);
+  color: var(--workspace-selected-ink);
+}
+
+html[data-design='workspace'] .edit-bands {
+  padding: 16px;
+  gap: 11px;
+  border-color: var(--line);
+  border-radius: 11px;
+}
+
+/* 매물 카드: 고른 카드는 짙은 바탕으로 뒤집는다 */
+html[data-design='workspace'] .card {
+  padding: 17px 18px;
+  gap: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: none;
+  transition: background-color .12s, border-color .12s;
+}
+
+html[data-design='workspace'] .card:hover {
+  border-color: #abbdd6;
+  background: #fafcff;
+  box-shadow: none;
+}
+
+html[data-design='workspace'] .card .stats {
+  gap: 10px 18px;
+}
+
+html[data-design='workspace'] .card .stat b {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -.025em;
+}
+
+html[data-design='workspace'] .card .stat.price b {
+  font-size: 22px;
+  letter-spacing: -.035em;
+}
+
+html[data-design='workspace'] .card .stat small {
+  padding-top: 3px;
+  font-size: 11px;
+}
+
+html[data-design='workspace'] .card .deal {
+  margin-right: 7px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+html[data-design='workspace'] .card .tags {
+  gap: 5px 6px;
+}
+
+html[data-design='workspace'] .card .title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+html[data-design='workspace'] .card .meta,
+html[data-design='workspace'] .card .source,
+html[data-design='workspace'] .card .change {
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+html[data-design='workspace'] .card .source {
+  font-weight: 500;
+}
+
+html[data-design='workspace'] .card .meta .addr {
+  overflow-wrap: anywhere;
+}
+
+html[data-design='workspace'] .card .thumb {
+  border-radius: 8px;
+  background-color: var(--surface-2);
+}
+
+html[data-design='workspace'] .card .actions {
+  gap: 6px;
+}
+
+html[data-design='workspace'] .card .actions .btn {
+  min-height: 33px;
+  padding-inline: 11px;
+  font-size: 11px;
+}
+
+html[data-design='workspace'] .card .more {
+  gap: 2px 4px;
+}
+
+html[data-design='workspace'] .card .more .btn {
+  min-height: 29px;
+  padding-inline: 7px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+html[data-design='workspace'] .card.selected,
+html[data-design='workspace'] .card.selected:hover,
+html[data-design='workspace'] .card.selected:focus-within {
+  --ink: #f7faff;
+  --ink-2: #e0e8f4;
+  --muted: #bccbe0;
+  --line: #476181;
+  --line-strong: #6380a3;
+  --surface: #2c4666;
+  --surface-2: #38516f;
+  --accent: #d5e6ff;
+  --accent-soft: #365575;
+  --seen: #d7e5fa;
+  --seen-soft: #3b5577;
+  --down: #c0ebd4;
+  --down-soft: #2d514a;
+  --up: #f3d8b8;
+  --up-soft: #594736;
+  --star: #ffe3a3;
+  --star-soft: #5a4a2d;
+  border-color: var(--workspace-selected);
+  background: var(--workspace-selected);
+  color: var(--workspace-selected-ink);
+  box-shadow: none;
+  opacity: 1;
+}
+
+html[data-design='workspace'] .card.selected .stat b,
+html[data-design='workspace'] .card.selected .stat.floor b,
+html[data-design='workspace'] .card.selected .stat.dist b,
+html[data-design='workspace'] .card.selected .title {
+  color: var(--workspace-selected-ink);
+}
+
+html[data-design='workspace'] .card.selected .muted,
+html[data-design='workspace'] .card.selected .stat small,
+html[data-design='workspace'] .card.selected .deal,
+html[data-design='workspace'] .card.selected .source {
+  color: #bccbe0;
+}
+
+html[data-design='workspace'] .card.selected .chip-new {
+  background: #623d51;
+  color: #ffdbe2;
+}
+
+html[data-design='workspace'] .card.selected .chip-kind,
+html[data-design='workspace'] .card.selected .chip-room,
+html[data-design='workspace'] .card.selected .chip-muted {
+  background: #38516f;
+  color: #e5edf8;
+}
+
+html[data-design='workspace'] .card.selected .chip-warn {
+  background: #5a4a2d;
+  color: #ffe3a3;
+}
+
+html[data-design='workspace'] .card.selected .btn {
+  border-color: #617997;
+  background: #2d486a;
+  color: #eef4ff;
+}
+
+html[data-design='workspace'] .card.selected .btn:hover:not(:disabled) {
+  border-color: #9bb4d5;
+  background: #3c5a7f;
+  color: #fff;
+}
+
+html[data-design='workspace'] .card.selected .btn-primary {
+  border-color: #f0f5ff;
+  background: #f0f5ff;
+  color: #213956;
+}
+
+html[data-design='workspace'] .card.selected .btn-primary:hover:not(:disabled) {
+  border-color: #fff;
+  background: #fff;
+  color: #172f4c;
+}
+
+html[data-design='workspace'] .card.selected .btn-ghost,
+html[data-design='workspace'] .card.selected .more .btn {
+  border-color: transparent;
+  background: transparent;
+  color: #cedcf0;
+}
+
+html[data-design='workspace'] .card.selected .more .btn:hover:not(:disabled) {
+  background: #38516f;
+  color: #fff;
+}
+
+html[data-design='workspace'] .card.selected .actions .on {
+  border-color: #d8b768;
+  background: #5a4a2d;
+  color: #ffe3a3;
+}
+
+html[data-design='workspace'] .card.selected :focus-visible {
+  outline-color: #b9d4ff;
+}
+
+html[data-design='workspace'] .card .selection-label {
+  display: inline-flex;
+  align-items: center;
+  color: #dbe9ff;
+  background: #3a5576;
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 그 밖의 화면: 새 소식 줄, 공고 목록, 설정 칸, 지도, 대화 상자, 알림 */
+html[data-design='workspace'] .newsbar {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+html[data-design='workspace'] .rooms > .head,
+html[data-design='workspace'] .auction > .head,
+html[data-design='workspace'] .rent > .head,
+html[data-design='workspace'] .subs > .head {
+  gap: 10px;
+  padding-block: 6px;
+}
+
+html[data-design='workspace'] .rooms .total,
+html[data-design='workspace'] .rent .total,
+html[data-design='workspace'] .subs .total {
+  font-size: 21px;
+  font-weight: 700;
+}
+
+html[data-design='workspace'] .notice-list > .rows,
+html[data-design='workspace'] .subs > .rows,
+html[data-design='workspace'] .subs .old > .rows {
+  border-color: var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+html[data-design='workspace'] .notice,
+html[data-design='workspace'] .sub-row {
+  padding-block: 15px;
+  border-color: var(--line);
+}
+
+html[data-design='workspace'] .notice .title,
+html[data-design='workspace'] .sub-row .title {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+html[data-design='workspace'] .notice .status b,
+html[data-design='workspace'] .sub-row .status b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+html[data-design='workspace'] .notice .kind,
+html[data-design='workspace'] .sub-row .kind,
+html[data-design='workspace'] .notice .sub,
+html[data-design='workspace'] .sub-row .sub,
+html[data-design='workspace'] .notice .date {
+  font-size: 12px;
+}
+
+html[data-design='workspace'] .notice.near {
+  background: var(--accent-soft);
+  box-shadow: none;
+  border-radius: 7px;
+}
+
+html[data-design='workspace'] .areas .row,
+html[data-design='workspace'] .alerts .row,
+html[data-design='workspace'] .sites-tab .block,
+html[data-design='workspace'] .areas .stations {
+  border-color: var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+html[data-design='workspace'] .sites-tab .block {
+  padding: 18px;
+  gap: 12px;
+}
+
+html[data-design='workspace'] .sites-tab .row {
+  min-height: 52px;
+  border-color: var(--line);
+}
+
+html[data-design='workspace'] .sites-tab .name,
+html[data-design='workspace'] .sites-tab .state {
+  font-size: 13px;
+}
+
+html[data-design='workspace'] .ovmap {
+  background: transparent;
+}
+
+html[data-design='workspace'] .ovmap .map {
+  border-color: var(--line-strong);
+  border-radius: 11px;
+}
+
+html[data-design='workspace'] .ovmap.big {
+  background: var(--paper);
+}
+
+html[data-design='workspace'] .ovmap .legend {
+  font-size: 12px;
+}
+
+html[data-design='workspace'] .progress {
+  background: #eaf0f9;
+}
+
+html[data-design='workspace'] .open-menu {
+  border-color: var(--line);
+  border-radius: 11px;
+  box-shadow: 0 12px 35px #1d2c4321;
+}
+
+html[data-design='workspace'] .menu-link {
+  font-size: 13px;
+}
+
+html[data-design='workspace'] .overlay {
+  background: #172c4966;
+  backdrop-filter: blur(3px);
+}
+
+html[data-design='workspace'] .dialog {
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface);
+  box-shadow: 0 20px 65px #15253b33;
+  gap: 14px;
+}
+
+html[data-design='workspace'] .dialog-head {
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+html[data-design='workspace'] .dialog-head h3 {
+  font-size: 17px;
+  line-height: 1.4;
+}
+
+html[data-design='workspace'] .explain th,
+html[data-design='workspace'] .explain td {
+  padding: 11px 12px;
+  border-color: var(--line);
+  font-size: 12px;
+}
+
+html[data-design='workspace'] .rawjson,
+html[data-design='workspace'] .log,
+html[data-design='workspace'] .livelog {
+  background: #20344e;
+  color: #e0e9f6;
+}
+
+html[data-design='workspace'] .toast {
+  border-radius: 10px;
+  background: var(--workspace-selected);
+  box-shadow: 0 8px 28px #1d2c432e;
+  font-size: 13px;
+}
+
+html[data-design='workspace'] .toast.err {
+  background: #963f4c;
+}
+
+@media (max-width: 1440px) {
+  html[data-design='workspace'] .layout > .tabs .tabs-gap {
+    flex-basis: 100%;
+    height: 1px;
+    min-width: 0;
+    margin-block: 1px;
+    border-right: 0;
+    background: var(--line);
+  }
+}
+
+@media (max-width: 1280px) {
+  html[data-design='workspace'] .overview {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    grid-template-areas: 'map' 'controls' 'bands';
+  }
+
+  html[data-design='workspace'] .overview .ov-map {
+    position: static;
+    order: -1;
+    height: auto;
+    min-height: 0;
+  }
+
+  html[data-design='workspace'] .overview .ov-map .ovmap:not(.big) {
+    height: auto;
+  }
+
+  html[data-design='workspace'] .overview .ov-map .ovmap:not(.big) .map {
+    height: clamp(360px, 68dvh, 760px);
+  }
+}
+
+@media (max-width: 768px) {
+  html[data-design='workspace'] .layout > .tabs {
+    gap: 4px;
+    padding: 6px;
+  }
+
+  html[data-design='workspace'] .layout > .tabs .tab {
+    flex-wrap: wrap;
+    padding-inline: 10px;
+    font-size: 14px;
+    max-width: 100%;
+  }
+
+  html[data-design='workspace'] .layout > .tabs .tab-more {
+    padding-inline: 9px;
+    font-size: 12px;
+  }
+
+  html[data-design='workspace'] .overview .deals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  html[data-design='workspace'] .overview .deals > .deal {
+    padding: 14px;
+    min-height: 106px;
+  }
+
+  html[data-design='workspace'] .band-body {
+    padding: 0 9px 9px;
+  }
+
+  html[data-design='workspace'] .card {
+    padding: 15px;
+  }
+
+  html[data-design='workspace'] .card .stats {
+    gap: 10px 16px;
+  }
+
+  html[data-design='workspace'] .card .stat.price b {
+    font-size: 21px;
+  }
+
+  html[data-design='workspace'] .card .more,
+  html[data-design='workspace'] .card:not(:hover):not(:focus-within):not(.selected) .more {
+    visibility: visible;
+  }
+
+  html[data-design='workspace'] .dialog {
+    padding: 17px;
+    border-radius: 12px;
+  }
+
+  html[data-design='workspace'] .overlay {
+    padding: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  html[data-design='workspace'] .overview {
+    gap: 14px;
+  }
+
+  html[data-design='workspace'] .overview .deals {
+    gap: 8px;
+  }
+
+  html[data-design='workspace'] .overview .deal-total {
+    font-size: 25px;
+  }
+
+  html[data-design='workspace'] .band-head {
+    gap: 6px 8px;
+    padding-right: 10px;
+  }
+
+  html[data-design='workspace'] .band-label {
+    min-width: 94px;
+    font-size: 14px;
+  }
+
+  html[data-design='workspace'] .band-head .band-sub {
+    overflow-wrap: anywhere;
+  }
+
+  html[data-design='workspace'] .card {
+    padding: 13px;
+    gap: 10px;
+  }
+
+  html[data-design='workspace'] .card .stat.price {
+    min-width: 0;
+    flex-basis: 100%;
+  }
+
+  html[data-design='workspace'] .card .stat.price b {
+    font-size: 20px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  html[data-design='workspace'] .card .actions {
+    flex-wrap: wrap;
+  }
+
+  html[data-design='workspace'] .platform {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 7px 9px;
+  }
+
+  html[data-design='workspace'] .areas .stations {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  html[data-design='workspace'] .dialog-head {
+    align-items: flex-start;
+  }
+
+  html[data-design='workspace'] .dialog .explain {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
+@media (pointer: coarse) {
+  html[data-design='workspace'] .btn,
+  html[data-design='workspace'] .card .actions .btn,
+  html[data-design='workspace'] .card .more .btn,
+  html[data-design='workspace'] .platform,
+  html[data-design='workspace'] .site,
+  html[data-design='workspace'] .area-chip,
+  html[data-design='workspace'] .chip-btn,
+  html[data-design='workspace'] .kind-btn,
+  html[data-design='workspace'] .sort-btn,
+  html[data-design='workspace'] .rooms .type {
+    min-height: 44px;
+  }
+
+  html[data-design='workspace'] .card .more,
+  html[data-design='workspace'] .card:not(:hover):not(:focus-within):not(.selected) .more {
+    visibility: visible;
+  }
+
+  html[data-design='workspace'] .field input,
+  html[data-design='workspace'] .field select,
+  html[data-design='workspace'] .text-input {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-design='workspace'] .btn,
+  html[data-design='workspace'] .card {
+    transition: none;
+  }
+}

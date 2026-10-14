@@ -18,6 +18,7 @@ import type {
   RunSummary,
   SeenRef,
   SubscriptionDetail,
+  TrustDocRound,
   Verdict,
 } from '../shared/types.js';
 
@@ -207,6 +208,48 @@ CREATE TABLE IF NOT EXISTS notices (
   for (const c of ['regions', 'starts_at', 'ends_at', 'detail', 'facts']) if (!columns.includes(c)) db.exec(`ALTER TABLE notices ADD COLUMN ${c} TEXT`);
 }
 
+// 사용자가 공고 사이트에서 직접 받은 첨부 파일(크롬 확장이 알림). path: 이 컴퓨터의 파일 위치, page_url: 받을 때 열려 있던 화면,
+// notice_id: 맞춘 공고, status: ok·unsupported·error, lines: 파일에서 읽은 줄(JSON 배열).
+db.exec(`
+CREATE TABLE IF NOT EXISTS notice_files (
+  id INTEGER PRIMARY KEY,
+  path TEXT NOT NULL,
+  name TEXT NOT NULL,
+  url TEXT,
+  page_url TEXT,
+  size INTEGER NOT NULL,
+  downloaded_at TEXT NOT NULL,
+  read_at TEXT NOT NULL,
+  notice_id INTEGER,
+  status TEXT NOT NULL,
+  error TEXT,
+  lines TEXT,
+  UNIQUE (path, size)
+);
+`);
+
+// 신탁 공매 공고의 첨부 공고문을 받아 읽은 결과. 공고 곳과 그 곳의 공고 번호마다 하나.
+// rounds: 차수별 입찰일, 개찰일, 최저가(JSON 배열, 금액은 만원), lines: 읽은 글자 줄(JSON 배열, 전화번호와 메일은 가림),
+// ocr: 그림 PDF라 글자 인식으로 읽음(1), error: 받거나 읽지 못한 까닭.
+db.exec(`
+CREATE TABLE IF NOT EXISTS trust_docs (
+  source TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  url TEXT,
+  read_at TEXT NOT NULL,
+  size INTEGER,
+  rounds TEXT,
+  lines TEXT,
+  ocr INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  PRIMARY KEY (source, source_id)
+);
+`);
+if (!(db.prepare('PRAGMA table_info(trust_docs)').all() as { name: string }[]).some((c) => c.name === 'ocr')) {
+  db.exec('ALTER TABLE trust_docs ADD COLUMN ocr INTEGER NOT NULL DEFAULT 0');
+}
+
 // 법원경매 매각 결과(물건 하나, 매각기일 하나). key: 법원 코드-사건 번호-물건번호. 금액은 원.
 // status: 법원 물건 상태 코드('02' 매각, '03' 유찰, '04' 매각허가결정 등), 경매사건검색에서 그 날 뒤 기일로 넘어가 있었으면 'moved',
 // 그 날 매각되지 않았는데 다음 기일도 없으면 'unsold'.
@@ -254,6 +297,33 @@ CREATE TABLE IF NOT EXISTS court_region_stats (
   dongs TEXT NOT NULL,
   PRIMARY KEY (gu, period)
 );
+`);
+
+// 국토부 실거래가 단독/다가구 매매(거래 하나에 한 줄). key는 구, 동, 가린 번지, 계약일, 금액, 면적, 건축년도, 주택유형을 잇고
+// 뒤에 같은 줄의 순번('#1', '#2')을 붙인 것.
+// contract_date YYYY-MM-DD, price 만원, 면적 ㎡, canceled_at 해제사유발생일(YYYY-MM-DD, 해제되지 않았으면 null).
+db.exec(`
+CREATE TABLE IF NOT EXISTS house_trades (
+  key TEXT PRIMARY KEY,
+  gu TEXT NOT NULL,
+  dong TEXT NOT NULL,
+  jibun TEXT,
+  house_type TEXT NOT NULL,
+  road TEXT,
+  floor_m2 REAL,
+  land_m2 REAL,
+  contract_date TEXT NOT NULL,
+  price INTEGER NOT NULL,
+  built_year INTEGER,
+  road_name TEXT,
+  buyer TEXT,
+  seller TEXT,
+  canceled_at TEXT,
+  deal_type TEXT,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS house_trades_date ON house_trades (contract_date);
 `);
 
 export function getSetting(key: string): string | null {
@@ -421,8 +491,96 @@ export function listNotices(limit = 300): NoticeView[] {
   return views;
 }
 
+export interface NoticeFileRow {
+  id: number;
+  path: string;
+  name: string;
+  url: string | null;
+  page_url: string | null;
+  size: number;
+  downloaded_at: string;
+  read_at: string;
+  notice_id: number | null;
+  status: 'ok' | 'unsupported' | 'error';
+  error: string | null;
+  /** 읽은 줄(JSON 배열) */
+  lines: string | null;
+}
+
+/** 읽은 첨부 파일을 저장한다. 같은 위치와 크기의 파일이면 고쳐 쓴다. 그 번호를 돌려준다. */
+export function saveNoticeFile(f: Omit<NoticeFileRow, 'id' | 'lines'> & { lines: string[] | null }): number {
+  db.prepare(`
+    INSERT INTO notice_files (path, name, url, page_url, size, downloaded_at, read_at, notice_id, status, error, lines)
+    VALUES (@path, @name, @url, @page_url, @size, @downloaded_at, @read_at, @notice_id, @status, @error, @lines)
+    ON CONFLICT (path, size) DO UPDATE SET name = excluded.name, url = excluded.url, page_url = excluded.page_url,
+      downloaded_at = excluded.downloaded_at, read_at = excluded.read_at, notice_id = excluded.notice_id,
+      status = excluded.status, error = excluded.error, lines = excluded.lines
+  `).run({ ...f, lines: f.lines ? JSON.stringify(f.lines) : null });
+  return (db.prepare('SELECT id FROM notice_files WHERE path = ? AND size = ?').get(f.path, f.size) as { id: number }).id;
+}
+
+/** 읽은 첨부 파일(받은 시각 최근 순). */
+export function noticeFileRows(limit = 100): NoticeFileRow[] {
+  return db.prepare('SELECT * FROM notice_files ORDER BY downloaded_at DESC, id DESC LIMIT ?').all(limit) as NoticeFileRow[];
+}
+
+export interface TrustDocRow {
+  source: NoticeSourceId;
+  source_id: string;
+  name: string;
+  url: string | null;
+  read_at: string;
+  size: number | null;
+  /** TrustDocRound[] JSON */
+  rounds: string | null;
+  /** 읽은 줄 JSON 배열 */
+  lines: string | null;
+  /** 글자 인식으로 읽었으면 1 */
+  ocr: number;
+  error: string | null;
+}
+
+/** 공고문을 읽은 결과를 저장한다(같은 공고면 바꿈). */
+export function saveTrustDoc(d: Omit<TrustDocRow, 'rounds' | 'lines' | 'ocr'> & { rounds: TrustDocRound[]; lines: string[]; ocr?: boolean }) {
+  db.prepare(`
+    INSERT INTO trust_docs (source, source_id, name, url, read_at, size, rounds, lines, ocr, error)
+    VALUES (@source, @source_id, @name, @url, @read_at, @size, @rounds, @lines, @ocr, @error)
+    ON CONFLICT (source, source_id) DO UPDATE SET name = excluded.name, url = excluded.url, read_at = excluded.read_at,
+      size = excluded.size, rounds = excluded.rounds, lines = excluded.lines, ocr = excluded.ocr, error = excluded.error
+  `).run({ ...d, rounds: JSON.stringify(d.rounds), lines: JSON.stringify(d.lines), ocr: d.ocr ? 1 : 0 });
+}
+
+/** 한 곳에서 공고문을 읽어 본 공고 번호와 그때 시각, 오류. */
+export function trustDocReads(source: NoticeSourceId): Map<string, { at: string; error: string | null }> {
+  const rows = db.prepare('SELECT source_id, read_at, error FROM trust_docs WHERE source = ?').all(source) as { source_id: string; read_at: string; error: string | null }[];
+  return new Map(rows.map((r) => [r.source_id, { at: r.read_at, error: r.error }]));
+}
+
+/** 공고문을 읽은 결과를 그 공고 번호(notices.id)마다(읽은 줄은 빼고 줄 수만). */
+export function trustDocsByNotice(): Map<number, Omit<TrustDocRow, 'lines'> & { line_count: number }> {
+  const rows = db
+    .prepare(
+      `SELECT n.id AS notice_id, d.source, d.source_id, d.name, d.url, d.read_at, d.size, d.rounds, d.ocr, d.error, COALESCE(json_array_length(d.lines), 0) AS line_count
+       FROM trust_docs d JOIN notices n ON n.source = d.source AND n.source_id = d.source_id`,
+    )
+    .all() as (Omit<TrustDocRow, 'lines'> & { notice_id: number; line_count: number })[];
+  return new Map(rows.map((r) => [r.notice_id, r]));
+}
+
+/** 모든 공고의 번호, 제목, 주소(첨부 파일을 공고와 맞출 때). */
+export function noticeLinks(): { id: number; source: NoticeSourceId; title: string; url: string | null }[] {
+  return db.prepare('SELECT id, source, title, url FROM notices').all() as { id: number; source: NoticeSourceId; title: string; url: string | null }[];
+}
+
+/** 위치와 주소를 아는 매물(사라진 것 포함). 켜 둔 지역 안 매물의 동 이름을 모을 때 쓴다. */
+export function listingPlaces(): { address: string; lat: number; lng: number }[] {
+  return db
+    .prepare("SELECT json_extract(data, '$.address') AS address, lat, lng FROM listings WHERE lat IS NOT NULL AND lng IS NOT NULL AND json_extract(data, '$.address') IS NOT NULL")
+    .all() as { address: string; lat: number; lng: number }[];
+}
+
 /** 서울 25개 구 */
-const SEOUL_GUS = [
+export const SEOUL_GUS = [
   '종로구', '중구', '용산구', '성동구', '광진구', '동대문구', '중랑구', '성북구', '강북구', '도봉구', '노원구', '은평구', '서대문구',
   '마포구', '양천구', '강서구', '구로구', '금천구', '영등포구', '동작구', '관악구', '서초구', '강남구', '송파구', '강동구',
 ];
@@ -734,13 +892,14 @@ export function auctionResultRows(gus?: string[]): AuctionResultRow[] {
     .all(...(gus ?? [])) as AuctionResultRow[];
 }
 
-/** 매각기일이 from(YYYY-MM-DD) 이후인 매각 결과의 구, 종류, 상태, 매각기일, 유찰 횟수, 금액(원). 요약 계산용. */
+/** 매각기일이 from(YYYY-MM-DD) 이후인 매각 결과의 구, 종류, 용도, 상태, 매각기일, 유찰 횟수, 금액(원). 요약 계산용. */
 export function auctionResultRatioRows(from: string) {
   return db
-    .prepare('SELECT gu, kind, status, sale_date, failed, amount, appraisal, min_price FROM auction_results WHERE sale_date >= ?')
+    .prepare('SELECT gu, kind, usage, status, sale_date, failed, amount, appraisal, min_price FROM auction_results WHERE sale_date >= ?')
     .all(from) as {
     gu: string | null;
     kind: AuctionResultKind;
+    usage: string | null;
     status: string;
     sale_date: string;
     failed: number | null;
@@ -795,6 +954,74 @@ export function courtRegionStatRows(gus?: string[]): CourtRegionStat[] {
       amountRate: r.amount_rate,
       dongs: JSON.parse(r.dongs),
     }));
+}
+
+// ---------- 국토부 실거래가 단독/다가구 매매 ----------
+
+/** 실거래 한 건(저장용). 금액은 만원, 면적은 ㎡, 날짜는 YYYY-MM-DD. */
+export interface HouseTradeInput {
+  key: string;
+  gu: string;
+  dong: string;
+  jibun: string | null;
+  houseType: string;
+  road: string | null;
+  floorM2: number | null;
+  landM2: number | null;
+  contractDate: string;
+  price: number;
+  builtYear: number | null;
+  roadName: string | null;
+  buyer: string | null;
+  seller: string | null;
+  canceledAt: string | null;
+  dealType: string | null;
+}
+
+/**
+ * 계약일 from ~ to(YYYY-MM-DD) 범위의 실거래를 이번에 받은 rows로 통째로 바꾼다(그 범위 밖은 그대로 남는다).
+ * 같은 key가 여러 줄이면 key 뒤에 '#순번'을 붙여 따로 둔다. 전에 받은 같은 줄은 처음 본 시각을 이어받는다.
+ */
+export function replaceHouseTrades(from: string, to: string, rows: HouseTradeInput[], at = nowIso()) {
+  const insert = db.prepare(
+    `INSERT INTO house_trades (key, gu, dong, jibun, house_type, road, floor_m2, land_m2, contract_date, price, built_year, road_name, buyer, seller, canceled_at, deal_type, first_seen_at, last_seen_at)
+     VALUES (@key, @gu, @dong, @jibun, @houseType, @road, @floorM2, @landM2, @contractDate, @price, @builtYear, @roadName, @buyer, @seller, @canceledAt, @dealType, @firstSeenAt, @at)`,
+  );
+  db.transaction(() => {
+    const before = db.prepare('SELECT key, first_seen_at FROM house_trades WHERE contract_date BETWEEN ? AND ?').all(from, to) as { key: string; first_seen_at: string }[];
+    const firstSeen = new Map(before.map((r) => [r.key, r.first_seen_at]));
+    db.prepare('DELETE FROM house_trades WHERE contract_date BETWEEN ? AND ?').run(from, to);
+    const seen = new Map<string, number>();
+    for (const r of rows) {
+      const n = (seen.get(r.key) ?? 0) + 1;
+      seen.set(r.key, n);
+      const key = `${r.key}#${n}`;
+      insert.run({ ...r, key, firstSeenAt: firstSeen.get(key) ?? at, at });
+    }
+  })();
+}
+
+export interface HouseTradeRow {
+  gu: string;
+  dong: string;
+  house_type: string;
+  road: string | null;
+  floor_m2: number | null;
+  land_m2: number | null;
+  contract_date: string;
+  price: number;
+  built_year: number | null;
+  deal_type: string | null;
+}
+
+/** 계약일이 from(YYYY-MM-DD) 이후이고 해제되지 않은 단독주택 매매(다가구 제외). */
+export function houseTradeRows(from: string): HouseTradeRow[] {
+  return db
+    .prepare(
+      `SELECT gu, dong, house_type, road, floor_m2, land_m2, contract_date, price, built_year, deal_type
+       FROM house_trades WHERE contract_date >= ? AND canceled_at IS NULL AND house_type = '단독'`,
+    )
+    .all(from) as HouseTradeRow[];
 }
 
 // 설정 court_region_stats(구마다 가장 최근 통계 한 벌)에 있던 값을 표로 옮긴다.

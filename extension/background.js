@@ -5,6 +5,7 @@
 // - 지역(역 반경): 팝업·지도에서 바꾼 목록을 확장에 두고, 대시보드가 켜져 있으면 서로 맞춘다(나중에 바꾼 쪽을 따름).
 // - 대시보드 쪽 확장 파일의 버전이 바뀌면 스스로 다시 불러온다(열려 있던 사이트 탭은 새로고침해야 붙는다).
 // - '한 번에 열기': 팝업·대시보드에서 누르면 켜 둔 사이트를 새 창 하나에 연다.
+// - 공고 사이트에서 직접 받은 첨부 파일의 위치를 대시보드에 알린다(대시보드가 파일을 읽음).
 
 importScripts('sites.js', 'areas.js');
 
@@ -235,6 +236,60 @@ async function migrateAreas() {
   if (!Array.isArray(got['hnw-area-list']) && Array.isArray(got['hnw-areas'])) await hnwWriteAreas(got['hnw-areas'], null);
 }
 
+// ---------- 공고 첨부 파일 ----------
+// 사용자가 공고 사이트(LH, SH, 서울주거포털, 마이홈, 고방, HUG, 청약홈)에서 첨부를 받으면, 받기가 끝났을 때
+// 파일 위치와 받은 주소, 받을 때 열려 있던 화면 주소를 대시보드로 보낸다. 대시보드가 그 파일을 읽는다.
+// 다른 곳에서 받은 파일은 보내지 않는다. 대시보드가 꺼져 있으면 모아 두었다가 켜지면 보낸다.
+
+const NOTICE_FILE_HOSTS = ['lh.or.kr', 'i-sh.co.kr', 'housing.seoul.go.kr', 'soco.seoul.go.kr', 'myhome.go.kr', 'gobang.kr', 'khug.or.kr', 'applyhome.co.kr'];
+const NOTICE_FILE_TYPES = /\.(pdf|hwp|hwpx|hwt|xlsx|xls|csv|zip|doc|docx)$/i;
+const PENDING_FILES = 'pending-files';
+
+/** 주소의 호스트(blob: 주소는 안쪽 주소의 호스트). 모르면 ''. */
+function hostOf(url) {
+  try {
+    return new URL(String(url || '').replace(/^blob:/, '')).hostname;
+  } catch {
+    return '';
+  }
+}
+const isNoticeHost = (url) => {
+  const host = hostOf(url);
+  return !!host && NOTICE_FILE_HOSTS.some((d) => host === d || host.endsWith(`.${d}`));
+};
+
+async function sendNoticeFiles(files) {
+  try {
+    await postJson('/api/notice-files', { files });
+  } catch (e) {
+    if (rejected(e)) return;
+    const got = await chrome.storage.local.get(PENDING_FILES);
+    await chrome.storage.local.set({ [PENDING_FILES]: [...(got[PENDING_FILES] || []), ...files].slice(-50) });
+  }
+}
+
+async function reportNoticeFile(id) {
+  const [item] = await chrome.downloads.search({ id });
+  if (!item || item.state !== 'complete' || !item.filename || !NOTICE_FILE_TYPES.test(item.filename)) return;
+  if (![item.url, item.finalUrl, item.referrer].some(isNoticeHost)) return;
+  await sendNoticeFiles([
+    { path: item.filename, url: item.finalUrl || item.url || null, pageUrl: item.referrer || null, at: item.endTime || new Date().toISOString() },
+  ]);
+}
+
+/** 대시보드가 꺼져 있어 못 보낸 첨부 파일을 보낸다. */
+async function flushPendingFiles() {
+  const got = await chrome.storage.local.get(PENDING_FILES);
+  const files = got[PENDING_FILES] || [];
+  if (!files.length) return;
+  await chrome.storage.local.remove(PENDING_FILES);
+  await sendNoticeFiles(files);
+}
+
+chrome.downloads.onChanged.addListener((delta) => {
+  if (delta.state && delta.state.current === 'complete') void reportNoticeFile(delta.id);
+});
+
 // ---------- 새 버전 확인 ----------
 
 async function checkVersion() {
@@ -253,6 +308,7 @@ async function start() {
   await migrateAreas();
   await syncAreas();
   await flushPending();
+  await flushPendingFiles();
 }
 
 chrome.runtime.onInstalled.addListener(() => void start());
@@ -266,4 +322,5 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   // 대시보드가 다시 켜졌으면 모아 둔 것을 보낸다.
   void flush();
   void flushPending();
+  void flushPendingFiles();
 });

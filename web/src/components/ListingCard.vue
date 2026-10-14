@@ -167,6 +167,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       </div>
 
       <div class="tags">
+        <span v-if="selected" class="selection-label">✓ 선택됨</span>
         <span v-if="l.isNew" class="chip chip-new">신규</span>
         <template v-if="changeText">
           <span class="chip" :class="changeText.tone">{{ changeText.label }}</span>
@@ -221,6 +222,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 </template>
 
 <style scoped>
+.selection-label { display: none; }
 /* 넓으면 버튼을 한 줄로 두고 그 아래 작은 버튼들, 좁으면(지도 옆 목록) 버튼을 세로로 쌓고 작은 버튼들은 왼쪽 맨 아래로. */
 .card {
   display: grid; gap: 6px 16px; align-items: start;

@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { noticeSourcesOf, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type ListingView, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type Verdict } from '../../../shared/types';
+import {
+  noticeSourcesOf, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type HouseTradeSummary, type ListingView, type NoticeSourceId,
+  type NoticeSourceStatus, type NoticeView, type Verdict,
+} from '../../../shared/types';
 import type { CatalogStation } from '../areaActions';
 import { expectedPrices, saleDateOf, saleDay, type AuctionKind } from '../auction';
 import { failedNoticeSources } from '../notices';
 import AuctionResults from './AuctionResults.vue';
+import HouseTrades from './HouseTrades.vue';
 import ListingCard from './ListingCard.vue';
 import NoticeList from './NoticeList.vue';
 import OverviewMap from './OverviewMap.vue';
 
-// 경매 탭: 매각 결과(맨 위), 신탁 공매 공고와 상가, 토지 칸의 LH 공고(접을 수 있음), 매각기일별 목록(왼쪽)과 경매만 그린 지도(오른쪽).
+// 경매 탭: 맨 위 접는 카드들(단독 칸의 오래된 단독주택 실거래, 매각 결과, 상가와 토지 칸의 LH 공고, 신탁 공매 공고),
+// 그 아래 매각기일별 목록(왼쪽)과 경매만 그린 지도(오른쪽).
 // 목록 순서는 받은 그대로 쓴다(App의 키보드 이동과 같은 순서).
 
 type Point = { lat: number; lng: number };
@@ -41,6 +46,11 @@ const props = defineProps<{
   compare: AuctionResultSummary[];
   /** 켜 둔 지역 근처 구 */
   gus: string[];
+  /** 단독 칸 맨 위 오래된 단독주택 실거래 요약(아직 못 받았으면 null), 지은 지 몇 년 넘은 집을 볼지, 지금 받는 중, 받다가 난 오류 */
+  houseTrades: HouseTradeSummary | null;
+  houseAge: number;
+  houseFetching: boolean;
+  houseError: string | null;
 }>();
 const emit = defineEmits<{
   select: [ListingView];
@@ -51,7 +61,7 @@ const emit = defineEmits<{
   pick: [Point];
   area: [Area];
   station: [CatalogStation];
-  /** 경매의 신규와 가격 변동 표시, 새 공매 공고를 모두 확인 */
+  /** 경매의 신규와 가격 변동 표시, 새 공매 공고와 LH 공고의 신규 표시를 모두 지움(모두 읽음) */
   ack: [];
   /** 공매 공고 몇 건만 확인(원문을 열 때) */
   ackNotices: [ids: number[]];
@@ -60,13 +70,25 @@ const emit = defineEmits<{
   /** 보는 종류 바꾸기 */
   kind: [AuctionKind];
   sort: ['default' | 'pyeong'];
+  /** 실거래 요약의 지은 지 몇 년 넘은 집 바꾸기 */
+  houseAge: [number];
+  /** 국토부 실거래를 지금 받기 */
+  houseFetch: [];
 }>();
 
 const KIND_NAMES: { id: AuctionKind; name: string; title: string }[] = [
   { id: 'home', name: '주거', title: '주거용 건물 경매' },
+  { id: 'house', name: '단독', title: '주거 중 단독주택, 다가구주택, 다중주택 경매. 맨 위에 서울의 오래된 단독주택 실거래 표' },
   { id: 'shop', name: '상가', title: '상가 경매(법원경매 상업용 건물, 온비드 근린생활시설과 판매시설 등). 필터는 지역 칸과 검색어만 봅니다' },
   { id: 'land', name: '토지', title: '땅만 파는 경매(건물 없이 토지 목록만 있는 물건, 지분과 도로 포함). 면적은 지분이면 지분만큼. 필터는 지역 칸과 검색어만 봅니다' },
 ];
+
+const EMPTY_TEXT: Record<AuctionKind, string> = {
+  home: '경매 물건이 없습니다.',
+  house: '단독주택 경매 물건이 없습니다.',
+  shop: '상가 경매 물건이 없습니다.',
+  land: '토지 경매 물건이 없습니다.',
+};
 
 /** 지도에 진하게 보일 펼친 목록(경매 탭은 없음). 같은 배열을 써서 다시 그릴 일을 줄인다. */
 const none: ListingView[] = [];
@@ -131,7 +153,7 @@ const days = computed(() => {
         @click="emit('sort', sort === 'pyeong' ? 'default' : 'pyeong')"
       >평당 낮은 순</button>
       <span v-if="outside" class="outside" title="지역 반경 밖이라 가린 경매입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다.">반경 밖 {{ outside }}건</span>
-      <button v-if="news || changed || saleNew || lhNew" class="btn btn-sm" title="경매 신규와 가격 변동, 새 공매 공고와 LH 공고를 모두 확인합니다" @click="emit('ack')">모두 확인</button>
+      <button v-if="news || changed || saleNew || lhNew" class="link-btn" title="경매의 '신규'와 가격 변동 표시, 새 공매 공고와 LH 공고의 '신규' 표시를 모두 지웁니다. 물건과 공고는 그대로 남습니다" @click="emit('ack')">모두 읽음</button>
       <button class="btn btn-primary run" :disabled="running" title="법원경매와 온비드, 신탁 공매 공고만 조회합니다(매매와 전월세 사이트, 임대 공고는 건너뜀)" @click="emit('run')">
         {{ running ? '조회 중…' : '경매 조회하기' }}
       </button>
@@ -139,26 +161,36 @@ const days = computed(() => {
 
     <div class="split">
       <div class="days">
-        <AuctionResults :results="results" :stats="regionStats" :compare="compare" :kind="kind" :gus="gus" />
-        <details v-if="kind !== 'home' && (lhNotices.length || lhOutside || lhFailed.length)" class="sale" :open="lh.open.value" @toggle="lh.onToggle">
-          <summary class="day-head" :title="kind === 'land' ? 'LH 토지 공고와 선착순 토지(서울)' : 'LH 상가 공고와 선착순 상가, 임대상가(서울)'">
-            <span class="day-name">{{ kind === 'land' ? 'LH 토지' : 'LH 상가' }}</span>
-            <span class="muted num day-count">{{ lhCurrent }}건</span>
-            <span v-if="lhNew" class="chip chip-new">신규 {{ lhNew }}</span>
-            <span v-if="lhOutside" class="outside" title="켜 둔 지역 근처 구가 아닌 공고입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다.">지역 밖 {{ lhOutside }}건</span>
-            <span v-for="f in lhFailed" :key="f.id" class="failed" :title="f.title">{{ f.text }}</span>
-          </summary>
-          <NoticeList :notices="lhNotices" @ack="(ids) => emit('ackNotices', ids)" />
-        </details>
-        <details v-if="notices.length || saleFailed.length" class="sale" :open="sale.open.value" @toggle="sale.onToggle">
-          <summary class="day-head" title="부동산신탁사 공매 공고(켜 둔 지역 근처 구)">
-            <span class="day-name">공매 공고</span>
-            <span class="muted num day-count">{{ saleCurrent }}건</span>
-            <span v-if="saleNew" class="chip chip-new">신규 {{ saleNew }}</span>
-            <span v-for="f in saleFailed" :key="f.id" class="failed" :title="f.title">{{ f.text }}</span>
-          </summary>
-          <NoticeList :notices="notices" @ack="(ids) => emit('ackNotices', ids)" />
-        </details>
+        <div class="panels">
+          <HouseTrades
+            v-if="kind === 'house'" :summary="houseTrades" :age="houseAge" :fetching="houseFetching" :error="houseError"
+            @age="(a) => emit('houseAge', a)" @fetch="emit('houseFetch')"
+          />
+          <AuctionResults :results="results" :stats="regionStats" :compare="compare" :kind="kind" :gus="gus" />
+          <details v-if="(kind === 'shop' || kind === 'land') && (lhNotices.length || lhOutside || lhFailed.length)" class="fold" :open="lh.open.value" @toggle="lh.onToggle">
+            <summary :title="kind === 'land' ? 'LH 토지 공고와 선착순 토지(서울)' : 'LH 상가 공고와 선착순 상가, 임대상가(서울)'">
+              <span class="fold-name">{{ kind === 'land' ? 'LH 토지' : 'LH 상가' }}</span>
+              <span class="muted num fold-count">{{ lhCurrent }}건</span>
+              <span v-if="lhNew" class="chip chip-new">신규 {{ lhNew }}</span>
+              <span v-if="lhOutside" class="outside" title="켜 둔 지역 근처 구가 아닌 공고입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다.">지역 밖 {{ lhOutside }}건</span>
+              <span v-for="f in lhFailed" :key="f.id" class="failed" :title="f.title">{{ f.text }}</span>
+            </summary>
+            <div class="fold-body">
+              <NoticeList bare :notices="lhNotices" @ack="(ids) => emit('ackNotices', ids)" />
+            </div>
+          </details>
+          <details v-if="notices.length || saleFailed.length" class="fold" :open="sale.open.value" @toggle="sale.onToggle">
+            <summary title="부동산신탁사 공매 공고(켜 둔 지역 근처 구)">
+              <span class="fold-name">공매 공고</span>
+              <span class="muted num fold-count">{{ saleCurrent }}건</span>
+              <span v-if="saleNew" class="chip chip-new">신규 {{ saleNew }}</span>
+              <span v-for="f in saleFailed" :key="f.id" class="failed" :title="f.title">{{ f.text }}</span>
+            </summary>
+            <div class="fold-body">
+              <NoticeList bare :notices="notices" @ack="(ids) => emit('ackNotices', ids)" />
+            </div>
+          </details>
+        </div>
         <section v-for="g in days" :key="g.key" class="day" :class="{ past: g.past }">
           <h3 class="day-head">
             <span class="day-name">{{ g.day }}</span>
@@ -174,7 +206,7 @@ const days = computed(() => {
             />
           </div>
         </section>
-        <p v-if="!listings.length" class="empty muted">{{ kind === 'shop' ? '상가 경매 물건이 없습니다.' : kind === 'land' ? '토지 경매 물건이 없습니다.' : '경매 물건이 없습니다.' }}</p>
+        <p v-if="!listings.length" class="empty muted">{{ EMPTY_TEXT[kind] }}</p>
       </div>
       <aside class="map">
         <OverviewMap
@@ -206,12 +238,8 @@ const days = computed(() => {
 .when { font-size: 14px; font-weight: 700; color: var(--accent); }
 .day-count { font-size: 14px; font-weight: 600; }
 .day.past .day-name, .day.past .when { color: var(--muted); }
-/* 공매 공고 칸: 제목 줄을 매각기일 제목과 같은 모양으로, 앞에 펼침 표시를 둔다. */
-.sale > summary { cursor: pointer; list-style: none; }
-.sale > summary::-webkit-details-marker { display: none; }
-.sale > summary::before { content: '▸'; font-size: 14px; color: var(--muted); }
-.sale[open] > summary::before { content: '▾'; }
-.sale[open] > summary { margin-bottom: 8px; }
+/* 매각 결과, 실거래, 공고 카드 묶음. 아래 매각기일 목록과 사이를 조금 더 띄운다. */
+.panels { display: grid; gap: 8px; margin-bottom: 6px; }
 .failed { font-size: 13px; font-weight: 700; color: var(--new); }
 .list { display: grid; gap: 8px; container-type: inline-size; }
 .map { position: sticky; top: 92px; height: calc(100vh - 108px); min-height: 420px; }

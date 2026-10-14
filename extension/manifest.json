@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "회사근처 내집마련 지도 표시",
-  "version": "0.7.6",
-  "description": "부동산 사이트를 직접 볼 때 지도 동그라미에 '새 N'(전에 본 때보다 늘어난 매물)과 '봤음'(눌러 본 동그라미)을 붙이고, 고른 지역(역 반경)을 지도에 그립니다. 화면이 받은 매물 데이터는 로컬 대시보드(127.0.0.1:8787)로 보냅니다. 스스로 넘기거나 누르지 않습니다.",
-  "permissions": ["alarms", "activeTab", "storage", "unlimitedStorage", "scripting"],
+  "version": "0.7.7",
+  "description": "부동산 사이트를 직접 볼 때 지도 동그라미에 '새 N'(전에 본 때보다 늘어난 매물)과 '봤음'(눌러 본 동그라미)을 붙이고, 고른 지역(역 반경)을 지도에 그립니다. 화면이 받은 매물 데이터와 공고 사이트에서 직접 받은 첨부 파일 위치는 로컬 대시보드(127.0.0.1:8787)로 보냅니다. 스스로 넘기거나 누르지 않습니다.",
+  "permissions": ["alarms", "activeTab", "storage", "unlimitedStorage", "scripting", "downloads"],
   "host_permissions": [
     "http://127.0.0.1:8787/*",
     "https://fin.land.naver.com/*",

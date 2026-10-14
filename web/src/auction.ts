@@ -1,16 +1,20 @@
-import { listingSection, SEOUL, type CourtRegionStat, type ListingView } from '../../shared/types';
+import { isDetachedHouseType, listingSection, SEOUL, type CourtRegionStat, type ListingView } from '../../shared/types';
 import { manwon, perPyeong } from './format';
 
 /** 경매 매물(법원경매와 온비드 공매, 주거와 상가). 한눈에, 새 소식, 전체, 지도에는 넣지 않고 경매 탭에서 따로 본다. */
 export const isAuction = (l: Pick<ListingView, 'source' | 'buildingType'>) => ['auction', 'shop', 'land'].includes(listingSection(l));
 
 
-/** 경매 탭의 칸: home 주거, shop 상가, land 토지(땅만 파는 것) */
-export type AuctionKind = 'home' | 'shop' | 'land';
-export const auctionKindOf = (l: Pick<ListingView, 'source' | 'buildingType'>): AuctionKind => {
+/** 경매 탭의 칸: home 주거, house 단독(주거 중 단독주택, 다가구주택, 다중주택), shop 상가, land 토지(땅만 파는 것) */
+export type AuctionKind = 'home' | 'house' | 'shop' | 'land';
+/** 경매 물건이 속한 칸(house는 home에 들어 있어서 따로 주지 않는다) */
+export const auctionKindOf = (l: Pick<ListingView, 'source' | 'buildingType'>): Exclude<AuctionKind, 'house'> => {
   const section = listingSection(l);
   return section === 'shop' || section === 'land' ? section : 'home';
 };
+/** 경매 물건이 칸 kind에 보이는지: 단독 칸은 주거 중 건물 용도가 단독주택 갈래인 것 */
+export const inAuctionKind = (l: Pick<ListingView, 'source' | 'buildingType'>, kind: AuctionKind): boolean =>
+  kind === 'house' ? auctionKindOf(l) === 'home' && isDetachedHouseType(l.buildingType) : auctionKindOf(l) === kind;
 
 /** 매각기일(YYYY-MM-DD, 온비드는 개찰일). 두 수집기 모두 이 날을 updatedAt에 둔다. */
 export function saleDateOf(l: ListingView): string | null {

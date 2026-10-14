@@ -1,17 +1,21 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { nearReason, type NoticeView } from '../../../shared/types';
+import { nearReason, type NoticeFileView, type NoticeView } from '../../../shared/types';
 import { ago, money, pyeong } from '../format';
 import { NOTICE_HOME, NOTICE_SHORT, periodState, periodText } from '../notices';
+import NoticeDoc from './NoticeDoc.vue';
+import NoticeFiles from './NoticeFiles.vue';
 
 // 공고 한 줄: 상태(접수 기간) | 종류 | 제목(누르면 원문, 새 공고면 확인 처리)과 지역, 출처 | 숫자(보증금과 평) | 게시일.
 // 칸 너비를 정해 두어 줄끼리 같은 자리에 같은 값이 온다. 목록 칸이 좁으면 종류를 제목 아래 줄로 옮긴다.
 // 숫자 칸은 목록에 숫자가 있는 공고가 하나라도 있을 때만 모든 줄에 둔다(factsCol).
+// 제목 아래에는 신탁 공매 공고문을 읽은 결과(NoticeDoc)와 직접 받은 첨부 파일(NoticeFiles)이 온다.
 /**
  * gus: 켜 둔 지역 근처 구. 주면 모집 지역(regions)을 근처 구 먼저 굵게 보인다.
  * names: 켜 둔 지역 바로 근처의 역과 지역 이름. gus와 함께 주면 근처일 가능성이 높은 공고에 '근처' 표시를 붙인다(nearReason).
+ * files: 이 공고에서 직접 받은 첨부 파일을 읽은 결과. 제목 아래에 파일마다 근처 줄 수를 보인다.
  */
-const props = defineProps<{ notice: NoticeView; factsCol?: boolean; gus?: string[]; names?: string[] }>();
+const props = defineProps<{ notice: NoticeView; factsCol?: boolean; gus?: string[]; names?: string[]; files?: NoticeFileView[] }>();
 const emit = defineEmits<{ ack: [] }>();
 
 const n = computed(() => props.notice);
@@ -75,6 +79,8 @@ const place = computed(() => (!regions.value && n.value.place && !n.value.title.
         <span>{{ NOTICE_SHORT[n.source] }}</span>
         <span v-if="!n.current" title="이 공고가 사이트 목록에서 마지막으로 보인 날(상태는 그때 기준)">마지막으로 본 날 {{ ago(n.lastSeenAt) }}</span>
       </div>
+      <NoticeDoc v-if="n.doc" :doc="n.doc" :link="n.doc.url !== n.url" />
+      <NoticeFiles v-if="files?.length" :files="files" />
     </div>
     <div v-if="factsCol" class="facts">
       <span v-if="n.facts?.amount" class="amount"><small>{{ n.facts.amount.label }}</small> <b class="num">{{ money(n.facts.amount.value) }}</b></span>

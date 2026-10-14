@@ -9,13 +9,15 @@ import { gusFor, nearNamesFor } from './collectors/gus.js';
 import { DASHBOARD_URL, HOST, PORT, RUNS_DIR, WEB_DIST } from './config.js';
 import * as store from './db.js';
 import { openCourtItem } from './court-viewer.js';
+import { buildHouseTradeSummary, collectHouseTrades } from './house-trades.js';
 import {
   acceptCaptures, extensionVersion, finishCaptureSession, naverCaptureState, naverMarks, processPendingNaverCaptures, saveSnapshot, type CaptureInput,
 } from './naver-capture.js';
 import { learnFromStoredCaptures, withLinkHints } from './link-hints.js';
+import { acceptNoticeFiles, noticeFileViews } from './notice-files.js';
 import { getProgress, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
-import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews } from './views.js';
+import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, withTrustFacts } from './views.js';
 import { CAPTURE_SOURCES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type SourceId, type Verdict } from '../shared/types.js';
 
 // 처리하지 못한 비동기 오류가 나도 대시보드 서버가 꺼지지 않게 기록만 남긴다.
@@ -97,7 +99,7 @@ app.get('/api/stations/catalog', async () => stationCatalog());
 app.get('/api/listings', async () => buildListingViews());
 
 /** 공고(가격 없는 공매·임대 공고)와 곳별 마지막 수집 결과. */
-app.get('/api/notices', async () => ({ notices: store.listNotices(), sources: store.noticeStatuses() }));
+app.get('/api/notices', async () => ({ notices: withTrustFacts(store.listNotices()), sources: store.noticeStatuses() }));
 
 /**
  * 켜진 지역 근처 구의 법원경매 매각 결과(매각기일 최근 순), 그 구들과 서울 전체의 지역별 매각통계(읽은 시각 최근 순, 기간마다 하나),
@@ -106,6 +108,28 @@ app.get('/api/notices', async () => ({ notices: store.listNotices(), sources: st
 app.get('/api/auction-results', async () => {
   const gus = gusFor(store.enabledAreas());
   return { results: buildAuctionResultViews(gus), stats: store.courtRegionStatRows([...gus, SEOUL]), compare: buildAuctionResultSummary(gus) };
+});
+
+/** 지은 지 몇 년 넘은 집을 볼지(쿼리 age, 10~100년, 없거나 잘못되면 50) */
+const houseAge = (age: unknown) => {
+  const n = Number(age);
+  return Number.isInteger(n) && n >= 10 && n <= 100 ? n : 50;
+};
+
+/** 국토부 실거래가 단독주택 매매 중 지은 지 age년 넘은 것의 요약(서울, 계약일 최근 1년, 켜진 지역 근처 구 먼저). */
+app.get<{ Querystring: { age?: string } }>('/api/house-trades', async (req) =>
+  buildHouseTradeSummary(gusFor(store.enabledAreas()), houseAge(req.query.age)),
+);
+
+/** 국토부 실거래가 단독/다가구 매매를 지금 받고 요약을 돌려준다. */
+app.post<{ Body: { age?: unknown } | null }>('/api/house-trades/fetch', async (req, reply) => {
+  try {
+    await collectHouseTrades();
+    return buildHouseTradeSummary(gusFor(store.enabledAreas()), houseAge(req.body?.age));
+  } catch (e) {
+    reply.code(502);
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 });
 
 /** 새 공고 표시를 지운다(ids가 없으면 전부). */
@@ -287,6 +311,18 @@ app.post<{ Body: Record<string, unknown> }>('/api/naver/snapshot', { bodyLimit: 
     return { error: e instanceof Error ? e.message : String(e) };
   }
 });
+
+/** 사용자가 공고 사이트에서 직접 받은 첨부 파일(위치 path, 받은 주소 url, 받을 때 열려 있던 화면 pageUrl, 받은 시각 at). 크롬 확장에서 온 요청만 받는다. */
+app.post<{ Body: { files?: unknown } }>('/api/notice-files', async (req, reply) => {
+  if (!fromExtension(req.headers.origin)) {
+    reply.code(403);
+    return { error: '크롬 확장에서 보낸 요청만 받습니다.' };
+  }
+  return { accepted: acceptNoticeFiles(Array.isArray(req.body?.files) ? req.body.files : []) };
+});
+
+/** 직접 받은 공고 첨부 파일을 읽은 결과(받은 시각 최근 순, 근처는 지금 켜 둔 지역 기준). */
+app.get('/api/notice-files', async () => ({ files: noticeFileViews() }));
 
 app.get('/api/extension/version', async () => ({ version: extensionVersion() }));
 

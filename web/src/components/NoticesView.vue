@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { inGus, nearReason, type NoticeSourceId, type NoticeSourceStatus, type NoticeView } from '../../../shared/types';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { inGus, nearReason, type NoticeFileView, type NoticeSourceId, type NoticeSourceStatus, type NoticeView } from '../../../shared/types';
+import { api } from '../api';
 import { failedNoticeSources } from '../notices';
+import NoticeFiles from './NoticeFiles.vue';
 import NoticeList from './NoticeList.vue';
 
 // 임대 공고 탭: SH, LH, 고방의 청년과 공공 임대 공고, 청약홈 민간임대. 지금 사이트 목록에 올라와 있는 공고를 위에 두고, 내려간 공고는 접어 둔다.
@@ -38,6 +40,33 @@ const near = computed(() => shown.value.filter((n) => n.current && isNear(n)).le
 const newIds = computed(() => shown.value.filter((n) => n.isNew).map((n) => n.id));
 /** 마지막 수집이 실패한 곳(목록이 그 전 것이라는 걸 숨기지 않게 머리 줄에 보인다) */
 const failed = computed(() => failedNoticeSources(props.sources, props.status));
+
+/** 직접 받은 첨부 파일을 읽은 결과. 탭을 보는 동안 10초마다 다시 받는다(받자마자 읽은 결과가 뜨게). */
+const files = ref<NoticeFileView[]>([]);
+async function loadFiles() {
+  try {
+    files.value = (await api.noticeFiles()).files;
+  } catch {
+    /* 대시보드가 잠깐 꺼져 있으면 다음에 받는다 */
+  }
+}
+let timer: number | undefined;
+onMounted(() => {
+  void loadFiles();
+  timer = window.setInterval(loadFiles, 10_000);
+});
+onUnmounted(() => window.clearInterval(timer));
+/** 공고 번호마다 받은 파일 */
+const filesByNotice = computed(() => {
+  const map = new Map<number, NoticeFileView[]>();
+  for (const f of files.value) if (f.noticeId != null) map.set(f.noticeId, [...(map.get(f.noticeId) ?? []), f]);
+  return map;
+});
+/** 보이는 공고 줄에 붙지 않는 파일(공고를 못 찾았거나 이 탭에 안 보이는 공고) */
+const looseFiles = computed(() => {
+  const ids = new Set(shown.value.map((n) => n.id));
+  return files.value.filter((f) => f.noticeId == null || !ids.has(f.noticeId));
+});
 </script>
 
 <template>
@@ -54,11 +83,15 @@ const failed = computed(() => failedNoticeSources(props.sources, props.status));
         :title="`켜 둔 지역 근처 구(${gus.join(', ')})가 아닌 공고입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다.`"
       >지역 밖 {{ outside }}건</span>
       <span v-for="f in failed" :key="f.id" class="failed" :title="f.title">{{ f.text }}</span>
-      <button v-if="newIds.length" class="btn btn-sm" @click="emit('ack', newIds)">모두 확인</button>
+      <button v-if="newIds.length" class="link-btn" title="새 공고의 '신규' 표시를 모두 지웁니다. 공고는 그대로 남습니다" @click="emit('ack', newIds)">모두 읽음</button>
+    </div>
+
+    <div v-if="looseFiles.length" class="loose" title="공고 화면에서 받았지만 이 목록의 공고와 맞추지 못한 첨부 파일(다른 탭 공고 포함)">
+      <NoticeFiles :files="looseFiles" show-notice />
     </div>
 
     <p v-if="!notices.length" class="empty muted">'조회하기'를 누르면 모읍니다.</p>
-    <NoticeList v-else :notices="shown" :gus="gus" :names="names" @ack="(ids) => emit('ack', ids)" />
+    <NoticeList v-else :notices="shown" :gus="gus" :names="names" :files="filesByNotice" @ack="(ids) => emit('ack', ids)" />
   </section>
 </template>
 
@@ -69,4 +102,5 @@ const failed = computed(() => failedNoticeSources(props.sources, props.status));
 .outside { font-size: 13px; font-weight: 600; color: var(--muted); }
 .failed { font-size: 13px; font-weight: 700; color: var(--new); }
 .empty { padding: 32px 0; text-align: center; }
+.loose { padding: 6px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 </style>
