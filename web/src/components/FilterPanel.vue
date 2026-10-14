@@ -7,12 +7,12 @@ import { KIND_LABEL, KINDS } from '../kinds';
 const filters = defineModel<Filters>({ required: true });
 /**
  * unused: 지금 탭에서 안 쓰는 칸(흐리게 보인다). 'all'이면 모든 칸.
- * dealChoices: 거래 유형 칸에 보일 것(없으면 전부). singleDeal: 거래 유형을 하나만 고른다(한눈에 탭, 가운데 카드와 같은 값).
+ * dealChoices: 거래 유형 칸에 보일 것(없으면 전부). singleDeal: 거래 유형을 하나만 고른다(매물 탭, 가운데 거래 유형 탭과 같은 값).
  */
 const props = defineProps<{ hiddenCount: number; allAreas: Area[]; unused?: string[] | 'all'; dealChoices?: DealType[]; singleDeal?: boolean }>();
 const emit = defineEmits<{ manageAreas: []; hide: [] }>();
 
-/** 한눈에 탭 지역 칸에서 한 지역만 보고 있으면 그 이름. */
+/** 매물 탭 지역 칸에서 한 지역만 보고 있으면 그 이름. */
 const focusText = computed(() => {
   const names = props.allAreas.filter((a) => a.enabled && filters.value.areaIds.includes(a.id)).map((a) => a.name);
   return names.length ? `${names.join(', ')}만 보는 중` : null;

@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { inGus, nearReason, type NoticeFileView, type NoticeSourceId, type NoticeSourceStatus, type NoticeView } from '../../../shared/types';
 import { api } from '../api';
 import { failedNoticeSources } from '../notices';
+import CountTooltip from './CountTooltip.vue';
 import NoticeFiles from './NoticeFiles.vue';
 import NoticeList from './NoticeList.vue';
 
@@ -38,6 +39,7 @@ const current = computed(() => shown.value.filter((n) => n.current).length);
 /** 근처일 가능성이 높은 공고 수(지금 올라와 있는 것) */
 const near = computed(() => shown.value.filter((n) => n.current && isNear(n)).length);
 const newIds = computed(() => shown.value.filter((n) => n.isNew).map((n) => n.id));
+const countDetails = computed(() => `근처 ${near.value}건\n신규 ${newIds.value.length}건\n지역 밖 ${outside.value}건`);
 /** 마지막 수집이 실패한 곳(목록이 그 전 것이라는 걸 숨기지 않게 머리 줄에 보인다) */
 const failed = computed(() => failedNoticeSources(props.sources, props.status));
 
@@ -72,18 +74,8 @@ const looseFiles = computed(() => {
 <template>
   <section class="rent">
     <div class="head">
-      <strong class="total num">임대 공고 {{ current }}건</strong>
-      <span
-        v-if="near" class="chip chip-near"
-        :title="`제목에 ${names.join(', ')} 중 하나가 들었거나 모집 지역이 모두 ${gus.join(', ')} 안인 공고입니다. 맨 위에 둡니다.`"
-      >근처 {{ near }}</span>
-      <span v-if="newIds.length" class="chip chip-new">신규 {{ newIds.length }}</span>
-      <span
-        v-if="outside" class="outside"
-        :title="`켜 둔 지역 근처 구(${gus.join(', ')})가 아닌 공고입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다.`"
-      >지역 밖 {{ outside }}건</span>
+      <strong class="total num">임대 공고 <CountTooltip :text="countDetails">{{ current }}건</CountTooltip></strong>
       <span v-for="f in failed" :key="f.id" class="failed" :title="f.title">{{ f.text }}</span>
-      <button v-if="newIds.length" class="link-btn" title="새 공고의 '신규' 표시를 모두 지웁니다. 공고는 그대로 남습니다" @click="emit('ack', newIds)">모두 읽음</button>
     </div>
 
     <div v-if="looseFiles.length" class="loose" title="공고 화면에서 받았지만 이 목록의 공고와 맞추지 못한 첨부 파일(다른 탭 공고 포함)">
@@ -99,7 +91,6 @@ const looseFiles = computed(() => {
 .rent { display: grid; gap: 14px; max-width: 1100px; }
 .head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 40px; }
 .total { font-size: 22px; font-weight: 800; letter-spacing: -0.01em; margin-right: 4px; }
-.outside { font-size: 13px; font-weight: 600; color: var(--muted); }
 .failed { font-size: 13px; font-weight: 700; color: var(--new); }
 .empty { padding: 32px 0; text-align: center; }
 .loose { padding: 6px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }

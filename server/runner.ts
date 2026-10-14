@@ -302,6 +302,9 @@ async function execute(
   let session: BrowserSession | null = null;
 
   const finish = (status: 'done' | 'error' | 'stopped', errorMessage: string | null) => {
+    const tidy = store.tidyListings();
+    if (tidy.stale) log(`네이버, 다방, 직방에서 14일 넘게 다시 못 본 매물 ${tidy.stale}건을 사라짐으로 둠`);
+    if (tidy.purged) log(`사라진 지 오래된 매물 ${tidy.purged}건을 지움`);
     const summary: RunSummary = {
       sources: summaries,
       newCount: summaries.reduce((n, s) => n + s.newCount, 0),

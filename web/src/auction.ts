@@ -1,7 +1,7 @@
 import { isDetachedHouseType, listingSection, SEOUL, type CourtRegionStat, type ListingView } from '../../shared/types';
 import { manwon, perPyeong } from './format';
 
-/** 경매 매물(법원경매와 온비드 공매, 주거와 상가). 한눈에, 새 소식, 전체, 지도에는 넣지 않고 경매 탭에서 따로 본다. */
+/** 경매 매물(법원경매와 온비드 공매, 주거와 상가). 매물 탭에는 넣지 않고 경매 탭에서 따로 본다. */
 export const isAuction = (l: Pick<ListingView, 'source' | 'buildingType'>) => ['auction', 'shop', 'land'].includes(listingSection(l));
 
 

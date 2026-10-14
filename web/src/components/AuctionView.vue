@@ -8,19 +8,29 @@ import type { CatalogStation } from '../areaActions';
 import { expectedPrices, saleDateOf, saleDay, type AuctionKind } from '../auction';
 import { failedNoticeSources } from '../notices';
 import AuctionResults from './AuctionResults.vue';
+import CountTooltip from './CountTooltip.vue';
 import HouseTrades from './HouseTrades.vue';
 import ListingCard from './ListingCard.vue';
 import NoticeList from './NoticeList.vue';
 import OverviewMap from './OverviewMap.vue';
 
-// 경매 탭: 맨 위 접는 카드들(단독 칸의 오래된 단독주택 실거래, 매각 결과, 상가와 토지 칸의 LH 공고, 신탁 공매 공고),
-// 그 아래 매각기일별 목록(왼쪽)과 경매만 그린 지도(오른쪽).
-// 목록 순서는 받은 그대로 쓴다(App의 키보드 이동과 같은 순서).
+// 경매 탭(주거, 상가)과 집터 탭(단독, 토지)이 같이 쓴다: 목록 위의 보조정보(단독주택 실거래, 매각 결과, 상가와 토지 칸의 LH 공고,
+// 신탁 공매 공고), 그 아래 매각기일별 목록과 매매 매물(왼쪽), 지도(오른쪽).
+// 목록 순서는 받은 그대로 쓴다(App의 키보드 이동과 같은 순서: 경매 다음 매매 매물).
 
 type Point = { lat: number; lng: number };
 const props = defineProps<{
+  /** 탭 제목(경매, 집터)과 고를 수 있는 종류 */
+  title: string;
+  kindIds: AuctionKind[];
   /** 필터를 통과한 경매(sortAuctions 순서) */
   listings: ListingView[];
+  /** 경매 아래에 따로 보이는 매매 매물(집터 탭) */
+  sales?: ListingView[];
+  /** 신탁 공매 공고 칸을 보일지(경매 탭만) */
+  trust?: boolean;
+  /** 제목 줄 옆 바깥 사이트 링크(집터 탭의 모듈러 주택 회사) */
+  links?: { label: string; url: string; title: string }[];
   /** '지역 반경 안만' 때문에 가린 경매 수 */
   outside: number;
   areas: Area[];
@@ -61,8 +71,6 @@ const emit = defineEmits<{
   pick: [Point];
   area: [Area];
   station: [CatalogStation];
-  /** 경매의 신규와 가격 변동 표시, 새 공매 공고와 LH 공고의 신규 표시를 모두 지움(모두 읽음) */
-  ack: [];
   /** 공매 공고 몇 건만 확인(원문을 열 때) */
   ackNotices: [ids: number[]];
   /** 법원경매와 공매 공고만 조회 */
@@ -78,22 +86,26 @@ const emit = defineEmits<{
 
 const KIND_NAMES: { id: AuctionKind; name: string; title: string }[] = [
   { id: 'home', name: '주거', title: '주거용 건물 경매' },
-  { id: 'house', name: '단독', title: '주거 중 단독주택, 다가구주택, 다중주택 경매. 맨 위에 서울의 오래된 단독주택 실거래 표' },
+  { id: 'house', name: '단독', title: '단독주택, 다가구주택, 다중주택 경매와 매매 매물. 맨 위에 서울의 오래된 단독주택 실거래 표' },
   { id: 'shop', name: '상가', title: '상가 경매(법원경매 상업용 건물, 온비드 근린생활시설과 판매시설 등). 필터는 지역 칸과 검색어만 봅니다' },
-  { id: 'land', name: '토지', title: '땅만 파는 경매(건물 없이 토지 목록만 있는 물건, 지분과 도로 포함). 면적은 지분이면 지분만큼. 필터는 지역 칸과 검색어만 봅니다' },
+  { id: 'land', name: '토지', title: '땅만 파는 경매(건물 없이 토지 목록만 있는 물건, 지분과 도로 포함)와 토지 매매 매물. 면적은 지분이면 지분만큼. 필터는 지역 칸과 검색어만 봅니다' },
 ];
 
 const EMPTY_TEXT: Record<AuctionKind, string> = {
   home: '경매 물건이 없습니다.',
-  house: '단독주택 경매 물건이 없습니다.',
+  house: '단독주택 경매와 매매 매물이 없습니다.',
   shop: '상가 경매 물건이 없습니다.',
-  land: '토지 경매 물건이 없습니다.',
+  land: '토지 경매와 매매 매물이 없습니다.',
 };
 
-/** 지도에 진하게 보일 펼친 목록(경매 탭은 없음). 같은 배열을 써서 다시 그릴 일을 줄인다. */
+const kindNames = computed(() => KIND_NAMES.filter((k) => props.kindIds.includes(k.id)));
+/** 지도에 진하게 보일 펼친 목록(이 탭들은 없음). 같은 배열을 써서 다시 그릴 일을 줄인다. */
 const none: ListingView[] = [];
-const news = computed(() => props.listings.filter((l) => l.isNew).length);
-const changed = computed(() => props.listings.filter((l) => !!l.priceChange).length);
+const sales = computed(() => props.sales ?? []);
+/** 목록에 보이는 것 전부(경매 다음 매매 매물). 지도와 숫자에 쓴다. */
+const all = computed(() => (sales.value.length ? [...props.listings, ...sales.value] : props.listings));
+const news = computed(() => all.value.filter((l) => l.isNew).length);
+const changed = computed(() => all.value.filter((l) => !!l.priceChange).length);
 
 const saleNew = computed(() => props.notices.filter((n) => n.isNew).length);
 const saleCurrent = computed(() => props.notices.filter((n) => n.current).length);
@@ -138,58 +150,72 @@ const days = computed(() => {
 
 <template>
   <section class="auction">
-    <div class="head">
-      <div class="kinds" role="group" aria-label="경매 종류">
-        <button
-          v-for="k in KIND_NAMES" :key="k.id" class="kind-btn" :class="{ on: kind === k.id }" :title="k.title" :aria-pressed="kind === k.id"
-          @click="emit('kind', k.id)"
-        >
-          {{ k.name }} <span class="num">{{ kinds[k.id].count }}</span><span v-if="kinds[k.id].news" class="chip chip-new">신규 {{ kinds[k.id].news }}</span>
+    <div class="auction-heading">
+      <h2 class="auction-title">{{ title }} <CountTooltip class="current-count" :text="`신규 ${news}건\n가격 변동 ${changed}건\n반경 밖 ${outside}건`"><b class="num">{{ all.length }}</b>건</CountTooltip></h2>
+      <nav v-if="links?.length" class="links" aria-label="모듈러 주택 회사">
+        <span class="links-label">모듈러 주택</span>
+        <a v-for="x in links" :key="x.url" :href="x.url" target="_blank" rel="noopener" :title="x.title">{{ x.label }} ↗</a>
+      </nav>
+      <div class="auction-actions">
+        <button class="btn run" :disabled="running" title="법원경매와 온비드, 신탁 공매 공고만 조회합니다(매매와 전월세 사이트, 임대 공고는 건너뜀)" @click="emit('run')">
+          {{ running ? '조회 중…' : '경매 조회하기' }}
         </button>
       </div>
-      <button
-        class="sort-btn" :class="{ on: sort === 'pyeong' }" :aria-pressed="sort === 'pyeong'"
-        title="같은 매각기일 안에서 평당(최저가 ÷ 전용 평)이 낮은 물건부터. 다시 누르면 새 소식 먼저, 최저가 낮은 순"
-        @click="emit('sort', sort === 'pyeong' ? 'default' : 'pyeong')"
-      >평당 낮은 순</button>
-      <span v-if="outside" class="outside" title="지역 반경 밖이라 가린 경매입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다.">반경 밖 {{ outside }}건</span>
-      <button v-if="news || changed || saleNew || lhNew" class="link-btn" title="경매의 '신규'와 가격 변동 표시, 새 공매 공고와 LH 공고의 '신규' 표시를 모두 지웁니다. 물건과 공고는 그대로 남습니다" @click="emit('ack')">모두 읽음</button>
-      <button class="btn btn-primary run" :disabled="running" title="법원경매와 온비드, 신탁 공매 공고만 조회합니다(매매와 전월세 사이트, 임대 공고는 건너뜀)" @click="emit('run')">
-        {{ running ? '조회 중…' : '경매 조회하기' }}
-      </button>
     </div>
 
     <div class="split">
       <div class="days">
-        <div class="panels">
-          <HouseTrades
-            v-if="kind === 'house'" :summary="houseTrades" :age="houseAge" :fetching="houseFetching" :error="houseError"
-            @age="(a) => emit('houseAge', a)" @fetch="emit('houseFetch')"
-          />
-          <AuctionResults :results="results" :stats="regionStats" :compare="compare" :kind="kind" :gus="gus" />
-          <details v-if="(kind === 'shop' || kind === 'land') && (lhNotices.length || lhOutside || lhFailed.length)" class="fold" :open="lh.open.value" @toggle="lh.onToggle">
-            <summary :title="kind === 'land' ? 'LH 토지 공고와 선착순 토지(서울)' : 'LH 상가 공고와 선착순 상가, 임대상가(서울)'">
-              <span class="fold-name">{{ kind === 'land' ? 'LH 토지' : 'LH 상가' }}</span>
-              <span class="muted num fold-count">{{ lhCurrent }}건</span>
-              <span v-if="lhNew" class="chip chip-new">신규 {{ lhNew }}</span>
-              <span v-if="lhOutside" class="outside" title="켜 둔 지역 근처 구가 아닌 공고입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다.">지역 밖 {{ lhOutside }}건</span>
-              <span v-for="f in lhFailed" :key="f.id" class="failed" :title="f.title">{{ f.text }}</span>
-            </summary>
-            <div class="fold-body">
-              <NoticeList bare :notices="lhNotices" @ack="(ids) => emit('ackNotices', ids)" />
-            </div>
-          </details>
-          <details v-if="notices.length || saleFailed.length" class="fold" :open="sale.open.value" @toggle="sale.onToggle">
-            <summary title="부동산신탁사 공매 공고(켜 둔 지역 근처 구)">
-              <span class="fold-name">공매 공고</span>
-              <span class="muted num fold-count">{{ saleCurrent }}건</span>
-              <span v-if="saleNew" class="chip chip-new">신규 {{ saleNew }}</span>
-              <span v-for="f in saleFailed" :key="f.id" class="failed" :title="f.title">{{ f.text }}</span>
-            </summary>
-            <div class="fold-body">
-              <NoticeList bare :notices="notices" @ack="(ids) => emit('ackNotices', ids)" />
-            </div>
-          </details>
+        <div class="auction-options">
+          <div class="auction-toolbar">
+            <fieldset class="auction-kinds">
+              <legend class="sr-only">경매 종류</legend>
+              <label v-for="k in kindNames" :key="k.id" class="kind-option" :title="`${k.title}${kinds[k.id].news ? `\n새 소식 ${kinds[k.id].news}건` : ''}`">
+                <input
+                  type="radio" name="auction-kind" :value="k.id" :checked="kind === k.id"
+                  :aria-label="`${k.name} ${kinds[k.id].count}건${kinds[k.id].news ? `, 새 소식 ${kinds[k.id].news}건` : ''}`"
+                  @change="emit('kind', k.id)"
+                >
+                <span>{{ k.name }}</span><span class="kind-count num">{{ kinds[k.id].count }}</span>
+              </label>
+            </fieldset>
+            <label class="auction-sort" title="같은 매각기일 안에서의 정렬 순서입니다.">
+              <span>정렬</span>
+              <select :value="sort" @change="emit('sort', ($event.target as HTMLSelectElement).value as 'default' | 'pyeong')">
+                <option value="default">새 소식, 최저가 순</option>
+                <option value="pyeong">평당 낮은 순</option>
+              </select>
+            </label>
+          </div>
+          <div class="panels">
+            <HouseTrades
+              v-if="kind === 'house'" :summary="houseTrades" :age="houseAge" :fetching="houseFetching" :error="houseError"
+              @age="(a) => emit('houseAge', a)" @fetch="emit('houseFetch')"
+            />
+            <AuctionResults :results="results" :stats="regionStats" :compare="compare" :kind="kind" :gus="gus" />
+            <details v-if="(kind === 'shop' || kind === 'land') && (lhNotices.length || lhOutside || lhFailed.length)" class="fold" :open="lh.open.value" @toggle="lh.onToggle">
+              <summary :title="kind === 'land' ? 'LH 토지 공고와 선착순 토지(서울)' : 'LH 상가 공고와 선착순 상가, 임대상가(서울)'">
+                <span class="fold-name">{{ kind === 'land' ? 'LH 토지' : 'LH 상가' }}</span>
+                <span class="muted num fold-count">{{ lhCurrent }}건</span>
+                <span v-if="lhNew" class="chip chip-new">신규 {{ lhNew }}</span>
+                <span v-if="lhOutside" class="outside" title="켜 둔 지역 근처 구가 아닌 공고입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다.">지역 밖 {{ lhOutside }}건</span>
+                <span v-for="f in lhFailed" :key="f.id" class="failed" :title="f.title">{{ f.text }}</span>
+              </summary>
+              <div class="fold-body">
+                <NoticeList bare :notices="lhNotices" @ack="(ids) => emit('ackNotices', ids)" />
+              </div>
+            </details>
+            <details v-if="trust !== false && (notices.length || saleFailed.length)" class="fold" :open="sale.open.value" @toggle="sale.onToggle">
+              <summary title="부동산신탁사 공매 공고(켜 둔 지역 근처 구)">
+                <span class="fold-name">공매 공고</span>
+                <span class="muted num fold-count">{{ saleCurrent }}건</span>
+                <span v-if="saleNew" class="chip chip-new">신규 {{ saleNew }}</span>
+                <span v-for="f in saleFailed" :key="f.id" class="failed" :title="f.title">{{ f.text }}</span>
+              </summary>
+              <div class="fold-body">
+                <NoticeList bare :notices="notices" @ack="(ids) => emit('ackNotices', ids)" />
+              </div>
+            </details>
+          </div>
         </div>
         <section v-for="g in days" :key="g.key" class="day" :class="{ past: g.past }">
           <h3 class="day-head">
@@ -206,11 +232,24 @@ const days = computed(() => {
             />
           </div>
         </section>
-        <p v-if="!listings.length" class="empty muted">{{ EMPTY_TEXT[kind] }}</p>
+        <section v-if="sales.length" class="day sales">
+          <h3 class="day-head" title="매매 매물 중 이 칸 종류(단독주택이나 토지). 새 소식 먼저, 그다음 매매가 낮은 순">
+            <span class="day-name">매매 매물</span>
+            <span class="muted num day-count">{{ sales.length }}건</span>
+          </h3>
+          <div class="list">
+            <ListingCard
+              v-for="l in sales" :key="l.id" :listing="l" :areas="areas" :selected="l.id === selectedId"
+              @select="emit('select', l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
+              @source="emit('source', l)" @raw="emit('raw', l)"
+            />
+          </div>
+        </section>
+        <p v-if="!all.length" class="empty muted">{{ EMPTY_TEXT[kind] }}</p>
       </div>
       <aside class="map">
         <OverviewMap
-          :listings="none" :background="listings" :areas="areas" :selected-id="selectedId" :fit-key="kind"
+          :listings="none" :background="all" :areas="areas" :selected-id="selectedId" :fit-key="kind"
           @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)" @pick="(p) => emit('pick', p)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />
@@ -221,16 +260,29 @@ const days = computed(() => {
 
 <style scoped>
 .auction { display: grid; gap: 14px; }
-.head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 40px; }
-.kinds { display: flex; gap: 6px; margin-right: 4px; }
-.kind-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); font-size: 16px; font-weight: 800; }
-.kind-btn.on { background: var(--ink); border-color: var(--ink); color: #fff; }
-.sort-btn { min-height: 40px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); font-size: 14px; font-weight: 700; color: var(--ink-2); }
-.sort-btn.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.auction-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; min-width: 0; }
+.auction-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; min-width: 0; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.auction-toolbar { display: contents; }
+.auction-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin: 0; font-size: 21px; font-weight: 700; }
+.current-count { font-size: 14px; font-weight: 500; color: var(--muted); cursor: help; }
+.current-count b { color: var(--ink-2); }
+.auction-kinds { display: flex; flex-wrap: wrap; gap: 4px 16px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.kind-option { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; cursor: pointer; color: var(--ink-2); font-size: 14px; }
+.kind-option input { width: 15px; height: 15px; margin: 0 2px 0 0; accent-color: var(--accent); }
+.kind-option:has(input:checked) > span:first-of-type { font-weight: 700; color: var(--ink); }
+.kind-count { color: var(--muted); font-size: 12px; }
+.auction-sort { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--muted); font-size: 13px; }
+.auction-sort select { width: auto; min-width: 0; max-width: 100%; min-height: 34px; padding: 0 28px 0 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink-2); font-size: 13px; }
+.auction-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-left: auto; }
+.links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; font-size: 13px; }
+.links-label { font-size: 12px; color: var(--muted); }
+.links a { color: var(--ink-2); text-decoration: none; white-space: nowrap; }
+.links a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.auction-actions .run { min-height: 34px; padding: 0 12px; font-size: 13px; }
 .outside { font-size: 13px; font-weight: 600; color: var(--muted); }
-.head .run { margin-left: auto; min-height: 44px; padding: 0 20px; font-size: 15px; }
 
-/* 목록(왼쪽)과 지도(오른쪽, 따라 내려옴). 좁으면 지도가 위로 간다. 한눈에 탭과 같은 배치. */
+/* 목록(왼쪽)과 지도(오른쪽, 따라 내려옴). 좁으면 지도가 위로 간다. 매물 탭과 같은 배치. */
 .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 45%); gap: 16px; align-items: start; }
 .days { display: grid; gap: 18px; min-width: 0; }
 .day { display: grid; gap: 8px; }
@@ -238,16 +290,36 @@ const days = computed(() => {
 .when { font-size: 14px; font-weight: 700; color: var(--accent); }
 .day-count { font-size: 14px; font-weight: 600; }
 .day.past .day-name, .day.past .when { color: var(--muted); }
-/* 매각 결과, 실거래, 공고 카드 묶음. 아래 매각기일 목록과 사이를 조금 더 띄운다. */
-.panels { display: grid; gap: 8px; margin-bottom: 6px; }
+/* 닫힌 보조정보는 짧은 펼침 링크로, 펼친 내용은 목록 칼럼 전체 너비로 읽는다. */
+.panels { display: contents; }
+.panels > :deep(.fold) { flex: 0 1 auto; min-width: 0; max-width: 100%; border: 0; border-radius: 0; background: transparent; }
+.panels > :deep(.fold:first-child:not([open])) { margin-left: auto; }
+.panels > :deep(.fold[open]) { flex-basis: 100%; }
+.panels > :deep(.fold > summary) { min-height: 32px; align-items: center; gap: 4px 7px; padding: 4px 0; border: 0; border-radius: 0; }
+.panels > :deep(.fold > summary::after) { margin-left: 0; padding-left: 1px; font-size: 11px; }
+.panels > :deep(.fold > summary:hover .fold-name) { text-decoration: underline; text-underline-offset: 3px; }
+.panels > :deep(.fold > summary .fold-name) { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.panels > :deep(.fold > summary .fold-count) { font-size: 12px; }
+.panels > :deep(.fold > .fold-body) { min-width: 0; margin: 5px 0 8px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .failed { font-size: 13px; font-weight: 700; color: var(--new); }
 .list { display: grid; gap: 8px; container-type: inline-size; }
-.map { position: sticky; top: 92px; height: calc(100vh - 108px); min-height: 420px; }
+.map { position: sticky; top: calc(var(--app-header-height, 76px) + 16px); height: calc(100dvh - var(--app-header-height, 76px) - 32px); min-height: 420px; }
 /* 크게 보기일 때는 위쪽 머리 줄(z-index 20)보다 위에 오게 한다. */
 .map:has(.ovmap.big) { z-index: 70; }
 .empty { padding: 32px 0; text-align: center; }
 @media (max-width: 1280px) {
   .split { grid-template-columns: 1fr; }
-  .map { position: static; order: -1; height: auto; min-height: 0; }
+  .days, .auction-options { display: contents; }
+  .auction-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; min-width: 0; }
+  .map { position: static; order: 1; height: auto; min-height: 0; }
+  .panels { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 2px 20px; min-width: 0; order: 2; }
+  .panels > :deep(.fold:first-child:not([open])) { margin-left: 0; }
+  .day, .empty { order: 3; }
+}
+@media (max-width: 600px) {
+  .auction-heading { gap: 8px 16px; }
+  .auction-toolbar { gap: 8px 16px; }
+  .auction-kinds { gap: 4px 14px; }
+  .auction-actions { margin-left: 0; }
 }
 </style>

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import Database from 'better-sqlite3';
 import { DATA_DIR, DB_PATH, RUNS_DIR } from './config.js';
 import { DEFAULT_AREAS, findStation } from './stations.js';
+import { CAPTURE_SOURCES } from '../shared/types.js';
 import type {
   Area,
   AuctionResultKind,
@@ -179,6 +180,13 @@ if (!(db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]).some((c
 }
 
 export const nowIso = () => new Date().toISOString();
+/** days일 전 시각(ISO) */
+const daysAgoIso = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+
+/** 신규, 가격 변동, 새 공고 표시를 보이는 기간(일). 생긴 지 이보다 오래된 표시는 확인한 것과 같게 친다. */
+const NEWS_DAYS = 7;
+/** 이 시각(ISO) 뒤에 생긴 표시만 보인다. */
+const newsSince = () => daysAgoIso(NEWS_DAYS);
 
 // ---------- 설정 값 ----------
 
@@ -430,13 +438,14 @@ export function noticeStatuses(): Partial<Record<NoticeSourceId, NoticeSourceSta
 }
 
 /**
- * 새 공고 먼저, 그다음 게시일 최신 순.
+ * 새 공고(처음 본 지 NEWS_DAYS일 안) 먼저, 그다음 게시일 최신 순.
  * current는 그 곳의 마지막 성공한 수집 시각(마지막 수집이 실패했으면 가장 늦은 last_seen_at)에 본 공고다.
  */
 export function listNotices(limit = 300): NoticeView[] {
+  const since = newsSince();
   const rows = db
-    .prepare('SELECT * FROM notices ORDER BY is_new DESC, COALESCE(posted_at, first_seen_at) DESC, id DESC LIMIT ?')
-    .all(limit) as {
+    .prepare('SELECT * FROM notices ORDER BY (is_new = 1 AND first_seen_at >= ?) DESC, COALESCE(posted_at, first_seen_at) DESC, id DESC LIMIT ?')
+    .all(since, limit) as {
     id: number;
     source: NoticeSourceId;
     title: string;
@@ -471,7 +480,7 @@ export function listNotices(limit = 300): NoticeView[] {
     firstSeenAt: r.first_seen_at,
     lastSeenAt: r.last_seen_at,
     current: r.last_seen_at === lastOk(r.source),
-    isNew: r.is_new === 1,
+    isNew: r.is_new === 1 && r.first_seen_at >= since,
     regions: r.regions ? (JSON.parse(r.regions) as string[]) : [],
     regionsFrom: null,
     period: r.starts_at && r.ends_at ? { start: r.starts_at, end: r.ends_at } : null,
@@ -586,7 +595,7 @@ export const SEOUL_GUS = [
 ];
 
 export function newNoticeCount(): number {
-  return (db.prepare('SELECT COUNT(*) AS n FROM notices WHERE is_new = 1').get() as { n: number }).n;
+  return (db.prepare('SELECT COUNT(*) AS n FROM notices WHERE is_new = 1 AND first_seen_at >= ?').get(newsSince()) as { n: number }).n;
 }
 
 /** 새 공고 표시를 지운다(번호를 안 주면 전부). */
@@ -806,6 +815,50 @@ export function updateListingSeen(id: string, l: NormalizedListing, identityKey:
 export function markGone(ids: string[]) {
   const stmt = db.prepare("UPDATE listings SET status = 'gone' WHERE id = ?");
   for (const id of ids) stmt.run(id);
+}
+
+/** 확장으로 받는 곳(네이버, 다방, 직방)의 매물을 사라짐으로 보는 기간(일, 마지막으로 본 때부터). 사이트를 볼 때만 받아서 내려갔는지 알 수 없다. */
+const CAPTURE_STALE_DAYS = 14;
+/** 사라진 매물을 남겨 두는 기간(일, 마지막으로 본 때부터). 법원경매는 매각기일이 지난 물건의 결과를 경매사건검색으로 찾는 기간만큼 남긴다. */
+const GONE_KEEP_DAYS = 30;
+const GONE_KEEP_DAYS_COURT = 180;
+
+/** 매물 정리: 확장으로 받는 곳의 오래 못 본 매물을 사라짐으로 두고(stale), 남겨 두는 기간이 지난 사라진 매물을 지운다(purged). */
+export function tidyListings(): { stale: number; purged: number } {
+  const stale = db
+    .prepare(`UPDATE listings SET status = 'gone' WHERE status = 'active' AND source IN (${CAPTURE_SOURCES.map(() => '?').join(', ')}) AND last_seen_at < ?`)
+    .run(...CAPTURE_SOURCES, daysAgoIso(CAPTURE_STALE_DAYS)).changes;
+  return { stale, purged: purgeGoneListings() };
+}
+
+/** 확장이 받은 목록에 아직 있는 매물(사이트 번호)의 마지막 본 시각을 at으로 올리고 사라짐을 푼다. */
+export function touchListings(source: string, sourceIds: string[], at: string) {
+  const stmt = db.prepare("UPDATE listings SET last_seen_at = MAX(last_seen_at, ?), status = 'active' WHERE source = ? AND source_id = ?");
+  db.transaction(() => {
+    for (const id of sourceIds) stmt.run(at, source, id);
+  })();
+}
+
+/**
+ * 사라진 매물 중 남겨 두는 기간이 지난 것을 가격 기록, 변화 기록과 함께 지운다. 관심이나 버림을 누른 매물은 남긴다.
+ * 지운 매물 수를 준다.
+ */
+function purgeGoneListings(): number {
+  const ids = (
+    db
+      .prepare(
+        `SELECT l.id FROM listings l LEFT JOIN verdicts v ON v.listing_id = l.id
+         WHERE l.status = 'gone' AND v.listing_id IS NULL
+           AND l.last_seen_at < CASE WHEN l.source = 'courtauction' THEN ? ELSE ? END`,
+      )
+      .all(daysAgoIso(GONE_KEEP_DAYS_COURT), daysAgoIso(GONE_KEEP_DAYS)) as { id: string }[]
+  ).map((r) => r.id);
+  if (!ids.length) return 0;
+  const stmts = ['DELETE FROM price_history WHERE listing_id = ?', 'DELETE FROM events WHERE listing_id = ?', 'DELETE FROM listings WHERE id = ?'].map((s) => db.prepare(s));
+  db.transaction(() => {
+    for (const id of ids) for (const stmt of stmts) stmt.run(id);
+  })();
+  return ids.length;
 }
 
 // ---------- 법원경매 매각 결과 ----------
@@ -1063,29 +1116,22 @@ export function addEvent(runId: number, listingId: string, type: string, detail:
     .run(runId, listingId, type, detail == null ? null : JSON.stringify(detail), nowIso());
 }
 
+/** 확인하지 않았고 NEWS_DAYS일 안에 생긴 변화 기록 */
 export function unackedEvents(): EventRow[] {
-  return db.prepare('SELECT * FROM events WHERE acked = 0 ORDER BY id').all() as EventRow[];
+  return db.prepare('SELECT * FROM events WHERE acked = 0 AND created_at >= ? ORDER BY id').all(newsSince()) as EventRow[];
 }
 
-export function ackEvents(listingId?: string) {
-  if (listingId) db.prepare('UPDATE events SET acked = 1 WHERE listing_id = ?').run(listingId);
-  else db.prepare('UPDATE events SET acked = 1 WHERE acked = 0').run();
-}
-
-/** 고른 매물들의 변화 기록을 확인 처리한다. */
-export function ackEventsFor(listingIds: string[]) {
-  const stmt = db.prepare('UPDATE events SET acked = 1 WHERE listing_id = ? AND acked = 0');
-  db.transaction((ids: string[]) => {
-    for (const id of ids) stmt.run(id);
-  })(listingIds);
+/** 매물 하나의 변화 기록을 확인 처리한다(원본을 열거나 판정할 때). */
+export function ackEvents(listingId: string) {
+  db.prepare('UPDATE events SET acked = 1 WHERE listing_id = ?').run(listingId);
 }
 
 export function unackedCount(): number {
   const row = db.prepare(
     `SELECT COUNT(DISTINCT e.listing_id) AS n FROM events e
      LEFT JOIN verdicts v ON v.listing_id = e.listing_id AND v.verdict = 'discard'
-     WHERE e.acked = 0 AND e.type IN ('new', 'price_down', 'price_up', 'price_changed') AND v.listing_id IS NULL`,
-  ).get() as { n: number };
+     WHERE e.acked = 0 AND e.created_at >= ? AND e.type IN ('new', 'price_down', 'price_up', 'price_changed') AND v.listing_id IS NULL`,
+  ).get(newsSince()) as { n: number };
   return row.n;
 }
 

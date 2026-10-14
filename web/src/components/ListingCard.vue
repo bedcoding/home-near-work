@@ -287,7 +287,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 .more .site-link { margin-right: 4px; padding: 0 10px; color: var(--accent); font-weight: 700; }
 .actions { display: flex; justify-content: flex-end; gap: 6px; }
 .actions .on { background: var(--star-soft); border-color: var(--star); }
-/* 목록 칸 너비에 맞춘다(한눈에와 경매 탭은 지도 옆이라 좁다). */
+/* 목록 칸 너비에 맞춘다(매물 탭과 경매 탭은 지도 옆이라 좁다). */
 @container (max-width: 1060px) {
   .card {
     grid-template-columns: 112px minmax(0, 1fr) 104px;

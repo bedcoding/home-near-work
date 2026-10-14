@@ -6,7 +6,7 @@ import { madangUrl, saleDay, type AuctionKind } from '../auction';
 
 // 경매 탭 맨 위 '매각 결과' 칸: 켜 둔 지역 근처 구의 지난 매각기일 결과(낙찰가와 감정가 대비, 유찰)와 법원 지역별 매각통계(구별 매각가율).
 // 결과와 통계는 지금 켜 둔 지역 근처 구의 것만, 결과는 고른 종류(주거, 단독, 상가, 토지)만 보인다. 통계는 구마다 가장 최근에 읽은 것, title에 지난 기간.
-// 제목 줄에 최근 1년 낙찰 건수와 낙찰가율 중간값, 펼치면 근처 구와 서울 전체 비교 표, 매각기일별 목록(최근 기일 SHOWN_DAYS개, 나머지는 '이전 기일 더 보기').
+// 제목 줄에 최근 1년 낙찰 건수, 펼치면 낙찰가율과 법원 통계, 근처 구와 서울 전체 비교 표, 매각기일별 목록(최근 기일 SHOWN_DAYS개, 나머지는 '이전 기일 더 보기').
 // 펼침은 기억한다.
 
 const props = defineProps<{
@@ -253,15 +253,17 @@ const caseText = (r: AuctionResultView) => `${r.caseNo}${r.itemNo !== '1' ? `(${
       <span class="fold-name">매각 결과</span>
       <template v-if="held.length">
         <span class="muted num fold-count">낙찰 {{ ratios.length }}/{{ held.length }}건</span>
-        <span v-if="median != null" class="num rate" :title="medianTitle">감정가의 {{ pct(median) }}</span>
       </template>
       <span v-else class="muted fold-count">아직 없음</span>
-      <span v-if="regionStats.length" class="stats">
-        <span class="muted">법원 통계</span>
-        <span v-for="g in regionStats" :key="g.gu" class="num stat" :title="statTitle(g)">{{ g.gu }} {{ pct(g.amountRate) }}</span>
-      </span>
     </summary>
     <div class="body fold-body">
+      <div v-if="median != null || regionStats.length" class="result-summary">
+        <span v-if="median != null" class="num rate" :title="medianTitle">감정가의 {{ pct(median) }}</span>
+        <span v-if="regionStats.length" class="stats">
+          <span class="muted">법원 통계</span>
+          <span v-for="g in regionStats" :key="g.gu" class="num stat" :title="statTitle(g)">{{ g.gu }} {{ pct(g.amountRate) }}</span>
+        </span>
+      </div>
       <div v-if="showCompare" class="compare-wrap">
         <table class="compare">
           <thead>
@@ -311,6 +313,7 @@ const caseText = (r: AuctionResultView) => `${r.caseNo}${r.itemNo !== '1' ? `(${
 </template>
 
 <style scoped>
+.result-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
 .rate { font-size: 15px; font-weight: 800; color: var(--accent); }
 .stats { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 13px; font-weight: 600; }
 .stat { font-weight: 700; color: var(--ink-2); }
