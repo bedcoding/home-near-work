@@ -7,6 +7,7 @@ import { BlockedError, type CollectContext, type CollectedItem, type Collector }
 import { COLLECT_MARGIN_M } from './config.js';
 import { collectCourtResults, courtResultsDue } from './court-results.js';
 import * as store from './db.js';
+import { collectHouseTrades, HOUSE_TRADES_SOURCE, houseTradesDue } from './house-trades.js';
 import { distanceM, nearestArea } from './geo.js';
 import { comparePrices, identityKey, priceSignature } from './identity.js';
 import { notify } from './notify.js';
@@ -364,6 +365,15 @@ async function execute(
         log(`법원경매 매각 결과: ${await collectCourtResults(ctx, () => state.stopping)}`);
       } catch (e) {
         if (!state.stopping) log(`법원경매 매각 결과 ${e instanceof BlockedError ? '차단' : '오류'}: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      }
+    }
+    // 국토부 단독/다가구 실거래(서울, 최근 1년)는 받은 지 7일이 지났으면 어떤 조회든 한 번 받는다.
+    if (!state.stopping && houseTradesDue()) {
+      try {
+        const record = (url: string, status: number | null, note: string) => store.addRequest(runId, HOUSE_TRADES_SOURCE, 'data', url, status, note);
+        log(`${HOUSE_TRADES_SOURCE}: ${await collectHouseTrades(record)}`);
+      } catch (e) {
+        log(`${HOUSE_TRADES_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
     await collectNotices(ctx, areas, plan.notices, log, () => state.stopping, news);

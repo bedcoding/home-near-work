@@ -1,4 +1,4 @@
-import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, ListingView, NoticeSourceId, NoticeSourceStatus, NoticeView, RunDetail, RunInfo, SourceId, Station, Verdict } from '../../shared/types';
+import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, RunDetail, RunInfo, SourceId, Station, Verdict } from '../../shared/types';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -41,6 +41,12 @@ export const api = {
   notices: () => request<{ notices: NoticeView[]; sources: Partial<Record<NoticeSourceId, NoticeSourceStatus>> }>('GET', '/api/notices'),
   /** 새 공고 표시를 지운다(ids가 없으면 전부) */
   ackNotices: (ids?: number[]) => request('POST', '/api/notices/ack', ids ? { ids } : {}),
+  /** 직접 받은 공고 첨부 파일을 읽은 결과(받은 시각 최근 순) */
+  noticeFiles: () => request<{ files: NoticeFileView[] }>('GET', '/api/notice-files'),
   /** 법원경매 매각 결과(매각기일 최근 순)와 구별 지역별 매각통계 */
   auctionResults: () => request<{ results: AuctionResultView[]; stats: CourtRegionStat[]; compare: AuctionResultSummary[] }>('GET', '/api/auction-results'),
+  /** 국토부 실거래가 단독주택 매매 중 지은 지 age년 넘은 것의 요약(서울, 최근 1년) */
+  houseTrades: (age: number) => request<HouseTradeSummary>('GET', `/api/house-trades?age=${age}`),
+  /** 국토부 실거래를 지금 받고 요약을 돌려준다 */
+  fetchHouseTrades: (age: number) => request<HouseTradeSummary>('POST', '/api/house-trades/fetch', { age }),
 };

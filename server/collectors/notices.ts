@@ -4,6 +4,7 @@ import { PAGE_DELAY_MS } from '../config.js';
 import * as store from '../db.js';
 import type { NoticeInput } from '../db.js';
 import type { NoticeFacts, NoticeSourceId, SubscriptionDetail } from '../../shared/types.js';
+import { readTrustDocs } from './trust-docs.js';
 import { TRUST_COLLECTORS } from './trusts.js';
 import { BlockedError, type CollectContext } from './types.js';
 
@@ -81,7 +82,9 @@ export const kbtrust: NoticeCollector = {
       if ((data.totalItems ?? 0) > data.list.length) ctx.log(`KB부동산신탁 공매: '${gu}' ${data.totalItems}건 중 첫 쪽 ${data.list.length}건만 읽었습니다`);
       await session.pause(600);
     }
-    return [...out.values()];
+    const items = [...out.values()];
+    await readTrustDocs(ctx, 'kbtrust', items, true);
+    return items;
   },
 };
 

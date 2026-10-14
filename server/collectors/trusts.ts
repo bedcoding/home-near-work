@@ -1,6 +1,7 @@
 import type { NoticeInput } from '../db.js';
 import type { NoticeSourceId } from '../../shared/types.js';
 import type { NoticeCollector } from './notices.js';
+import { readTrustDocs } from './trust-docs.js';
 import { BlockedError, type CollectContext } from './types.js';
 
 // 부동산신탁사 공매 공고(경매 탭 '공매 공고'). 회사마다 공매 게시판을 켜진 지역 근처 구 이름으로 검색해 제목(소재지), 상태, 날짜, 링크를 모은다.
@@ -35,6 +36,8 @@ interface BoardSpec {
   /** 링크(href와 onclick 글자)에서 고정 번호를 꺼낸다 */
   idPattern: RegExp;
   detailUrl: (id: string) => string;
+  /** 상세 화면 첨부에서 공고문을 받아 읽는다(readTrustDocs) */
+  docs?: boolean;
 }
 
 /** 오늘부터 이만큼 지난 공고는 버린다(검색이 몇 년 치를 다 돌려주는 곳이 많아서). */
@@ -139,7 +142,9 @@ function boardCollector(spec: BoardSpec): NoticeCollector {
         }
         await session.pause(600);
       }
-      return [...out.values()];
+      const items = [...out.values()];
+      if (spec.docs) await readTrustDocs(ctx, spec.id, items);
+      return items;
     },
   };
 }
@@ -152,6 +157,7 @@ export const reitpia = boardCollector({
   fields: { link: 'a', title: 'div.txt_t', status: 'div.cate', date: 'div.date' },
   idPattern: /[?&]no=(\d+)/,
   detailUrl: (id) => `https://www.reitpia.com/info/02.php?admin_mode=read&no=${id}`,
+  docs: true,
 });
 
 export const ktrust = boardCollector({
@@ -162,6 +168,7 @@ export const ktrust = boardCollector({
   fields: { link: 'a[href*="m=view&idx="]', status: 'td.state span', date: 'td.date' },
   idPattern: /[?&]idx=(\d+)/,
   detailUrl: (id) => `https://www.ktrust.co.kr/?pages=thing&subs=thing02&m=view&idx=${id}`,
+  docs: true,
 });
 
 export const hanatrust = boardCollector({
@@ -172,6 +179,7 @@ export const hanatrust = boardCollector({
   fields: { link: 'a.auction-sale__link', title: '.auction-sale__position', status: '.auction-sale__status', date: '.auction-sale__date', kind: '.auction-sale__purpose' },
   idPattern: /[?&]seq=(\d+)/,
   detailUrl: (id) => `https://www.hanatrust.com/ko/publicSale/goodsForPublicSale/view?seq=${id}`,
+  docs: true,
 });
 
 // 무궁화신탁과 신영부동산신탁은 https 인증서가 다른 이름의 것이라 http로 연다(사이트가 http로 정상 운영됨).
@@ -183,6 +191,7 @@ export const mghat = boardCollector({
   fields: { link: 'td.tit a', status: 'td.conditions span', date: 'td:nth-child(5)' },
   idPattern: /\/auction\/disposal\/(\d+)\/show\.do/,
   detailUrl: (id) => `http://www.mghat.com/auction/disposal/${id}/show.do`,
+  docs: true,
 });
 
 export const shinyoung = boardCollector({
@@ -193,6 +202,7 @@ export const shinyoung = boardCollector({
   fields: { link: 'td.subject2 a', status: 'td.file button', date: 'td.date' },
   idPattern: /[?&]idx=(\d+)/,
   detailUrl: (id) => `http://www.shinyoungret.com/index.asp?pages=public&subs=sub01&m=view&idx=${id}`,
+  docs: true,
 });
 
 export const wooriat = boardCollector({
@@ -203,6 +213,7 @@ export const wooriat = boardCollector({
   fields: { link: 'td.tit3 a', status: 'td.state span', date: 'td:nth-child(5)' },
   idPattern: /\/item\/vendue\/detail\/(\d+)/,
   detailUrl: (id) => `https://www.wooriat.com/item/vendue/detail/${id}`,
+  docs: true,
 });
 
 export const daishin = boardCollector({
@@ -223,6 +234,7 @@ export const kyobotrust = boardCollector({
   fields: { link: '', title: 'p.title', status: '.tag', date: 'p.date' },
   idPattern: /fnViewArticle\('(\d+)'/,
   detailUrl: (id) => `https://www.kyobotrust.co.kr/front/viewAritcle.do?bbsId=BBS_0005&nttId=${id}`,
+  docs: true,
 });
 
 export const koramco = boardCollector({
@@ -233,6 +245,7 @@ export const koramco = boardCollector({
   fields: { link: 'a', title: 'div.subject', status: 'p.category span', date: 'p.date' },
   idPattern: /post_id=(\d+)/,
   detailUrl: (id) => `https://www.koramco.com/ko/pubsaleView?post_id=${id}`,
+  docs: true,
 });
 
 // ---------- 신한자산신탁(화면이 받는 목록 데이터) ----------

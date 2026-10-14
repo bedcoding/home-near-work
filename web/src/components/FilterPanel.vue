@@ -6,10 +6,10 @@ import { KIND_LABEL, KINDS } from '../kinds';
 
 const filters = defineModel<Filters>({ required: true });
 /**
- * unused: 지금 탭에서 안 쓰는 칸(흐리게 보인다)
+ * unused: 지금 탭에서 안 쓰는 칸(흐리게 보인다). 'all'이면 모든 칸.
  * dealChoices: 거래 유형 칸에 보일 것(없으면 전부). singleDeal: 거래 유형을 하나만 고른다(한눈에 탭, 가운데 카드와 같은 값).
  */
-const props = defineProps<{ hiddenCount: number; allAreas: Area[]; unused?: string[]; dealChoices?: DealType[]; singleDeal?: boolean }>();
+const props = defineProps<{ hiddenCount: number; allAreas: Area[]; unused?: string[] | 'all'; dealChoices?: DealType[]; singleDeal?: boolean }>();
 const emit = defineEmits<{ manageAreas: []; hide: [] }>();
 
 /** 한눈에 탭 지역 칸에서 한 지역만 보고 있으면 그 이름. */
@@ -66,6 +66,7 @@ watch(layout, (v) => {
 });
 
 const isCollapsed = (id: SectionId) => layout.collapsed.includes(id);
+const isUnused = (id: SectionId) => props.unused === 'all' || !!props.unused?.includes(id);
 function toggleSection(id: SectionId) {
   layout.collapsed = isCollapsed(id) ? layout.collapsed.filter((x) => x !== id) : [...layout.collapsed, id];
 }
@@ -139,19 +140,12 @@ async function nudge(id: SectionId, delta: number, e: KeyboardEvent) {
 </script>
 
 <template>
-  <aside class="panel">
-    <div class="head">
-      <h2>필터</h2>
-      <span v-if="hiddenCount" class="hidden-count" title="필터 조건에 안 맞아 화면에서만 가린 매물(버린 것 아님)">{{ hiddenCount }}건 가림</span>
-      <button class="btn btn-ghost btn-sm reset" @click="reset">초기화</button>
-      <button class="btn btn-ghost btn-sm" title="필터 칸 숨기기 (F)" @click="emit('hide')">◂ 접기</button>
-    </div>
-
+  <aside class="panel" aria-label="필터">
     <div class="sections" @dragend="onDragEnd">
       <section
         v-for="id in layout.order" :key="id" class="fsec"
         :class="{
-          unused: unused?.includes(id),
+          unused: isUnused(id),
           dragging: dragging === id,
           'drop-before': dropAt?.id === id && !dropAt.after,
           'drop-after': dropAt?.id === id && dropAt.after,
@@ -160,7 +154,7 @@ async function nudge(id: SectionId, delta: number, e: KeyboardEvent) {
       >
         <div
           class="fsec-head" role="button" tabindex="0" draggable="true" :aria-expanded="!isCollapsed(id)"
-          :title="unused?.includes(id) ? '이 탭에는 안 씀' : '눌러서 접거나 펼치기, ⠿를 끌어서 순서 바꾸기(Alt+↑↓)'"
+          :title="isUnused(id) ? '이 탭에는 안 씀' : '눌러서 접거나 펼치기, ⠿를 끌어서 순서 바꾸기(Alt+↑↓)'"
           @dragstart="onDragStart($event, id)" @click="toggleSection(id)" @keydown.space.stop.prevent="toggleSection(id)"
           @keydown.alt.up.stop.prevent="nudge(id, -1, $event)" @keydown.alt.down.stop.prevent="nudge(id, 1, $event)"
         >
@@ -234,15 +228,21 @@ async function nudge(id: SectionId, delta: number, e: KeyboardEvent) {
         </div>
       </section>
     </div>
+    <div class="footer">
+      <span v-if="hiddenCount" class="hidden-count" title="필터 조건에 안 맞아 화면에서만 가린 매물(버린 것 아님)">{{ hiddenCount }}건 가림</span>
+      <div class="footer-actions">
+        <button class="btn btn-ghost btn-sm" @click="reset">초기화</button>
+        <button class="btn btn-ghost btn-sm" title="필터 칸 숨기기 (F)" @click="emit('hide')">접기</button>
+      </div>
+    </div>
   </aside>
 </template>
 
 <style scoped>
 .panel { display: grid; gap: 14px; align-content: start; }
-.head { display: flex; align-items: center; gap: 8px; }
-.head .reset { margin-left: auto; }
-h2 { margin: 0; font-size: 17px; }
 .hidden-count { font-size: 13px; color: var(--muted); }
+.footer { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 8px 0 2px; border-top: 1px solid var(--line); }
+.footer-actions { display: flex; gap: 4px; margin-left: auto; }
 .sections { display: grid; gap: 10px; }
 .fsec { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); transition: box-shadow .12s; }
 .fsec.unused { opacity: .45; }

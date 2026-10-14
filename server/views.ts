@@ -2,7 +2,10 @@ import * as store from './db.js';
 import { toNumber } from './collectors/types.js';
 import { looksSimilar } from './identity.js';
 import { manwon } from '../shared/format.js';
-import { SEOUL, type AuctionResultKind, type AuctionResultSummary, type AuctionResultView, type ListingView, type NormalizedListing, type PriceChangeType, type PriceOption, type RatioStats } from '../shared/types.js';
+import {
+  isDetachedHouseType, NOTICE_SHORT, noticeSourcesOf, SEOUL, type AuctionResultSummary, type AuctionResultView, type AuctionSummaryKind, type ListingView,
+  type NormalizedListing, type NoticeFacts, type NoticeView, type PriceChangeType, type PriceOption, type RatioStats, type TrustDocRound, type TrustDocView,
+} from '../shared/types.js';
 
 type CourtRow = {
   jiwonNm?: unknown;
@@ -222,6 +225,7 @@ const failedBucket = (failed: number | null) => (failed == null ? null : failed 
 
 /**
  * 최근 1년(이 컴퓨터 날짜 기준) 매각 결과를 종류별로, gus의 구마다 그리고 서울 전체(SEOUL)로 요약한다.
+ * 주거 중 단독주택 갈래(isDetachedHouseType)는 house로도 한 번 더 센다.
  * 낙찰, 유찰, 불허가만 센다(기일이 넘어간 것은 유찰인지 변경인지 몰라 뺀다).
  */
 export function buildAuctionResultSummary(gus: string[]): AuctionResultSummary[] {
@@ -230,7 +234,7 @@ export function buildAuctionResultSummary(gus: string[]): AuctionResultSummary[]
   const from = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   interface Group {
     area: string;
-    kind: AuctionResultKind;
+    kind: AuctionSummaryKind;
     held: number;
     sold: number;
     dates: string[];
@@ -244,9 +248,10 @@ export function buildAuctionResultSummary(gus: string[]): AuctionResultSummary[]
   for (const r of store.auctionResultRatioRows(from)) {
     const sold = SOLD_STATUS.has(r.status) && (r.amount ?? 0) > 0;
     if (!sold && r.status !== '03' && r.status !== '05') continue;
-    for (const area of r.gu && gus.includes(r.gu) ? [r.gu, SEOUL] : [SEOUL]) {
-      const key = `${area}|${r.kind}`;
-      const g: Group = groups.get(key) ?? { area, kind: r.kind, held: 0, sold: 0, dates: [], overAppraisal: [], overMin: [], overMinByFailed: new Map(), amount: 0, appraisal: 0 };
+    const kinds: AuctionSummaryKind[] = r.kind === 'home' && isDetachedHouseType(r.usage) ? ['home', 'house'] : [r.kind];
+    for (const [kind, area] of kinds.flatMap((k) => (r.gu && gus.includes(r.gu) ? [r.gu, SEOUL] : [SEOUL]).map((a) => [k, a] as const))) {
+      const key = `${area}|${kind}`;
+      const g: Group = groups.get(key) ?? { area, kind, held: 0, sold: 0, dates: [], overAppraisal: [], overMin: [], overMinByFailed: new Map(), amount: 0, appraisal: 0 };
       groups.set(key, g);
       g.held++;
       g.dates.push(r.sale_date);
@@ -283,5 +288,124 @@ export function buildAuctionResultSummary(gus: string[]): AuctionResultSummary[]
         return stats ? [{ failed, stats }] : [];
       }),
     };
+  });
+}
+
+/** 주소 글자에서 처음 나오는 법정동과 지번('역삼동 123-45', '을지로3가 12-3'). 못 찾으면 null. */
+function lotOf(text: string): string | null {
+  const m = /([가-힣]+(?:동|\d+가))\s*(?:산\s*)?(\d+(?:-\d+)?)/.exec(text);
+  return m ? `${m[1]} ${m[2]}` : null;
+}
+
+/** 온비드 등록 기관 이름에서 회사 표시를 뺀다('주식회사 무궁화신탁' → '무궁화신탁', '케이비부동산신탁주식회사' → 'KB부동산신탁'). 공고 곳의 짧은 이름(NOTICE_SHORT)과 같아진다. */
+const orgName = (s: string) => s.replace(/주식회사|\(주\)|\s/g, '').replace(/^케이비/, 'KB');
+
+/** 'YYYY-MM-DD HH:MM' 두 개 → '03.12' 또는 '03.10~03.12'. 날짜가 없으면 null. */
+function bidDays(begin: string, end: string): string | null {
+  const day = (t: string) => (/^\d{4}-(\d{2})-(\d{2})/.exec(t) ?? []).slice(1).join('.');
+  const a = day(begin);
+  const b = day(end);
+  return a ? (b && b !== a ? `${a}~${b}` : a) : null;
+}
+
+type TrustItem = { org: string; lot: string | null; pbanc: string; price: number | null; area: number | null; begin: string; end: string; failed: number };
+
+/** 모은 온비드 물건 중 신탁사가 등록한 것(등록 기관 이름에 '신탁'). */
+function onbidTrustItems(): TrustItem[] {
+  const items: TrustItem[] = [];
+  for (const raw of store.rawBySource('onbid').values()) {
+    const r = (raw ?? {}) as Record<string, unknown>;
+    const org = orgName(String(r.regOrgNm ?? ''));
+    if (!org.includes('신탁')) continue;
+    const price = r.lowstBidPrcHideDivCd === '0001' ? toNumber(r.lowstBidPrc) : null;
+    const bld = toNumber(r.bldSqms);
+    const land = toNumber(r.landSqms);
+    items.push({
+      org,
+      lot: lotOf(String(r.onbidCltrNm ?? '')),
+      pbanc: String(r.onbidPbancNo ?? ''),
+      price: price && price > 0 ? Math.round(price / 10000) : null,
+      area: bld && bld > 0 ? bld : land && land > 0 ? land : null,
+      begin: String(r.pbctBegnDtm ?? ''),
+      end: String(r.pbctDdlnDt ?? ''),
+      failed: toNumber(r.uscbdCnt) ?? 0,
+    });
+  }
+  return items;
+}
+
+const sqm = (m2: number) => (Math.round(m2 * 10) / 10).toLocaleString('ko-KR');
+const monthDay = (iso: string) => `${iso.slice(5, 7)}.${iso.slice(8, 10)}`;
+
+/**
+ * 같은 신탁사가 온비드에 올린 같은 지번 물건의 숫자. 지번이 맞는 물건이 든 온비드 공고 중 입찰 시작이 가장 늦은 것 하나의 물건 전부를 센다(제목의 '외 N호'도 들어옴).
+ * amount는 그 물건들의 최저입찰가 중 가장 낮은 값(만원), areaM2는 물건이 하나일 때 면적, note는 입찰 날짜(끝났으면 '끝'), 유찰 횟수, 여럿이면 면적 범위. 없으면 null.
+ * now는 'YYYY-MM-DD HH:MM'.
+ */
+function onbidFacts(n: NoticeView, items: TrustItem[], now: string): NoticeFacts | null {
+  const lot = lotOf(n.title) ?? (n.place ? lotOf(n.place) : null);
+  const org = NOTICE_SHORT[n.source];
+  const hits = lot ? items.filter((i) => i.org === org && i.lot === lot) : [];
+  if (!hits.length) return null;
+  const pbanc = hits.reduce((a, b) => (b.begin > a.begin ? b : a)).pbanc;
+  const group = pbanc ? items.filter((i) => i.org === org && i.pbanc === pbanc) : hits;
+  const prices = group.map((i) => i.price).filter((v): v is number => v != null);
+  const areas = group.map((i) => i.area).filter((v): v is number => v != null);
+  const days = bidDays(group[0].begin, group[0].end);
+  const ended = group.every((i) => i.end && i.end < now);
+  const note = [
+    `온비드${days ? ` ${days} 입찰${ended ? ' 끝' : ''}` : ''}`,
+    `유찰 ${Math.max(...group.map((i) => i.failed))}회`,
+    group.length > 1 && areas.length ? `${sqm(Math.min(...areas))}~${sqm(Math.max(...areas))}㎡` : null,
+  ].filter(Boolean).join(', ');
+  return {
+    amount: prices.length ? { label: group.length > 1 ? `${group.length}건 중 최저` : '최저가', value: Math.min(...prices) } : null,
+    areaM2: group.length === 1 ? (areas[0] ?? null) : null,
+    note,
+  };
+}
+
+/**
+ * 공고문 차수 표의 숫자: 오늘이나 그 뒤 첫 입찰 차수(다 지났으면 마지막 차수)의 최저가와 날짜. 가격을 아는 차수가 없으면 null.
+ * 호실이 여럿이면 그 차수에서 가장 낮은 값. 글자 인식으로 읽은 공고문이면 note에 '(글자 인식)'. today는 'YYYY-MM-DD'.
+ */
+function docFacts(doc: TrustDocView, today: string): NoticeFacts | null {
+  const priced = doc.rounds.filter((r) => r.price != null);
+  if (!priced.length) return null;
+  const next = priced.find((r) => r.bid != null && r.bid >= today);
+  const r = next ?? priced[priced.length - 1];
+  const last = doc.rounds[doc.rounds.length - 1].no;
+  const day = r.bid ? monthDay(r.bid) : null;
+  return {
+    amount: { label: r.count > 1 ? `${r.no}차 ${r.count}건 중 최저` : `${r.no}차 최저가`, value: r.price! },
+    areaM2: null,
+    note: `공고문${doc.ocr ? '(글자 인식)' : ''} ${next ? `${day} 입찰, ${last}차까지` : `${last}차 입찰 끝${day ? `(${day})` : ''}`}`,
+  };
+}
+
+/**
+ * 신탁사 공매 공고에 첨부 공고문을 읽은 결과(doc)와 줄에 보일 숫자(facts)를 붙인다.
+ * facts는 이미 있으면 그대로, 없으면 같은 신탁사가 온비드에 올린 같은 지번 물건의 숫자(onbidFacts), 그것도 없으면 공고문 차수 표의 숫자(docFacts).
+ */
+export function withTrustFacts(notices: NoticeView[]): NoticeView[] {
+  const trust = new Set(noticeSourcesOf('trust'));
+  if (!notices.some((n) => trust.has(n.source))) return notices;
+  const docs = store.trustDocsByNotice();
+  const items = onbidTrustItems();
+  const d = new Date();
+  const p2 = (v: number) => String(v).padStart(2, '0');
+  const today = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  const now = `${today} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  return notices.map((n) => {
+    if (!trust.has(n.source)) return n;
+    const row = docs.get(n.id);
+    const doc: TrustDocView | null = row
+      ? {
+        name: row.name, url: row.url, readAt: row.read_at, rounds: row.rounds ? (JSON.parse(row.rounds) as TrustDocRound[]) : [],
+        lines: row.line_count, ocr: row.ocr === 1, error: row.error,
+      }
+      : null;
+    const facts = n.facts ?? onbidFacts(n, items, now) ?? (doc ? docFacts(doc, today) : null);
+    return { ...n, doc, facts };
   });
 }

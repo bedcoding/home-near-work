@@ -29,7 +29,7 @@ const emit = defineEmits<{
   pick: [Point];
   area: [Area];
   station: [CatalogStation];
-  /** 고시원과 쉐어의 신규와 가격 변동 표시를 모두 확인 */
+  /** 고시원과 쉐어의 신규와 가격 변동 표시를 모두 지움(모두 읽음) */
   ack: [];
 }>();
 
@@ -74,7 +74,7 @@ defineExpose({ pickType });
       <span v-if="news" class="chip chip-new">신규 {{ news }}</span>
       <span v-if="changed" class="chip chip-down">가격 변동 {{ changed }}</span>
       <span v-if="outside" class="outside" title="지역 반경 밖이라 가린 곳입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다.">반경 밖 {{ outside }}곳</span>
-      <button v-if="news || changed" class="btn btn-sm" @click="emit('ack')">모두 확인</button>
+      <button v-if="news || changed" class="link-btn" title="이 탭의 '신규'와 가격 변동 표시를 모두 지웁니다. 매물은 그대로 남습니다" @click="emit('ack')">모두 읽음</button>
     </div>
 
     <nav class="types" aria-label="종류">

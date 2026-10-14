@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { DEAL_LABEL, SOURCE_LABEL, type Area, type DealType, type ListingView, type PriceOption, type SourceId, type Verdict } from '../../../shared/types';
 import { bandIdOf, bandsFor, bandValue, DEFAULT_EDGES, edgesFor, edgesText, isRent, OVERVIEW_DEALS, orderFor, parseEdges } from '../bands';
 import { DEFAULT_FILTERS, dealOptions, passes, type Filters } from '../filters';
@@ -10,6 +10,40 @@ import OverviewMap from './OverviewMap.vue';
 
 type Point = { lat: number; lng: number };
 const props = defineProps<{ listings: ListingView[]; filters: Filters; areas: Area[]; selectedId: string | null }>();
+const overviewEl = ref<HTMLElement | null>(null);
+const mapPanel = ref<HTMLElement | null>(null);
+const mapPanelHeight = ref<number>();
+let layoutObserver: ResizeObserver | undefined;
+let sizeFrame = 0;
+
+// 탭 줄바꿈과 스크롤 위치에 맞춰 지도가 화면 아래쪽까지 차도록 한다.
+function scheduleMapSize() {
+  cancelAnimationFrame(sizeFrame);
+  sizeFrame = requestAnimationFrame(() => {
+    if (!mapPanel.value || window.innerWidth <= 1280) {
+      mapPanelHeight.value = undefined;
+      return;
+    }
+    const stickyTop = Number.parseFloat(getComputedStyle(mapPanel.value).top) || 0;
+    const top = Math.max(stickyTop, overviewEl.value?.getBoundingClientRect().top ?? 0);
+    mapPanelHeight.value = Math.max(400, Math.floor(window.innerHeight - top - 16));
+  });
+}
+
+onMounted(() => {
+  layoutObserver = new ResizeObserver(scheduleMapSize);
+  if (overviewEl.value) layoutObserver.observe(overviewEl.value);
+  for (const el of document.querySelectorAll('.app-frame > .top, .layout > .tabs, .preview-note')) layoutObserver.observe(el);
+  window.addEventListener('resize', scheduleMapSize);
+  window.addEventListener('scroll', scheduleMapSize, { passive: true });
+  scheduleMapSize();
+});
+onBeforeUnmount(() => {
+  layoutObserver?.disconnect();
+  cancelAnimationFrame(sizeFrame);
+  window.removeEventListener('resize', scheduleMapSize);
+  window.removeEventListener('scroll', scheduleMapSize);
+});
 const emit = defineEmits<{
   /** 지금 펼쳐져 보이는 매물(화면 순서). 키보드 이동에 쓴다. */
   visible: [ListingView[]];
@@ -397,7 +431,8 @@ function resetEdges() {
 </script>
 
 <template>
-  <section class="overview">
+  <section ref="overviewEl" class="overview">
+    <div class="ov-controls">
     <div v-if="areas.length > 1" class="area-chips" role="tablist" aria-label="지역">
       <button class="area-chip" :class="{ on: allAreas }" role="tab" :aria-selected="allAreas" @click="emit('areas', [])">
         모든 지역 <span class="num">{{ areaChips.all }}</span>
@@ -426,6 +461,8 @@ function resetEdges() {
           title="지역 반경 밖이라 가린 매물입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다."
         >반경 밖 {{ c.outside }}건</span>
       </button>
+    </div>
+
     </div>
 
     <div class="ov-split">
@@ -504,7 +541,7 @@ function resetEdges() {
           </div>
         </div>
       </div>
-      <aside class="ov-map">
+      <aside ref="mapPanel" class="ov-map" :style="mapPanelHeight ? { '--map-panel-height': `${mapPanelHeight}px` } : undefined">
         <OverviewMap
           :listings="visible" :background="mapBackground" :areas="areas" :selected-id="selectedId" :fit-key="mapFitKey"
           @select="(l) => reveal([l])" @reveal="reveal" @open="(l) => emit('open', l)" @pick="(p) => emit('pick', p)" @area="(a) => emit('area', a)"
@@ -517,6 +554,7 @@ function resetEdges() {
 
 <style scoped>
 .overview { display: grid; gap: 14px; }
+.ov-controls { display: contents; }
 .small { font-size: 13px; }
 
 .deals { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }

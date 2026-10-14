@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { SEOUL, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type RatioStats } from '../../../shared/types';
+import { isDetachedHouseType, SEOUL, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type RatioStats } from '../../../shared/types';
 import { manwon } from '../../../shared/format';
 import { madangUrl, saleDay, type AuctionKind } from '../auction';
 
 // 경매 탭 맨 위 '매각 결과' 칸: 켜 둔 지역 근처 구의 지난 매각기일 결과(낙찰가와 감정가 대비, 유찰)와 법원 지역별 매각통계(구별 매각가율).
-// 결과와 통계는 지금 켜 둔 지역 근처 구의 것만, 결과는 고른 종류(주거, 상가, 토지)만 보인다. 통계는 구마다 가장 최근에 읽은 것, title에 지난 기간.
+// 결과와 통계는 지금 켜 둔 지역 근처 구의 것만, 결과는 고른 종류(주거, 단독, 상가, 토지)만 보인다. 통계는 구마다 가장 최근에 읽은 것, title에 지난 기간.
 // 제목 줄에 최근 1년 낙찰 건수와 낙찰가율 중간값, 펼치면 근처 구와 서울 전체 비교 표, 매각기일별 목록(최근 기일 SHOWN_DAYS개, 나머지는 '이전 기일 더 보기').
 // 펼침은 기억한다.
 
@@ -39,7 +39,9 @@ function onToggle(e: Event) {
 }
 
 const inGus = (gu: string | null) => !props.gus.length || (gu != null && props.gus.includes(gu));
-const list = computed(() => props.results.filter((r) => r.kind === props.kind && inGus(r.gu)));
+/** 고른 칸의 결과인지: 단독 칸은 주거 중 용도가 단독주택 갈래인 것 */
+const inKind = (r: AuctionResultView) => (props.kind === 'house' ? r.kind === 'home' && isDetachedHouseType(r.usage) : r.kind === props.kind);
+const list = computed(() => props.results.filter((r) => inKind(r) && inGus(r.gu)));
 /** 최근 1년 결과(제목 줄 숫자에 씀) */
 const lastYear = computed(() => {
   const from = yearAgo();
@@ -85,7 +87,7 @@ const compareRows = computed(() =>
   })),
 );
 const showCompare = computed(() => compareRows.value.some((r) => r.summary || r.stat));
-const KIND_NAME: Record<AuctionKind, string> = { home: '주거', shop: '상가', land: '토지' };
+const KIND_NAME: Record<AuctionKind, string> = { home: '주거', house: '단독', shop: '상가', land: '토지' };
 /** 'YYYY-MM-DD'를 'YYYY.MM.DD'로 */
 const dotDate = (date: string | null) => (date ? date.replace(/-/g, '.') : '');
 /** 비율 요약을 '중간값 x%, 평균 y%, 가장 낮은 a%, 가장 높은 b%'로 */
@@ -246,20 +248,20 @@ const caseText = (r: AuctionResultView) => `${r.caseNo}${r.itemNo !== '1' ? `(${
 </script>
 
 <template>
-  <details class="results" :open="open" @toggle="onToggle">
-    <summary class="head" :title="headTitle">
-      <span class="name">매각 결과</span>
+  <details class="results fold" :open="open" @toggle="onToggle">
+    <summary :title="headTitle">
+      <span class="fold-name">매각 결과</span>
       <template v-if="held.length">
-        <span class="muted num count">낙찰 {{ ratios.length }}/{{ held.length }}건</span>
+        <span class="muted num fold-count">낙찰 {{ ratios.length }}/{{ held.length }}건</span>
         <span v-if="median != null" class="num rate" :title="medianTitle">감정가의 {{ pct(median) }}</span>
       </template>
-      <span v-else class="muted count">아직 없음</span>
+      <span v-else class="muted fold-count">아직 없음</span>
       <span v-if="regionStats.length" class="stats">
         <span class="muted">법원 통계</span>
         <span v-for="g in regionStats" :key="g.gu" class="num stat" :title="statTitle(g)">{{ g.gu }} {{ pct(g.amountRate) }}</span>
       </span>
     </summary>
-    <div class="body">
+    <div class="body fold-body">
       <div v-if="showCompare" class="compare-wrap">
         <table class="compare">
           <thead>
@@ -309,13 +311,6 @@ const caseText = (r: AuctionResultView) => `${r.caseNo}${r.itemNo !== '1' ? `(${
 </template>
 
 <style scoped>
-.results > summary { cursor: pointer; list-style: none; }
-.results > summary::-webkit-details-marker { display: none; }
-.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; font-size: 17px; font-weight: 800; }
-.head::before { content: '▸'; font-size: 14px; color: var(--muted); }
-.results[open] > .head::before { content: '▾'; }
-.results[open] > .head { margin-bottom: 8px; }
-.count { font-size: 14px; font-weight: 600; }
 .rate { font-size: 15px; font-weight: 800; color: var(--accent); }
 .stats { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 13px; font-weight: 600; }
 .stat { font-weight: 700; color: var(--ink-2); }
@@ -335,10 +330,7 @@ const caseText = (r: AuctionResultView) => `${r.caseNo}${r.itemNo !== '1' ? `(${
 .day { display: grid; gap: 6px; }
 .day-name { margin: 0; font-size: 15px; font-weight: 800; color: var(--ink-2); }
 .day-name .muted { font-size: 13px; font-weight: 600; }
-.rows {
-  list-style: none; margin: 0; padding: 2px 14px; container-type: inline-size;
-  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
-}
+.rows { list-style: none; margin: 0; padding: 0; container-type: inline-size; }
 .row {
   display: grid; grid-template-columns: 92px minmax(0, 1fr) 190px 128px; gap: 4px 12px; align-items: baseline;
   padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px;

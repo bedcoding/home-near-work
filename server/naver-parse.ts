@@ -9,7 +9,7 @@ import type { DealType, ExplainRow, NormalizedListing, PriceOption } from '../sh
 // 거래 유형 코드. A1 매매, B1 전세, B2 월세, B3 단기.
 const DEALS: Record<string, DealType> = { A1: 'sale', B1: 'jeonse', B2: 'monthly', B3: 'short' };
 // 매물 종류 코드. 모르는 코드는 그대로 보인다.
-const TYPES: Record<string, string> = { A01: '아파트', A04: '재건축', B01: '아파트 분양권' };
+const TYPES: Record<string, string> = { A01: '아파트', A04: '재건축', B01: '아파트 분양권', C03: '단독/다가구', D05: '상가주택' };
 
 /** 원 → 만원 */
 const manwon = (value: unknown) => {

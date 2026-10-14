@@ -2,8 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   hasHomeListings, inGus, nearReason, noticeSection, noticeSourcesOf, SOURCE_LABEL,
-  type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type DealType, type ExplainRow, type ListingView, type NoticeSourceId, type NoticeSourceStatus,
-  type NoticeView, type SourceId, type Verdict,
+  type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type DealType, type ExplainRow, type HouseTradeSummary, type ListingView,
+  type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type SourceId, type Verdict,
 } from '../../shared/types';
 import { api } from './api';
 import { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, loadFilters, passes, saveFilters, type Filters } from './filters';
@@ -13,6 +13,7 @@ import AreaSettings from './components/AreaSettings.vue';
 import AuctionView from './components/AuctionView.vue';
 import FilterPanel from './components/FilterPanel.vue';
 import ListingCard from './components/ListingCard.vue';
+import ListingDetail from './components/ListingDetail.vue';
 import NoticesView from './components/NoticesView.vue';
 import Overview from './components/Overview.vue';
 import RoomsView from './components/RoomsView.vue';
@@ -20,13 +21,18 @@ import RunHistory from './components/RunHistory.vue';
 import SitesTab from './components/SitesTab.vue';
 import SubscriptionsView from './components/SubscriptionsView.vue';
 import { loadCatalog, setAreaEnabled, toggleStationArea, type CatalogStation } from './areaActions';
-import { auctionKindOf, isAuction, originalUrl, sortAuctions, type AuctionKind } from './auction';
+import { auctionKindOf, inAuctionKind, isAuction, originalUrl, sortAuctions, type AuctionKind } from './auction';
 import { isPastNotice } from './notices';
 import { isRoomStay, sortRooms } from './rooms';
 import { siteLinks } from './siteLinks';
 
 type Tab = 'overview' | 'news' | 'star' | 'hidden' | 'auction' | 'subs' | 'rooms' | 'notices' | 'sites' | 'runs' | 'areas' | 'alerts';
 const TABS: Tab[] = ['overview', 'news', 'star', 'hidden', 'auction', 'subs', 'rooms', 'notices', 'sites', 'runs', 'areas', 'alerts'];
+
+/** 머리 줄 높이(px). 필터 칸이 그 아래에 붙어 따라 내려온다(--app-header-height). */
+const headerEl = ref<HTMLElement | null>(null);
+const headerHeight = ref(80);
+let headerObserver: ResizeObserver | undefined;
 
 // 마지막으로 연 탭을 다음에 열어도 그대로 보여 준다. 주소에 ?tab=이 있으면(조회 알림을 눌러 열었을 때) 그 탭을 먼저 연다.
 const savedTab = localStorage.getItem('hnw-tab') as Tab | null;
@@ -173,12 +179,12 @@ const shopFilters = computed<Filters>(() => ({
 }));
 const auctionFilterOf = (l: ListingView) => (auctionKindOf(l) === 'home' ? auctionFilters.value : shopFilters.value);
 const auctionsAll = computed(() => current.value.filter((l) => sectionOf(l) === 'auction'));
-/** 경매 탭에서 고른 종류(주거, 상가, 토지). 다음에 열어도 유지한다. */
-const AUCTION_KINDS: AuctionKind[] = ['home', 'shop', 'land'];
+/** 경매 탭에서 고른 종류(주거, 단독, 상가, 토지). 다음에 열어도 유지한다. */
+const AUCTION_KINDS: AuctionKind[] = ['home', 'house', 'shop', 'land'];
 const savedKind = localStorage.getItem('hnw-auction-kind') as AuctionKind | null;
 const auctionKind = ref<AuctionKind>(savedKind && AUCTION_KINDS.includes(savedKind) ? savedKind : 'home');
 watch(auctionKind, (k) => localStorage.setItem('hnw-auction-kind', k));
-const ofAuctionKind = (l: ListingView) => auctionKindOf(l) === auctionKind.value;
+const ofAuctionKind = (l: ListingView) => inAuctionKind(l, auctionKind.value);
 /** 매각기일 묶음 안 순서(기본 또는 평당 낮은 순). 다음에 열어도 유지한다. */
 const auctionSort = ref<'default' | 'pyeong'>(localStorage.getItem('hnw-auction-sort') === 'pyeong' ? 'pyeong' : 'default');
 watch(auctionSort, (s) => localStorage.setItem('hnw-auction-sort', s));
@@ -190,11 +196,39 @@ const auctionsBoth = computed(() =>
 const auctions = computed(() => auctionsBoth.value.filter(ofAuctionKind));
 const auctionKinds = computed(() => {
   const count = (kind: AuctionKind) => {
-    const list = auctionsBoth.value.filter((l) => auctionKindOf(l) === kind);
+    const list = auctionsBoth.value.filter((l) => inAuctionKind(l, kind));
     return { count: list.length, news: list.filter(hasNews).length + lhByKind.value[kind].filter((n) => n.isNew).length };
   };
-  return { home: count('home'), shop: count('shop'), land: count('land') };
+  return { home: count('home'), house: count('house'), shop: count('shop'), land: count('land') };
 });
+/** 경매 탭 단독 칸 맨 위 오래된 단독주택 실거래 요약. age는 지은 지 몇 년 넘은 집을 볼지(다음에 열어도 유지). */
+const houseAge = ref(Number(localStorage.getItem('hnw-house-age')) || 50);
+watch(houseAge, (a) => {
+  localStorage.setItem('hnw-house-age', String(a));
+  void loadHouseTrades();
+});
+const houseTrades = ref<HouseTradeSummary | null>(null);
+const houseFetching = ref(false);
+const houseError = ref<string | null>(null);
+async function loadHouseTrades() {
+  try {
+    houseTrades.value = await api.houseTrades(houseAge.value);
+  } catch {
+    /* 연결이 끊긴 것은 연결 안내가 알린다 */
+  }
+}
+/** 국토부 실거래를 지금 받는다(단독 칸의 '받기') */
+async function fetchHouseTrades() {
+  houseFetching.value = true;
+  houseError.value = null;
+  try {
+    houseTrades.value = await api.fetchHouseTrades(houseAge.value);
+  } catch (e) {
+    houseError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    houseFetching.value = false;
+  }
+}
 /** 켜 둔 지역 근처 구의 법원경매 매각 결과, 그 구들과 서울 전체의 지역별 매각통계와 결과 요약(경매 탭 맨 위 '매각 결과' 칸). 근처 구가 바뀌면 다시 받는다. */
 const auctionResults = ref<{ results: AuctionResultView[]; stats: CourtRegionStat[]; compare: AuctionResultSummary[] }>({ results: [], stats: [], compare: [] });
 async function loadAuctionResults() {
@@ -207,7 +241,7 @@ async function loadAuctionResults() {
 watch(
   () => (state.value?.gus ?? []).join(','),
   (now, before) => {
-    if (before && now !== before) void loadAuctionResults();
+    if (before && now !== before) void Promise.all([loadAuctionResults(), loadHouseTrades()]);
   },
 );
 const auctionsOutside = computed(() => {
@@ -258,7 +292,7 @@ const lhAll = computed(() => ({
   shop: notices.value.filter((n) => noticeSection(n) === 'shop'),
   land: notices.value.filter((n) => noticeSection(n) === 'land'),
 }));
-const lhByKind = computed<Record<AuctionKind, NoticeView[]>>(() => ({ home: [], shop: nearOnly(lhAll.value.shop), land: nearOnly(lhAll.value.land) }));
+const lhByKind = computed<Record<AuctionKind, NoticeView[]>>(() => ({ home: [], house: [], shop: nearOnly(lhAll.value.shop), land: nearOnly(lhAll.value.land) }));
 
 async function ackNotices(ids: number[]) {
   error.value = null;
@@ -277,6 +311,7 @@ const overview = ref<InstanceType<typeof Overview> | null>(null);
 const lists: Partial<Record<Tab, { readonly value: ListingView[] }>> = { overview: overviewVisible, news, star: starred, hidden, auction: auctions, rooms: roomsVisible };
 const currentList = computed(() => lists[tab.value]?.value ?? []);
 const selectedId = computed(() => currentList.value[selected.value]?.id ?? null);
+const selectedListing = computed(() => currentList.value[selected.value] ?? null);
 watch(tab, (t) => {
   localStorage.setItem('hnw-tab', t);
   selected.value = 0;
@@ -331,7 +366,7 @@ async function poll() {
     // 조회가 끝났을 때, 서버가 다시 켜진 뒤 처음 연결될 때, 크롬 확장이 네이버 화면 데이터를 새로 보냈을 때 목록도 새로 받는다.
     const naverChanged = naverBefore != null && state.value?.naverCapture.total !== naverBefore;
     if ((wasRunning && !running.value) || connectionError.value || naverChanged) {
-      await Promise.all([refreshListings(), loadNotices(), loadAuctionResults()]);
+      await Promise.all([refreshListings(), loadNotices(), loadAuctionResults(), loadHouseTrades()]);
       runsKey.value += 1;
     }
     connectionError.value = null;
@@ -524,7 +559,7 @@ async function ackWhere(section: Section) {
   await refreshState();
 }
 
-/** 경매 탭 '모두 확인': 경매 매물과 새 공매 공고, LH 상가와 토지 공고(지역 밖으로 가린 것 포함). */
+/** 경매 탭 '모두 읽음': 경매 매물과 새 공매 공고, LH 상가와 토지 공고(지역 밖으로 가린 것 포함). */
 async function ackAuctionTab() {
   const ids = [...trustNotices.value, ...lhAll.value.shop, ...lhAll.value.land].filter((n) => n.isNew).map((n) => n.id);
   if (ids.length) await ackNotices(ids);
@@ -541,7 +576,8 @@ function onKey(e: KeyboardEvent) {
     openMenu.value = false;
     return;
   }
-  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || (e.target as HTMLElement | null)?.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
+  if ((tag === 'BUTTON' || tag === 'A') && (e.key === 'Enter' || e.key === ' ')) return;
   if (e.key === 'f') {
     filtersHidden.value = !filtersHidden.value;
     e.preventDefault();
@@ -579,8 +615,14 @@ function onKey(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
+  if (headerEl.value) {
+    headerObserver = new ResizeObserver(() => {
+      headerHeight.value = Math.ceil(headerEl.value?.getBoundingClientRect().height ?? 80);
+    });
+    headerObserver.observe(headerEl.value);
+  }
   try {
-    await Promise.all([refreshState(), refreshListings(), loadNotices(), loadAuctionResults()]);
+    await Promise.all([refreshState(), refreshListings(), loadNotices(), loadAuctionResults(), loadHouseTrades()]);
     if (state.value && state.value.autoCheck.visible !== visibleMode.value) void api.setAutoCheck({ visible: visibleMode.value }).catch(() => {});
   } catch {
     connectionError.value = '대시보드 프로그램에 연결할 수 없습니다. 프로그램이 켜져 있는지 확인해 주세요. 연결되면 이 문구는 사라집니다.';
@@ -592,6 +634,7 @@ onMounted(async () => {
   window.postMessage({ source: 'hnw-dashboard', type: 'ping' }, location.origin);
 });
 onBeforeUnmount(() => {
+  headerObserver?.disconnect();
   document.removeEventListener('click', onDocClick);
   window.removeEventListener('message', onExtMessage);
   window.clearTimeout(timer);
@@ -631,19 +674,19 @@ const mainTabs = computed(() => tabs.value.filter((t) => t.main));
 const moreTabs = computed(() => tabs.value.filter((t) => !t.main));
 
 /**
- * 탭마다 필터 칸 쓰임. null이면 필터 칸을 숨긴다(필터를 안 쓰는 탭). 배열은 그 탭에서 안 쓰는 칸(흐리게 보임).
+ * 탭마다 필터 칸에서 안 쓰는 칸(흐리게 보임). 'all'은 필터를 안 쓰는 탭이라 모든 칸이 흐리다(칸은 그 자리에 그대로 있다).
  * 경매 탭은 거래 유형을 안 보고, 상가는 지역과 검색어만 본다. 고시원과 쉐어는 거래 유형과 매물 유형, 임대 공고는 '지역 반경 안만'만 본다.
  */
-const filterUse = computed<string[] | null>(() => {
+const filterUse = computed<string[] | 'all'>(() => {
   switch (tab.value) {
     case 'subs':
     case 'runs':
     case 'sites':
     case 'areas':
     case 'alerts':
-      return null;
+      return 'all';
     case 'auction':
-      return auctionKind.value === 'home' ? ['deal'] : ['deal', 'kind', 'price', 'home'];
+      return auctionKind.value === 'home' || auctionKind.value === 'house' ? ['deal'] : ['deal', 'kind', 'price', 'home'];
     case 'rooms':
       return ['deal', 'kind'];
     case 'notices':
@@ -661,7 +704,8 @@ const emptyText: Partial<Record<Tab, string>> = {
 </script>
 
 <template>
-  <header class="top">
+  <div class="app-frame" :style="{ '--app-header-height': `${headerHeight}px` }">
+  <header ref="headerEl" class="top">
     <div class="brand">
       <h1>회사근처 내집마련</h1>
       <span class="muted areas-line">{{ areas.map((a) => `${a.name} ${radiusText(a.radiusM)}`).join(', ') || '켜진 지역 없음' }}</span>
@@ -727,29 +771,29 @@ const emptyText: Partial<Record<Tab, string>> = {
   <p v-if="connectionError" class="error">{{ connectionError }}</p>
   <p v-if="error" class="error">{{ error }}</p>
 
-  <div class="layout" :class="{ 'no-side': filtersHidden || !filterUse }">
+  <div class="layout" :class="{ 'no-side': filtersHidden, idle: filterUse === 'all' }">
     <FilterPanel
-      v-if="!filtersHidden && filterUse" v-model="filters" :hidden-count="hiddenCount" :all-areas="state?.areas ?? []" :unused="filterUse"
+      v-show="!filtersHidden" v-model="filters" :hidden-count="filterUse === 'all' ? 0 : hiddenCount" :all-areas="state?.areas ?? []" :unused="filterUse"
       :deal-choices="dealChoices" :single-deal="tab === 'overview'"
       class="side" @manage-areas="tab = 'areas'" @hide="filtersHidden = true"
     />
 
-    <main class="main">
       <nav class="tabs" aria-label="보기">
-        <button v-if="filtersHidden && filterUse" class="show-filters" title="필터 칸 열기 (F)" @click="filtersHidden = false">
-          필터 ▸<span v-if="hiddenCount" class="show-filters-count">{{ hiddenCount }}건 가림</span>
+        <button v-if="filtersHidden" class="show-filters" title="필터 칸 열기 (F)" @click="filtersHidden = false">
+          필터 ▸<span v-if="hiddenCount && filterUse !== 'all'" class="show-filters-count">{{ hiddenCount }}건 가림</span>
         </button>
-        <button v-for="t in mainTabs" :key="t.id" class="tab" :class="{ on: tab === t.id }" :title="t.title" @click="tab = t.id">
+        <button v-for="t in mainTabs" :key="t.id" class="tab" :class="{ on: tab === t.id }" :aria-current="tab === t.id ? 'page' : undefined" :title="t.title" @click="tab = t.id">
           {{ t.label }}<span v-if="t.count !== null" class="count num">{{ t.count }}</span>
           <span v-if="t.near" class="chip chip-near tab-news" title="켜 둔 지역 바로 근처일 가능성이 높은 공고">근처 {{ t.near }}</span>
           <span v-if="t.news" class="chip chip-new tab-news">신규 {{ t.news }}</span>
         </button>
         <span class="tabs-gap" aria-hidden="true"></span>
-        <button v-for="t in moreTabs" :key="t.id" class="tab tab-more" :class="{ on: tab === t.id }" :title="t.title" @click="tab = t.id">
+        <button v-for="t in moreTabs" :key="t.id" class="tab tab-more" :class="{ on: tab === t.id }" :aria-current="tab === t.id ? 'page' : undefined" :title="t.title" @click="tab = t.id">
           {{ t.label }}<span v-if="t.count" class="count num">{{ t.count }}</span>
         </button>
       </nav>
 
+    <main class="main">
       <template v-if="usesSiteTabs">
         <nav class="sites" aria-label="사이트">
           <button
@@ -772,11 +816,12 @@ const emptyText: Partial<Record<Tab, string>> = {
       </template>
 
       <template v-else-if="tab === 'news' || tab === 'star' || tab === 'hidden'">
+        <div class="listing-layout"><div class="listing-feed">
         <div v-if="tab === 'news'" class="newsbar">
           <span class="chip chip-new">신규 {{ newCount }}</span>
           <span class="chip chip-down">가격 변동 {{ changedCount }}</span>
           <span v-if="newsFiltered > 0" class="muted small">필터로 가려진 새 소식 {{ newsFiltered }}건</span>
-          <button v-if="news.length" class="btn btn-sm" @click="ackWhere('home')">모두 확인함</button>
+          <button v-if="news.length" class="link-btn" title="'신규'와 가격 변동 표시를 모두 지웁니다. 새 소식 탭에서는 빠지고 매물은 그대로 남습니다" @click="ackWhere('home')">모두 읽음</button>
         </div>
         <div class="list">
           <ListingCard
@@ -791,6 +836,13 @@ const emptyText: Partial<Record<Tab, string>> = {
             <template v-else>{{ emptyText[tab] }}</template>
           </p>
         </div>
+        </div><aside class="listing-side">
+          <ListingDetail
+            :listing="selectedListing" :areas="areas" @open="selectedListing && openOriginal(selectedListing)"
+            @verdict="(v) => selectedListing && setVerdict(selectedListing, v)" @source="sourceOf = selectedListing"
+            @raw="selectedListing && showRaw(selectedListing)"
+          />
+        </aside></div>
       </template>
 
       <template v-else-if="tab === 'auction'">
@@ -800,6 +852,8 @@ const emptyText: Partial<Record<Tab, string>> = {
           :sort="auctionSort" @sort="(v) => (auctionSort = v, selected = 0)"
           :notices="trustNotices" :lh-notices="lhByKind[auctionKind]" :lh-outside="lhAll[auctionKind === 'land' ? 'land' : 'shop'].length - lhByKind[auctionKind].length"
           :notice-status="noticeStatus" :results="auctionResults.results" :region-stats="auctionResults.stats" :compare="auctionResults.compare" :gus="state?.gus ?? []"
+          :house-trades="houseTrades" :house-age="houseAge" :house-fetching="houseFetching" :house-error="houseError"
+          @house-age="(a) => (houseAge = a)" @house-fetch="fetchHouseTrades"
           @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
           @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @pick="addPickedArea" @area="turnOffArea" @ack="ackAuctionTab"
           @ack-notices="ackNotices" @run="startRun(['courtauction', 'onbid'])"
@@ -876,22 +930,23 @@ const emptyText: Partial<Record<Tab, string>> = {
       </details>
     </div>
   </div>
+  </div>
 </template>
 
 <style scoped>
 .top {
   position: sticky; top: 0; z-index: 20;
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 16px 28px; background: var(--paper); border-bottom: 1px solid var(--line);
 }
 .brand { display: grid; gap: 2px; }
-h1 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
-.areas-line { font-size: 13px; }
-.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.run { min-height: 52px; min-width: 150px; font-size: 17px; }
+h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.areas-line { font-size: 12px; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.run { min-height: 38px; padding: 0 14px; font-size: 13px; }
 .missed { border-color: var(--new); color: var(--new); }
 /* 마지막 조회와 자동 확인: 버튼 왼쪽의 작은 두 줄 */
-.when { display: grid; justify-items: end; gap: 2px; font-size: 13px; color: var(--muted); }
+.when { display: grid; justify-items: end; gap: 2px; font-size: 11px; color: var(--muted); }
 .linkish {
   padding: 0; border: 0; background: none; font: inherit; color: var(--muted); cursor: pointer;
   text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px;
@@ -901,11 +956,11 @@ h1 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
 /* 한 번에 열기 + ▾ 메뉴(열 지역, 사이트 하나만 열기) */
 .openall { position: relative; display: flex; }
 .open-main, .open-more {
-  min-height: 52px; border: 1px solid var(--line-strong); background: var(--surface);
+  min-height: 38px; border: 1px solid var(--line-strong); background: var(--surface);
   font-family: inherit; font-weight: 700; color: var(--ink-2); cursor: pointer;
 }
-.open-main { display: inline-flex; align-items: center; gap: 8px; padding: 0 18px; border-radius: 10px 0 0 10px; font-size: 16px; }
-.open-more { width: 42px; margin-left: -1px; border-radius: 0 10px 10px 0; font-size: 14px; }
+.open-main { display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 10px 0 0 10px; font-size: 13px; }
+.open-more { width: 30px; margin-left: -1px; border-radius: 0 10px 10px 0; font-size: 13px; }
 .open-main:hover, .open-more:hover, .open-more[aria-expanded='true'] { border-color: var(--ink-2); color: var(--ink); position: relative; }
 .open-count { padding: 1px 8px; border-radius: 999px; background: var(--surface-2); font-size: 13px; font-weight: 600; color: var(--muted); }
 .open-menu {
@@ -933,17 +988,24 @@ h1 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
 .error { margin: 8px 24px 0; }
 .small { font-size: 13px; }
 
-.layout { display: grid; grid-template-columns: 300px 1fr; gap: 24px; padding: 20px 24px 60px; align-items: start; }
-.layout.no-side { grid-template-columns: 1fr; }
+.layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: min-content 1fr; grid-template-areas: 'filters tabs' 'filters content'; gap: 20px 24px; padding: 22px 28px 60px; align-items: start; }
+.layout.no-side { grid-template-columns: minmax(0, 1fr); grid-template-rows: min-content 1fr; grid-template-areas: 'tabs' 'content'; }
 .show-filters {
   align-self: center; min-height: 40px; margin-right: 8px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 10px;
   background: var(--surface); font-size: 14px; font-weight: 700; color: var(--ink-2);
 }
 .show-filters-count { margin-left: 6px; font-weight: 600; color: var(--muted); }
-.side { position: sticky; top: 96px; max-height: calc(100vh - 110px); overflow: auto; padding-right: 4px; }
-.main { display: grid; gap: 14px; min-width: 0; }
+.side {
+  grid-area: filters; position: sticky; top: calc(var(--app-header-height) + 16px); max-height: calc(100dvh - var(--app-header-height) - 32px);
+  overflow: auto; padding-right: 4px;
+}
+.main { grid-area: content; display: grid; gap: 20px; min-width: 0; }
+/* 새 소식, 관심, 숨김함: 목록(왼쪽)과 고른 매물 상세(오른쪽, 따라 내려옴). 좁으면 상세가 목록 아래로 간다. */
+.listing-layout { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 22px; align-items: start; }
+.listing-feed { display: grid; gap: 16px; min-width: 0; }
+.listing-side { position: sticky; top: calc(var(--app-header-height) + 16px); min-width: 0; }
 /* 보기 탭(1단) → 사이트(2단) 순서. 탭 줄은 어느 탭에서도 같은 자리에 있다. */
-.tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 2px solid var(--line); }
+.tabs { grid-area: tabs; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 2px solid var(--line); }
 .tab {
   position: relative; min-height: 50px; padding: 0 16px; margin-bottom: -2px;
   border: 0; border-bottom: 3px solid transparent; background: transparent;
@@ -988,8 +1050,22 @@ h1 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
 .rawjson { margin: 8px 0 0; padding: 12px; background: var(--ink); color: #e8edf3; border-radius: 8px; font-size: 12px; max-height: 420px; overflow: auto; }
 summary { cursor: pointer; font-weight: 600; }
 
+@media (max-width: 1250px) {
+  .when { display: flex; flex-wrap: wrap; width: 100%; justify-content: flex-end; order: 2; gap: 5px 12px; }
+  .listing-layout { grid-template-columns: minmax(0, 1fr); }
+  .listing-side { position: static; }
+}
+/* 좁으면 머리 줄은 따라 내려오지 않고, 필터 칸은 탭 줄 아래로 간다. 필터를 안 쓰는 탭(idle)은 필터 칸을 숨긴다. */
 @media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; }
+  .top { position: static; padding: 14px 16px; }
+  .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: min-content min-content 1fr; grid-template-areas: 'tabs' 'filters' 'content'; padding: 20px 16px 40px; }
+  .layout.no-side, .layout.idle { grid-template-rows: min-content 1fr; grid-template-areas: 'tabs' 'content'; padding: 20px 16px 40px; }
+  .layout.idle > .side { display: none; }
   .side { position: static; max-height: none; }
+}
+@media (max-width: 520px) {
+  .controls { width: 100%; gap: 8px; }
+  .when { justify-content: flex-start; }
+  .layout, .layout.no-side, .layout.idle { padding: 18px 12px 36px; }
 }
 </style>

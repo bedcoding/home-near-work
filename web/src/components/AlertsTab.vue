@@ -112,7 +112,7 @@ async function toggleFlag(key: Flag, event: Event) {
     <div class="group">
       <h3>조회</h3>
       <ul class="list">
-        <li class="row" :class="{ off: !visible }" title="끄면 창 없이 조용히 조회합니다. 자동 확인도 같은 방식으로 돕니다">
+        <li class="row wide" :class="{ off: !visible }" title="끄면 창 없이 조용히 조회합니다. 자동 확인도 같은 방식으로 돕니다">
           <label class="check toggle">
             <input type="checkbox" :checked="visible" :disabled="running" @change="emit('visible', ($event.target as HTMLInputElement).checked)" />
             <strong>브라우저 창 띄워서 보면서 조회</strong>
@@ -193,6 +193,7 @@ p { margin: 0; }
   display: grid; grid-template-columns: 200px 1fr; align-items: center; gap: 12px;
   min-height: 52px; padding: 6px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
 }
+.row.wide { grid-template-columns: 1fr; }
 .row.off { opacity: .6; }
 .fields { display: flex; flex-wrap: wrap; gap: 8px 18px; }
 .field { display: flex; align-items: center; gap: 6px; font-size: 14px; white-space: nowrap; }
