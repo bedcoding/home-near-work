@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import type { NoticeSourceId, NoticeSourceStatus, NoticeView } from '../../../shared/types';
 import { failedNoticeSources, isPastNotice, todayIso } from '../notices';
+import CountTooltip from './CountTooltip.vue';
 import SubscriptionRow from './SubscriptionRow.vue';
 
 // 청약 탭: 서울 전체 청약(분양) 공고. 접수중 → 접수 예정 → 기간 모름 순으로 위에 두고, 끝난 청약은 '지난 청약'으로 접어 둔다.
@@ -46,11 +47,9 @@ const failed = computed(() => failedNoticeSources(props.sources, props.status));
 <template>
   <section class="subs">
     <div class="head">
-      <strong class="total num">청약 {{ upcoming.length }}건</strong>
+      <strong class="total num">청약 <CountTooltip :text="`신규 ${newIds.length}건`">{{ upcoming.length }}건</CountTooltip></strong>
       <span class="muted scope" title="청약홈(APT 분양, 무순위, 잔여세대, 오피스텔, 도시형)과 SH, LH 공공분양 중 서울 공고">서울 전체</span>
-      <span v-if="newIds.length" class="chip chip-new">신규 {{ newIds.length }}</span>
       <span v-for="f in failed" :key="f.id" class="failed" :title="f.title">{{ f.text }}</span>
-      <button v-if="newIds.length" class="link-btn" title="새 청약의 '신규' 표시를 모두 지웁니다. 청약 공고는 그대로 남습니다" @click="emit('ack', newIds)">모두 읽음</button>
     </div>
 
     <p v-if="!notices.length" class="empty muted">'조회하기'를 누르면 모읍니다.</p>

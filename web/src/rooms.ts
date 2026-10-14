@@ -6,7 +6,7 @@ import { listingSection, type ListingView } from '../../shared/types';
 const typesOf = (l: Pick<ListingView, 'buildingType'>) =>
   (l.buildingType ?? '').split(',').map((t) => t.trim()).filter(Boolean);
 
-/** 고시원과 쉐어 탭 매물(고방의 원룸, 투룸, 오피스텔이 아닌 것). 한눈에, 새 소식, 전체, 지도에는 넣지 않는다. */
+/** 고시원과 쉐어 탭 매물(고방의 원룸, 투룸, 오피스텔이 아닌 것). 매물 탭에는 넣지 않는다. */
 export const isRoomStay = (l: Pick<ListingView, 'source' | 'buildingType'>) => listingSection(l) === 'room';
 
 /** 유형 글자: 사이트 유형 '고시원, 원룸텔' → '고시원, 원룸텔' */

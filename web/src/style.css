@@ -96,10 +96,3 @@ a { color: var(--accent); }
 .fold-body { padding: 14px 16px 16px; }
 .fold-name { font-size: 16px; font-weight: 800; }
 .fold-count { font-size: 14px; font-weight: 600; }
-
-/* 글자처럼 보이는 작은 버튼(머리 줄의 '모두 읽음' 등) */
-.link-btn {
-  padding: 2px 0; border: 0; background: none; font-size: 13px; font-weight: 600; color: var(--muted);
-  text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px;
-}
-.link-btn:hover { color: var(--ink); text-decoration-color: currentColor; }

@@ -171,7 +171,11 @@ function processZigbang(): { stations: { subwayId: string; pageUrl: string | nul
     for (const id of added) fresh.add(id);
     return { subwayId: s.subwayId, pageUrl: s.pageUrl, total: s.ids.length, fresh: added.length, baseline: !prev };
   });
-  if (latest.size) store.setSetting(ZIGBANG_IDS_KEY, JSON.stringify(seen));
+  if (latest.size) {
+    store.setSetting(ZIGBANG_IDS_KEY, JSON.stringify(seen));
+    // 역 반경 안 번호 목록에 아직 있는 방은 내용을 다시 받지 않았어도 본 것으로 친다(14일 뒤 사라짐으로 바뀌지 않게).
+    store.touchListings('zigbang', [...latest.values()].flatMap((s) => s.ids.map(String)), pending[pending.length - 1].at);
+  }
   const news: NewsItem[] = [];
   const areas = store.enabledAreas();
   if (details.size && areas.length) {

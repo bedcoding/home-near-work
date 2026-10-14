@@ -141,7 +141,7 @@ export const SHOP_PREFIX = '상업용: ';
 export const LAND_PREFIX = '토지: ';
 
 /**
- * 매물이 보이는 곳: home 매매와 전월세(한눈에, 새 소식), auction 경매 탭(주거), shop 경매 탭의 상가, land 경매 탭의 토지,
+ * 매물이 보이는 곳: home 매매와 전월세(매물 탭), auction 경매 탭(주거), shop 경매 탭의 상가, land 경매 탭의 토지,
  * room 고시원과 쉐어 탭(코리빙, 고방의 원룸, 투룸, 오피스텔이 아닌 것).
  */
 export function listingSection(l: { source: SourceId; buildingType: string | null }): 'home' | 'auction' | 'shop' | 'land' | 'room' {

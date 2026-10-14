@@ -24,6 +24,9 @@ import { CAPTURE_SOURCES, SEOUL, SOURCE_LABEL, type AppState, type Area, type Ru
 process.on('unhandledRejection', (e) => console.error('처리하지 못한 오류:', e instanceof Error ? e.message : e));
 
 store.closeInterruptedRuns();
+const tidy = store.tidyListings();
+if (tidy.stale) console.log(`네이버, 다방, 직방에서 14일 넘게 다시 못 본 매물 ${tidy.stale}건을 사라짐으로 두었습니다.`);
+if (tidy.purged) console.log(`사라진 지 오래된 매물 ${tidy.purged}건을 지웠습니다.`);
 // 지난번에 받아 두고 아직 매물로 읽지 않은 네이버 응답이 있으면 읽는다.
 processPendingNaverCaptures();
 
@@ -174,14 +177,6 @@ app.post<{ Params: { id: string }; Body: { verdict: Verdict | null } }>('/api/li
 
 app.post<{ Params: { id: string } }>('/api/listings/:id/ack', async (req) => {
   store.ackEvents(req.params.id);
-  return { ok: true };
-});
-
-/** 신규·가격 변동 표시를 지운다(ids가 있으면 그 매물만, 없으면 전부). */
-app.post<{ Body: { ids?: unknown } | null }>('/api/events/ack', async (req) => {
-  const ids = Array.isArray(req.body?.ids) ? req.body!.ids.filter((x): x is string => typeof x === 'string') : null;
-  if (ids) store.ackEventsFor(ids);
-  else store.ackEvents();
   return { ok: true };
 });
 

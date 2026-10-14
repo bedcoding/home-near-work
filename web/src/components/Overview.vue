@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { DEAL_LABEL, SOURCE_LABEL, type Area, type DealType, type ListingView, type PriceOption, type SourceId, type Verdict } from '../../../shared/types';
-import { bandIdOf, bandsFor, bandValue, DEFAULT_EDGES, edgesFor, edgesText, isRent, OVERVIEW_DEALS, orderFor, parseEdges } from '../bands';
+import { bandIdOf, bandsFor, bandValue, EDGES, isRent, OVERVIEW_DEALS, orderFor, type Band } from '../bands';
 import { DEFAULT_FILTERS, dealOptions, passes, type Filters } from '../filters';
 import type { CatalogStation } from '../areaActions';
 import { money, radiusText } from '../format';
+import CountTooltip from './CountTooltip.vue';
 import ListingCard from './ListingCard.vue';
 import OverviewMap from './OverviewMap.vue';
 
@@ -33,7 +34,7 @@ function scheduleMapSize() {
 onMounted(() => {
   layoutObserver = new ResizeObserver(scheduleMapSize);
   if (overviewEl.value) layoutObserver.observe(overviewEl.value);
-  for (const el of document.querySelectorAll('.app-frame > .top, .layout > .tabs, .preview-note')) layoutObserver.observe(el);
+  for (const el of document.querySelectorAll('.app-frame > .top')) layoutObserver.observe(el);
   window.addEventListener('resize', scheduleMapSize);
   window.addEventListener('scroll', scheduleMapSize, { passive: true });
   scheduleMapSize();
@@ -72,17 +73,15 @@ interface Saved {
   order: Partial<Record<DealType, string[]>>;
   /** 거래 유형별로 펼친 가격대와 고른 사이트 */
   open: Partial<Record<DealType, Record<string, Pick>>>;
-  /** 거래 유형별로 사용자가 바꾼 가격대 경계(만원). 없으면 기본값. */
-  edges: Partial<Record<DealType, number[]>>;
 }
 
-// 다음에 열어도 고른 거래 유형, 펼친 가격대, 순서가 그대로 보이게 저장한다.
+// 다음에 열어도 고른 거래 유형, 펼친 가격대, 순서가 그대로 보이게 저장한다. 읽을 때는 이 세 값만 남긴다.
 const KEY = 'hnw-overview-v1';
 function load(): Saved {
-  const empty: Saved = { deal: 'monthly', order: {}, open: {}, edges: {} };
+  const empty: Saved = { deal: 'monthly', order: {}, open: {} };
   try {
-    const s = JSON.parse(localStorage.getItem(KEY) ?? 'null');
-    return s ? { ...empty, ...s } : empty;
+    const s = JSON.parse(localStorage.getItem(KEY) ?? 'null') as Partial<Saved> | null;
+    return s ? { deal: s.deal ?? empty.deal, order: s.order ?? {}, open: s.open ?? {} } : empty;
   } catch {
     return empty;
   }
@@ -208,7 +207,7 @@ watch(
   },
   { immediate: true },
 );
-defineExpose({ pickDeal });
+defineExpose({ pickDeal, openNews });
 
 /** 새 소식이 먼저, 그다음 싼 순서(월세는 월세 → 보증금). 가장 싼 칸에서는 반전세가 위로 온다. */
 function sortEntries(a: Entry, b: Entry) {
@@ -220,7 +219,7 @@ function sortEntries(a: Entry, b: Entry) {
   );
 }
 
-const edges = computed(() => edgesFor(deal.value, saved.edges[deal.value]));
+const edges = computed(() => EDGES[deal.value]);
 
 /** 왼쪽 필터에서 지역 칸만 남긴 것(가격, 매물 유형, 면적, 층, 검색어를 뺌). 가격대마다 필터로 가린 수를 셀 때 쓴다. */
 const looseFilters = computed<Filters>(() => ({
@@ -257,28 +256,55 @@ const rows = computed(() => {
   return orderFor(d, saved.order[d], edges.value)
     .map((id) => {
       const entries = (groups.get(id) ?? []).sort(sortEntries);
-      const platforms = SOURCES.map((s) => ({ id: s, label: SOURCE_LABEL[s], ...counts(entries.filter((e) => e.listing.source === s)) })).filter(
-        (p) => p.total > 0,
-      );
-      const deposits = isRent(d) ? entries.map((e) => e.option.deposit).filter((v): v is number => v != null) : [];
-      const pick = open[id];
-      const shown = !pick ? [] : pick === 'all' ? entries : entries.filter((e) => e.listing.source === pick);
-      return {
-        band: defs.get(id)!,
-        ...counts(entries),
-        hidden: Math.max(0, (looseByBand.value.get(id) ?? 0) - entries.length),
-        platforms,
-        deposit: deposits.length ? { min: Math.min(...deposits), max: Math.max(...deposits) } : null,
-        isOpen: pick !== undefined,
-        pick: pick ?? '',
-        shown,
-      };
+      return rowOf(defs.get(id)!, entries, open, Math.max(0, (looseByBand.value.get(id) ?? 0) - entries.length));
     })
     .filter((r) => r.band.id !== 'unknown' || r.total > 0);
 });
-type Row = (typeof rows.value)[number];
+type Row = ReturnType<typeof rowOf>;
 
-const visible = computed(() => rows.value.flatMap((r) => r.shown.map((e) => e.listing)));
+/** 가격대 줄 하나(또는 맨 위 새 소식 줄): 건수, 사이트별 건수, 월세 보증금 범위, 펼침과 고른 사이트, 펼쳐 보이는 매물. hidden은 필터로 가린 수. */
+function rowOf(band: Band, entries: Entry[], open: Record<string, Pick>, hidden: number) {
+  const platforms = SOURCES.map((s) => ({ id: s, label: SOURCE_LABEL[s], ...counts(entries.filter((e) => e.listing.source === s)) })).filter((p) => p.total > 0);
+  const deposits = isRent(deal.value) && band.id !== NEWS_BAND.id ? entries.map((e) => e.option.deposit).filter((v): v is number => v != null) : [];
+  const pick = open[band.id];
+  const shown = !pick ? [] : pick === 'all' ? entries : entries.filter((e) => e.listing.source === pick);
+  return {
+    band,
+    ...counts(entries),
+    hidden,
+    platforms,
+    deposit: deposits.length ? { min: Math.min(...deposits), max: Math.max(...deposits) } : null,
+    isOpen: pick !== undefined,
+    pick: pick ?? '',
+    shown,
+  };
+}
+
+/** 가격대 줄 위에 고정해 두는 새 소식 줄(끌어서 옮기지 않음) */
+const NEWS_BAND: Band = { id: 'news', label: '새 소식', range: '가격대와 상관없이 신규나 가격 변동이 있는 매물(신규 먼저, 그다음 최근에 처음 본 순서)' };
+/** 고른 거래 유형에서 신규나 가격 변동이 있는 매물을 모은 줄. 없으면 null. */
+const newsRow = computed(() => {
+  const entries = (byDeal.value.get(deal.value) ?? [])
+    .filter((e) => hasNews(e.listing))
+    .sort((a, b) => Number(b.listing.isNew) - Number(a.listing.isNew) || b.listing.firstSeenAt.localeCompare(a.listing.firstSeenAt));
+  return entries.length ? rowOf(NEWS_BAND, entries, saved.open[deal.value] ?? {}, 0) : null;
+});
+/** 화면에 그리는 줄: 새 소식 줄(있으면) 다음 가격대 줄 */
+const shownRows = computed(() => (newsRow.value ? [newsRow.value, ...rows.value] : rows.value));
+
+/** 펼쳐 보이는 매물(화면 순서, 새 소식 줄과 가격대 줄에 같이 보이는 매물은 한 번만) */
+const visible = computed(() => {
+  const ids = new Set<string>();
+  const out: ListingView[] = [];
+  for (const r of shownRows.value) {
+    for (const e of r.shown) {
+      if (ids.has(e.listing.id)) continue;
+      ids.add(e.listing.id);
+      out.push(e.listing);
+    }
+  }
+  return out;
+});
 /** 목록 쪽에서 가격대를 펼치거나 접고 사이트를 고른 횟수. 지도에서 누른 매물을 보이게 펼칠 때는 늘리지 않는다. */
 const listMoves = ref(0);
 /** 지도를 매물에 다시 맞추는 기준: 거래 유형, 목록 쪽에서 바꾼 펼침, 고른 지역. 매물만 바뀌거나 지도에서 누른 매물을 펼치면 지도는 보던 그대로 둔다. */
@@ -304,6 +330,13 @@ function toggleBand(r: Row) {
 
 function pickPlatform(r: Row, p: SourceId | 'all') {
   openMap()[r.band.id] = r.pick === p ? '' : p;
+  listMoves.value++;
+}
+
+/** 새 소식 줄을 펼쳐 모든 사이트의 새 소식을 보인다(새 매물 알림을 눌러 열었을 때). */
+function openNews() {
+  if (!newsRow.value) return;
+  openMap()[NEWS_BAND.id] = 'all';
   listMoves.value++;
 }
 
@@ -385,49 +418,6 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
   await nextTick();
   el.focus();
 }
-
-function resetOrder() {
-  delete saved.order[deal.value];
-}
-
-// ---------- 가격대 나누기(경계 바꾸기) ----------
-const editing = ref(false);
-const edgeInput = ref('');
-const parsed = computed(() => parseEdges(edgeInput.value));
-const preview = computed(() => {
-  const p = parsed.value;
-  return 'error' in p ? p.error : bandsFor(deal.value, p.edges).filter((b) => b.id !== 'unknown').map((b) => b.label).join(', ');
-});
-
-function openEditor() {
-  edgeInput.value = edgesText(deal.value, edges.value);
-  editing.value = true;
-}
-// 편집 중에 거래 유형을 바꾸면 그 유형의 경계를 보여 준다.
-watch(deal, () => {
-  if (editing.value) edgeInput.value = edgesText(deal.value, edges.value);
-});
-
-/** 경계를 저장한다. 기본값과 같으면 기본값을 따르게 지우고, 없어진 가격대의 펼침 기록도 지운다. */
-function saveEdges() {
-  const p = parsed.value;
-  if ('error' in p) return;
-  const d = deal.value;
-  const base = DEFAULT_EDGES[d];
-  if (p.edges.length === base.length && p.edges.every((v, i) => v === base[i])) delete saved.edges[d];
-  else saved.edges[d] = p.edges;
-  const ids = new Set(bandsFor(d, edges.value).map((b) => b.id));
-  const open = saved.open[d];
-  if (open) for (const id of Object.keys(open)) if (!ids.has(id)) delete open[id];
-  listMoves.value++;
-  editing.value = false;
-}
-
-function resetEdges() {
-  delete saved.edges[deal.value];
-  edgeInput.value = edgesText(deal.value, DEFAULT_EDGES[deal.value]);
-}
-
 </script>
 
 <template>
@@ -448,18 +438,10 @@ function resetEdges() {
     <div class="deals" role="tablist" aria-label="거래 유형">
       <button
         v-for="(c, i) in dealCards" :key="c.deal" class="deal" :class="{ on: c.deal === deal }" role="tab"
-        :aria-selected="c.deal === deal" :title="`숫자 ${i + 1}번 키로도 고를 수 있습니다`" @click="pickCard(c.deal)"
+        :aria-selected="c.deal === deal" :aria-keyshortcuts="String(i + 1)" @click="pickCard(c.deal)"
       >
         <span class="deal-label">{{ c.label }}</span>
-        <span class="deal-total num">{{ c.total }}건</span>
-        <span class="deal-news">
-          <span v-if="c.news" class="chip chip-new">신규 {{ c.news }}</span>
-          <span v-if="c.changed" class="chip chip-down">가격 변동 {{ c.changed }}</span>
-        </span>
-        <span
-          v-if="c.outside" class="deal-outside"
-          title="지역 반경 밖이라 가린 매물입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다."
-        >반경 밖 {{ c.outside }}건</span>
+        <CountTooltip class="deal-total num" :focusable="false" :text="`신규 ${c.news}건\n가격 변동 ${c.changed}건\n반경 밖 ${c.outside}건\n숫자 ${i + 1}번 키로 선택`">{{ c.total }}건</CountTooltip>
       </button>
     </div>
 
@@ -467,48 +449,26 @@ function resetEdges() {
 
     <div class="ov-split">
       <div class="ov-bands">
-        <div class="bands-head">
-          <span class="bands-tools">
-            <button class="btn btn-ghost btn-sm" :aria-expanded="editing" @click="editing ? (editing = false) : openEditor()">가격대 나누기</button>
-            <button class="btn btn-ghost btn-sm" @click="resetOrder">처음 순서로</button>
-          </span>
-        </div>
-
-        <div v-if="editing" class="edit-bands">
-          <label class="field">
-            <span>
-              <strong>{{ DEAL_LABEL[deal] }} 가격대 경계</strong>
-              <span class="muted">쉼표로 구분, {{ isRent(deal) ? '만원 단위(예: 30, 50, 60)' : '예: 8000만, 1억, 1.5억, 2억' }}, 각 구간은 앞 경계 초과 뒤 경계 이하</span>
-            </span>
-            <input v-model="edgeInput" type="text" @keydown.enter.prevent="saveEdges" />
-          </label>
-          <p class="preview" :class="{ err: 'error' in parsed }">{{ preview }}</p>
-          <div class="edit-actions">
-            <button class="btn btn-primary btn-sm" :disabled="'error' in parsed" @click="saveEdges">저장</button>
-            <button class="btn btn-sm" @click="resetEdges">기본값으로</button>
-            <button class="btn btn-ghost btn-sm" @click="editing = false">닫기</button>
-          </div>
-        </div>
-
         <div class="bands" @dragend="onDragEnd">
           <div
-            v-for="r in rows" :key="r.band.id" class="band"
+            v-for="r in shownRows" :key="r.band.id" class="band"
             :class="{
+              news: r.band.id === NEWS_BAND.id,
               open: r.isOpen,
               zero: !r.total,
               dragging: dragging === r.band.id,
               'drop-before': dropAt?.id === r.band.id && !dropAt.after,
               'drop-after': dropAt?.id === r.band.id && dropAt.after,
             }"
-            @dragover="onDragOver($event, r.band.id)" @drop="onDrop"
+            @dragover="r.band.id !== NEWS_BAND.id && onDragOver($event, r.band.id)" @drop="r.band.id !== NEWS_BAND.id && onDrop($event)"
           >
             <div
-              class="band-head" role="button" tabindex="0" draggable="true" :aria-expanded="r.isOpen" :title="r.band.range"
+              class="band-head" role="button" tabindex="0" :draggable="r.band.id !== NEWS_BAND.id" :aria-expanded="r.isOpen" :title="r.band.range"
               @dragstart="onDragStart($event, r.band.id)" @click="toggleBand(r)"
               @keydown.space.stop.prevent="toggleBand(r)"
               @keydown.alt.up.stop.prevent="nudge(r.band.id, -1, $event)" @keydown.alt.down.stop.prevent="nudge(r.band.id, 1, $event)"
             >
-              <span class="grip" title="끌어서 순서 바꾸기" aria-hidden="true">⠿</span>
+              <span class="grip" :class="{ off: r.band.id === NEWS_BAND.id }" title="끌어서 순서 바꾸기" aria-hidden="true">⠿</span>
               <span class="band-label">{{ r.band.label }}</span>
               <span class="band-total num" :class="{ off: !r.total && r.hidden }">{{ !r.total && r.hidden ? `필터로 가림 ${r.hidden}건` : `${r.total}건` }}</span>
               <span v-if="r.total && r.hidden" class="band-sub hid" title="왼쪽 필터(가격, 매물 유형, 면적, 층, 검색어)에 안 맞아 가린 매물">필터로 가림 {{ r.hidden }}</span>
@@ -567,8 +527,6 @@ function resetEdges() {
 .deal.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; background: var(--accent-soft); }
 .deal-label { font-size: 15px; font-weight: 700; color: var(--ink-2); }
 .deal-total { font-size: 28px; font-weight: 800; line-height: 1.2; letter-spacing: -0.02em; }
-.deal-news { display: flex; flex-wrap: wrap; gap: 4px; min-height: 22px; }
-.deal-outside { font-size: 12.5px; font-weight: 600; color: var(--muted); }
 
 /* 가격대 목록(왼쪽)과 지도(오른쪽, 따라 내려옴). 좁으면 지도가 위로 간다. */
 .ov-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 45%); gap: 16px; align-items: start; }
@@ -581,8 +539,6 @@ function resetEdges() {
   .ov-map { position: static; order: -1; height: auto; min-height: 0; }
 }
 
-.bands-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
-.bands-tools { display: inline-flex; gap: 2px; }
 .area-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .area-chip {
   display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 14px;
@@ -591,13 +547,6 @@ function resetEdges() {
 .area-chip:hover { border-color: var(--ink-2); }
 .area-chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .area-chip .num { font-weight: 600; opacity: .8; }
-.edit-bands { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); }
-.edit-bands .field > span { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 14px; }
-.edit-bands .field .muted { font-size: 13px; }
-.edit-bands input { font-size: 16px; }
-.preview { margin: 0; font-size: 14px; color: var(--ink-2); }
-.preview.err { color: var(--new); font-weight: 600; }
-.edit-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .bands { display: grid; gap: 8px; }
 .band { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); transition: box-shadow .12s; }
 .band.open { border-color: var(--line-strong); }
@@ -612,6 +561,8 @@ function resetEdges() {
 }
 .band.zero .band-head { min-height: 44px; }
 .grip { padding: 6px 4px 6px 8px; font-size: 18px; line-height: 1; color: var(--muted); cursor: grab; }
+/* 새 소식 줄은 옮기지 않아서 손잡이 자리만 남긴다(이름이 가격대 이름과 같은 자리에 오게). */
+.grip.off { visibility: hidden; }
 .band-label { min-width: 116px; font-size: 18px; font-weight: 800; letter-spacing: -0.01em; }
 .band.zero .band-label { font-size: 15px; font-weight: 700; }
 .band-total { min-width: 52px; font-size: 17px; font-weight: 700; }

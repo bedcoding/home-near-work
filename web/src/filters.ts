@@ -89,8 +89,8 @@ function priceOk(p: PriceOption, f: Filters) {
 }
 
 /**
- * 한눈에 탭: 그 거래 유형으로 봤을 때 필터를 통과한 가격 선택지. 통과하지 못하면 빈 배열.
- * 거래 유형 체크는 한눈에 탭의 거래 유형 카드가 대신하므로 여기서는 보지 않는다.
+ * 매물 탭: 그 거래 유형으로 봤을 때 필터를 통과한 가격 선택지. 통과하지 못하면 빈 배열.
+ * 거래 유형 체크는 매물 탭의 거래 유형 탭이 대신하므로 여기서는 보지 않는다.
  */
 export function dealOptions(l: ListingView, deal: DealType, f: Filters, areas: Area[]): PriceOption[] {
   if (!passes(l, { ...f, deals: [deal] }, areas)) return [];

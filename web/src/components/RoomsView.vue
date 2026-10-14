@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import type { Area, ListingView, Verdict } from '../../../shared/types';
 import type { CatalogStation } from '../areaActions';
 import { ROOM_TYPE_LABEL, ROOM_TYPES, roomTypeOf, type RoomType } from '../rooms';
+import CountTooltip from './CountTooltip.vue';
 import ListingCard from './ListingCard.vue';
 import OverviewMap from './OverviewMap.vue';
 
@@ -29,13 +30,12 @@ const emit = defineEmits<{
   pick: [Point];
   area: [Area];
   station: [CatalogStation];
-  /** 고시원과 쉐어의 신규와 가격 변동 표시를 모두 지움(모두 읽음) */
-  ack: [];
 }>();
 
 const hasNews = (l: ListingView) => l.isNew || !!l.priceChange;
 const news = computed(() => props.listings.filter((l) => l.isNew).length);
 const changed = computed(() => props.listings.filter((l) => !!l.priceChange).length);
+const countDetails = computed(() => `신규 ${news.value}곳\n가격 변동 ${changed.value}곳\n반경 밖 ${props.outside}곳`);
 
 // 고른 종류는 다음에 열어도 그대로 둔다.
 const KEY = 'hnw-rooms-type';
@@ -70,20 +70,15 @@ defineExpose({ pickType });
 <template>
   <section class="rooms">
     <div class="head">
-      <strong class="total num">고시원과 쉐어 {{ listings.length }}곳</strong>
-      <span v-if="news" class="chip chip-new">신규 {{ news }}</span>
-      <span v-if="changed" class="chip chip-down">가격 변동 {{ changed }}</span>
-      <span v-if="outside" class="outside" title="지역 반경 밖이라 가린 곳입니다. 왼쪽 필터에서 '지역 반경 안만'을 끄면 보입니다.">반경 밖 {{ outside }}곳</span>
-      <button v-if="news || changed" class="link-btn" title="이 탭의 '신규'와 가격 변동 표시를 모두 지웁니다. 매물은 그대로 남습니다" @click="emit('ack')">모두 읽음</button>
+      <strong class="total num">고시원과 쉐어 <CountTooltip :text="countDetails">{{ listings.length }}곳</CountTooltip></strong>
     </div>
 
     <nav class="types" aria-label="종류">
       <button
         v-for="(c, i) in typeChips" :key="c.id" class="type" :class="{ on: type === c.id }"
-        :title="`${i + 1}번 키로도 바꿀 수 있습니다`" @click="type = c.id"
+        @click="type = c.id"
       >
-        {{ c.label }}<span class="count num">{{ c.total }}</span>
-        <span v-if="c.news" class="chip chip-new">신규 {{ c.news }}</span>
+        {{ c.label }}<CountTooltip :text="`새 소식 ${c.news}곳\n${i + 1}번 키로도 바꿀 수 있습니다`" :focusable="false"><span class="count num">{{ c.total }}</span></CountTooltip>
       </button>
     </nav>
 
@@ -111,7 +106,6 @@ defineExpose({ pickType });
 .rooms { display: grid; gap: 14px; }
 .head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 40px; }
 .total { font-size: 22px; font-weight: 800; letter-spacing: -0.01em; margin-right: 4px; }
-.outside { font-size: 13px; font-weight: 600; color: var(--muted); }
 
 .types { display: flex; flex-wrap: wrap; gap: 6px; }
 .type {
@@ -126,7 +120,7 @@ defineExpose({ pickType });
 /* 목록(왼쪽)과 지도(오른쪽, 따라 내려옴). 좁으면 지도가 위로 간다. 경매 탭과 같은 배치. */
 .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 45%); gap: 16px; align-items: start; }
 .list { display: grid; gap: 8px; min-width: 0; container-type: inline-size; }
-.map { position: sticky; top: 92px; height: calc(100vh - 108px); min-height: 420px; }
+.map { position: sticky; top: calc(var(--app-header-height, 76px) + 16px); height: calc(100dvh - var(--app-header-height, 76px) - 32px); min-height: 420px; }
 /* 크게 보기일 때는 위쪽 머리 줄(z-index 20)보다 위에 오게 한다. */
 .map:has(.ovmap.big) { z-index: 70; }
 .empty { padding: 32px 0; text-align: center; }

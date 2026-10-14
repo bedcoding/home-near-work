@@ -21,8 +21,6 @@ export const api = {
   ack: (id: string) => request('POST', `/api/listings/${enc(id)}/ack`),
   /** 법원경매 물건 상세를 프로그램이 띄운 크롬 창에 연다 */
   openCourt: (id: string) => request('POST', `/api/listings/${enc(id)}/open-court`),
-  /** 신규와 가격 변동 표시를 지운다(ids가 없으면 전부) */
-  ackAll: (ids?: string[]) => request('POST', '/api/events/ack', ids ? { ids } : {}),
   /** sources를 주면 그 사이트만 조회한다(없으면 전부) */
   startRun: (visible: boolean, sources?: SourceId[]) => request<{ runId: number }>('POST', '/api/runs', sources ? { visible, sources } : { visible }),
   /** 자동 확인 시각(null이면 끄기)과 창 표시를 바꾼다. */
