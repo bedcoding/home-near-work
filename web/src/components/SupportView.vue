@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import {
+  LOAN_CLAUSES, LOAN_DEPOSIT_NOTES, LOAN_HOWTO_SOURCES, LOAN_STEPS,
   SUPPORT_CHECKED, SUPPORT_LINKS, SUPPORT_PROGRAMS, SUPPORT_SECTIONS, SUPPORT_STEPS, SUPPORT_TOOLS,
   type SupportProgram, type SupportSectionId,
 } from '../support';
@@ -43,6 +44,31 @@ async function pickSection(id: SupportSectionId) {
 }
 
 const STATUS_CLASS: Record<SupportProgram['status'], string> = { open: '', now: 'chip-near', period: 'chip-muted', closed: 'chip-muted', check: 'chip-warn' };
+
+/** 전세 대출 칸의 '대출 받는 순서'. 처음에는 펼쳐 두고, 접으면 다음에도 접힌 채로 연다. */
+const howtoOpen = ref(localStorage.getItem('hnw-support-howto') !== 'closed');
+function onHowtoToggle(e: Event) {
+  howtoOpen.value = (e.target as HTMLDetailsElement).open;
+  localStorage.setItem('hnw-support-howto', howtoOpen.value ? 'open' : 'closed');
+}
+
+/** 특약 문구 복사. 클립보드를 못 쓰면 문구를 선택해 두어 Ctrl+C로 복사하게 한다. */
+const copied = ref<{ id: string; ok: boolean } | null>(null);
+let copiedTimer: number | undefined;
+async function copyClause(id: string, text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    copied.value = { id, ok: true };
+  } catch {
+    const el = document.getElementById(`clause-${id}`);
+    if (el) window.getSelection()?.selectAllChildren(el);
+    copied.value = { id, ok: false };
+  }
+  window.clearTimeout(copiedTimer);
+  copiedTimer = window.setTimeout(() => (copied.value = null), 2500);
+}
+const copyLabel = (id: string) => (copied.value?.id !== id ? '복사' : copied.value.ok ? '복사함' : '선택함, Ctrl+C');
+onBeforeUnmount(() => window.clearTimeout(copiedTimer));
 </script>
 
 <template>
@@ -74,6 +100,63 @@ const STATUS_CLASS: Record<SupportProgram['status'], string> = { open: '', now: 
     </fieldset>
 
     <p class="intro">{{ current.intro }}</p>
+
+    <details v-if="section === 'loan'" class="fold howto" :open="howtoOpen" @toggle="onHowtoToggle">
+      <summary>
+        <span class="fold-name">대출 받는 순서</span>
+        <span class="howto-sub muted">버팀목 기준, 계약 전에 확인할 것부터 잔금 뒤까지 순서대로</span>
+      </summary>
+      <div class="fold-body">
+        <ol class="howto-steps">
+          <li v-for="(s, i) in LOAN_STEPS" :key="s.title">
+            <span class="step-no num">{{ i + 1 }}</span>
+            <div class="howto-step">
+              <span class="howto-when">{{ s.when }}</span>
+              <strong>{{ s.title }}</strong>
+              <p>{{ s.text }}</p>
+              <span v-if="s.link || s.toSection" class="howto-links">
+                <a v-if="s.link" :href="s.link.url" target="_blank" rel="noopener">{{ s.link.label }} ↗</a>
+                <button v-if="s.toSection" class="linkish" @click="pickSection(s.toSection)">{{ SUPPORT_SECTIONS.find((x) => x.id === s.toSection)?.name }} 칸</button>
+              </span>
+            </div>
+          </li>
+        </ol>
+
+        <div class="clauses">
+          <div class="clauses-head">
+            <strong>계약서에 넣을 특약</strong>
+            <span class="muted">예시 문구입니다. 계약 상황에 맞게 중개사와 고쳐 넣으세요.</span>
+          </div>
+          <ul>
+            <li v-for="c in LOAN_CLAUSES" :key="c.id" class="clause">
+              <div class="clause-head">
+                <span class="clause-name">{{ c.name }}</span>
+                <button class="btn btn-sm" :aria-label="`${c.name} 특약 문구 복사`" @click="copyClause(c.id, c.text)">{{ copyLabel(c.id) }}</button>
+              </div>
+              <p :id="`clause-${c.id}`" class="clause-text">{{ c.text }}</p>
+              <p class="clause-why">
+                {{ c.why }}
+                <a v-if="c.source" :href="c.source.url" target="_blank" rel="noopener">근거: {{ c.source.title }}<span v-if="c.source.date" class="src-date num">{{ dot(c.source.date) }}</span></a>
+              </p>
+            </li>
+          </ul>
+        </div>
+
+        <div class="notes">
+          <strong>대출이 거절되면 계약금은?</strong>
+          <ul>
+            <li v-for="n in LOAN_DEPOSIT_NOTES" :key="n">{{ n }}</li>
+          </ul>
+        </div>
+
+        <div class="foot">
+          <span class="sources">
+            <span class="sources-label">근거</span>
+            <a v-for="s in LOAN_HOWTO_SOURCES" :key="s.url" :href="s.url" target="_blank" rel="noopener">{{ s.title }}<span v-if="s.date" class="src-date num">{{ dot(s.date) }}</span></a>
+          </span>
+        </div>
+      </div>
+    </details>
 
     <template v-if="section !== 'check'">
       <div class="compare-wrap">
@@ -139,7 +222,10 @@ const STATUS_CLASS: Record<SupportProgram['status'], string> = { open: '', now: 
           {{ t.what }}
           <a v-if="t.source" class="tool-source" :href="t.source.url" target="_blank" rel="noopener">근거: {{ t.source.title }}<span v-if="t.source.date" class="src-date num">{{ dot(t.source.date) }}</span></a>
         </span>
-        <a class="btn btn-sm" :href="t.url" target="_blank" rel="noopener">{{ t.urlLabel }} ↗</a>
+        <span class="tool-links">
+          <a class="btn btn-sm" :href="t.url" target="_blank" rel="noopener">{{ t.urlLabel }} ↗</a>
+          <a v-if="t.more" class="btn btn-sm" :href="t.more.url" target="_blank" rel="noopener">{{ t.more.label }} ↗</a>
+        </span>
       </li>
     </ul>
 
@@ -229,6 +315,35 @@ const STATUS_CLASS: Record<SupportProgram['status'], string> = { open: '', now: 
 .sources a { color: var(--ink-2); text-decoration: none; overflow-wrap: anywhere; }
 .sources a:hover { text-decoration: underline; text-underline-offset: 3px; }
 
+/* 전세 대출 칸의 '대출 받는 순서': 단계, 특약 문구(복사), 계약금 안내 */
+.howto { scroll-margin-top: calc(var(--app-header-height, 80px) + 16px); }
+.howto > summary { align-items: baseline; }
+.howto-sub { font-size: 13px; }
+/* 단계는 위에서 아래로 한 줄씩, 번호 사이를 세로 선으로 잇는다(순서가 중요해서). */
+.howto-steps { display: grid; max-width: 900px; margin: 0; padding: 0; list-style: none; }
+.howto-steps li { position: relative; display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: start; gap: 12px; padding-bottom: 16px; }
+.howto-steps li::before { content: ''; position: absolute; left: 10px; top: 26px; bottom: 2px; width: 2px; border-radius: 1px; background: var(--line); }
+.howto-steps li:last-child { padding-bottom: 0; }
+.howto-steps li:last-child::before { display: none; }
+.howto-step { display: grid; gap: 1px; }
+.howto-when { font-size: 12px; font-weight: 700; color: var(--accent); }
+.howto-step strong { font-size: 14px; }
+.howto-step p { margin: 3px 0 0; font-size: 13px; line-height: 1.6; color: var(--ink-2); }
+.howto-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-top: 4px; font-size: 12px; }
+.howto-links a { color: var(--accent); text-decoration: none; }
+.howto-links a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.clauses { display: grid; gap: 8px; margin-top: 16px; }
+.clauses-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 13px; }
+.clauses-head .muted { font-size: 12px; }
+.clauses ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.clause { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.clause-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.clause-name { font-size: 13px; font-weight: 700; }
+.clause-text { margin: 6px 0 0; padding-left: 10px; border-left: 3px solid var(--accent-soft); font-size: 13px; line-height: 1.6; color: var(--ink); }
+.clause-why { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.clause-why a { color: var(--muted); text-decoration: none; overflow-wrap: anywhere; }
+.clause-why a:hover { color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; }
+
 .tools { list-style: none; margin: 0; padding: 4px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .tool { display: grid; grid-template-columns: 210px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 52px; padding: 8px 0; border-top: 1px solid var(--line); }
 .tool:first-child { border-top: 0; }
@@ -237,6 +352,7 @@ const STATUS_CLASS: Record<SupportProgram['status'], string> = { open: '', now: 
 .tool-what { font-size: 13px; color: var(--ink-2); }
 .tool-source { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); text-decoration: none; overflow-wrap: anywhere; }
 .tool-source:hover { color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; }
+.tool-links { display: grid; gap: 6px; }
 .cross { margin: 4px 0 0; font-size: 13px; }
 
 @media (max-width: 720px) {
@@ -256,6 +372,7 @@ const STATUS_CLASS: Record<SupportProgram['status'], string> = { open: '', now: 
   .facts dt { padding-bottom: 0; }
   .facts dd { border-top: 0; padding-top: 2px; }
   .facts dd:first-of-type { padding-top: 2px; }
+  .howto-sub { order: 1; flex-basis: 100%; }
   .tool { grid-template-columns: minmax(0, 1fr) auto; }
   .tool-what { grid-column: 1 / -1; grid-row: 2; }
 }
