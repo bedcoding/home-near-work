@@ -50,6 +50,8 @@ export interface SupportTool {
   what: string;
   url: string;
   urlLabel: string;
+  /** 함께 보는 두 번째 링크 */
+  more?: { label: string; url: string };
   /** 링크가 안내 화면이 아닐 때 따로 붙이는 근거 */
   source?: SupportSource;
 }
@@ -127,6 +129,8 @@ export const SUPPORT_LINKS: { label: string; url: string; title: string }[] = [
 ];
 
 const MYHOME_BEOTIMMOK = 'https://www.myhome.go.kr/hws/portal/cont/selectSupLeaseLoanView.do';
+/** 주택도시기금 버팀목 대출 안내(신청 시기, 대출금 지급, 보증 종류) */
+const NHUF_LOAN_GUIDE: SupportSource = { title: '주택도시기금: 버팀목전세자금 대출 안내(신청 시기, 대출금 지급, 보증)', url: 'https://nhuf.molit.go.kr/FP/FP05/FP0502/FP05021301.jsp', date: '' };
 const FSC_0627: SupportSource = { title: '금융위원회: 수도권 중심의 가계부채 관리 강화 방안(6.27 대책)', url: 'https://www.fsc.go.kr/no010101/84824', date: '2025-06-27' };
 const NHUF_RATE_0324: SupportSource = { title: '주택도시기금: 디딤돌·버팀목대출 금리 조정 및 우대금리 개선', url: 'https://nhuf.molit.go.kr/cms/main/TypeA.jsp?cid=2284', date: '2025-03-24' };
 const HUG_RETURN_URL = 'https://www.khug.or.kr/hug/web/ig/dr/igdr000001.jsp';
@@ -137,6 +141,90 @@ const MOHW_2026: SupportSource = {
   url: 'https://www.mohw.go.kr/board.es?mid=a10503000000&bid=0027&act=view&list_no=1487098',
   date: '2025-07-31',
 };
+
+/**
+ * 전세 대출 칸 맨 위 '대출 받는 순서'(버팀목 기준). 순서가 중요해서 때(when)를 붙여 위에서 아래로 보인다.
+ * link는 그 단계에서 쓰는 공식 화면, toSection은 같이 볼 탭 안 칸이다.
+ */
+export const LOAN_STEPS: { when: string; title: string; text: string; link?: { label: string; url: string }; toSection?: SupportSectionId }[] = [
+  {
+    when: '계약 전',
+    title: '대출이 될지, 반환보증이 되는 집인지 먼저 확인',
+    text: "은행에서 소득, 신용, 한도로 대출이 될지 상담합니다. 그 집이 반환보증 기준에 맞는지도 따집니다. '집값 × 90% − 선순위 채권(등기부 을구의 근저당 등)'이 보증금 이상이어야 하고, 빌라처럼 공시가격으로 보는 집은 보증금이 공시가격의 126% 이하여야 합니다. 기준에 안 맞으면 반환보증이 붙은 대출(HUG 전세금안심대출보증)도 안 되고 보증금도 지키기 어렵습니다. 불법 건축물처럼 보증이 거절될 수 있는 집은 피합니다.",
+    link: { label: '기금e든든 자격 계산', url: 'https://nhuf.molit.go.kr/FP/FP08/FP0801/FP08010101.jsp' },
+    toSection: 'check',
+  },
+  {
+    when: '계약하는 날',
+    title: '계약금은 적게, 특약은 꼭',
+    text: '계약금은 내 돈으로 냅니다. 버팀목은 보증금의 5% 이상을 낸 계약이어야 하니, 5%로 맞추면 대출이 안 될 때의 위험도 줄어듭니다. 반환보증을 생각해 공인중개사를 거쳐 계약하고, 아래 특약을 넣습니다.',
+  },
+  {
+    when: '계약 직후',
+    title: '확정일자 받기',
+    text: '계약서에 확정일자를 받습니다(주민센터나 인터넷등기소). 확정일자를 받은 계약서가 대출 신청 서류입니다.',
+  },
+  {
+    when: '잔금 전, 넉넉히',
+    title: '대출 신청하면서 보증 고르기',
+    text: '확정일자를 받은 계약서, 계약금 이체 내역, 소득 서류로 수탁은행 창구나 기금e든든에서 신청합니다. 이때 대출 보증을 고르는데, HUG 전세금안심대출보증이면 내 보증금을 지키는 반환보증까지 같이 들어가고(나눌 수 없음), HF 전세자금보증이면 반환보증은 따로 듭니다. 은행 창구에서 신청하면 보증도 같이 신청되고, 기금e든든으로 신청했으면 보증은 영업점에 가서 신청합니다.',
+  },
+  {
+    when: '잔금 전',
+    title: '심사와 승인',
+    text: '은행은 소득과 신용을, 보증기관은 집과 계약을 봅니다. 집주인에게 계약을 확인하는 연락이 갈 수 있으니 대출받는다고 미리 말해 둡니다. 신청 기한은 잔금일과 전입일 중 빠른 날부터 3개월 안이지만, 승인은 잔금일 전에 나와야 하니 일찍 냅니다.',
+  },
+  {
+    when: '잔금 날',
+    title: '대출금 입금, 전입신고',
+    text: '대출금은 원칙적으로 은행이 집주인 계좌로 바로 보냅니다. 나머지만 내 돈으로 보내고 그날 전입신고를 합니다. 잔금을 보내기 전에 등기부를 한 번 더 떼어 그사이 바뀐 것이 없는지 봅니다.',
+  },
+  {
+    when: '잔금 뒤',
+    title: '반환보증(따로 들 때)과 보증료 지원',
+    text: '반환보증을 따로 들 거라면(HF 보증 대출이거나 대출이 없을 때) 잔금일과 전입신고일 중 늦은 날부터 계약 기간의 절반이 지나기 전까지 신청합니다. 보증금 3억원 이하이고 소득 기준 안이면 낸 보증료를 최대 40만원 돌려받습니다.',
+    toSection: 'guard',
+  },
+];
+
+/** 계약서에 넣을 특약 예시(복사 버튼). why는 왜 넣는지와 근거 */
+export const LOAN_CLAUSES: { id: string; name: string; text: string; why: string; source?: SupportSource }[] = [
+  {
+    id: 'loan',
+    name: '대출이 안 되면',
+    text: '임차인의 귀책사유 없이 전세자금대출(또는 대출 보증)이 승인되지 않으면 이 계약은 해제되며, 임대인은 받은 계약금 전액을 즉시 임차인에게 돌려준다.',
+    why: '대출이 거절돼도 계약금을 돌려받을 근거가 됩니다.',
+  },
+  {
+    id: 'guarantee',
+    name: '반환보증이 안 되면',
+    text: '임대인의 사유로 임차인이 전세보증금반환보증에 가입할 수 없으면 이 계약은 해제되며, 임대인은 받은 계약금 전액을 즉시 임차인에게 돌려준다.',
+    why: 'HUG와 한국공인중개사협회가 2025년 임대차계약서에 비슷한 해제 특약을 넣었다는 보도가 있습니다.',
+    source: { title: '보도: HUG 전세보증 사전심사 제도 10월 말부터 운영', url: 'https://news.nate.com/view/20260820n23323', date: '2026-08-20' },
+  },
+  {
+    id: 'hidden',
+    name: '숨긴 선순위·체납이 나오면',
+    text: '임대인이 계약 전에 알리지 않은 선순위 임대차 보증금이나 국세·지방세 체납이 확인되면 임차인은 위약금 없이 이 계약을 해제할 수 있고, 임대인은 받은 계약금 전액을 돌려준다.',
+    why: '법무부가 넣으라고 권하는 특약입니다.',
+    source: { title: '법무부: 전세사기 피해 방지를 위한 주택임대차보호법 개정', url: 'https://www.moj.go.kr/bbs/moj/182/451959/download.do', date: '2023-03-30' },
+  },
+];
+
+/** '대출이 거절되면 계약금은?' */
+export const LOAN_DEPOSIT_NOTES: string[] = [
+  '특약이 없으면 돌려받기 어렵습니다. 민법 해약금 규정(제565조, 임대차 같은 유상계약에도 제567조로 준용)상 계약금을 준 쪽은 그 돈을 포기하는 대신 계약을 해제하는 구조이기 때문입니다.',
+  '계약금을 5%로 맞추면 위험도 그만큼 줄어듭니다(버팀목 요건이 5% 이상).',
+  '실제 결과는 계약서 내용과 집주인이 이미 이행을 시작했는지에 따라 달라질 수 있습니다. 다툼이 생기면 대한법률구조공단(132)에 상담하세요.',
+];
+
+export const LOAN_HOWTO_SOURCES: SupportSource[] = [
+  { title: '마이홈포털: 주택도시기금 버팀목 전세대출 안내', url: MYHOME_BEOTIMMOK, date: '' },
+  NHUF_LOAN_GUIDE,
+  { title: '국가법령정보센터: 민법 제565조(해약금)', url: 'https://www.law.go.kr/법령/민법/제565조', date: '' },
+  { title: '정책브리핑: 계약 해지하면 계약금을 돌려받을 수 있나요?', url: 'https://www.korea.kr/news/policyNewsView.do?newsId=148893172', date: '' },
+  { title: '대한법률구조공단: 계약금 반환', url: 'https://support.klac.or.kr/front/contents/06/01005-01.do', date: '' },
+];
 
 export const SUPPORT_PROGRAMS: SupportProgram[] = [
   // ---------- 전세 대출 ----------
@@ -158,7 +246,8 @@ export const SUPPORT_PROGRAMS: SupportProgram[] = [
       ['한도', '수도권 1.2억원·그 밖 8천만원, 전세금의 70% 이내. 2자녀 이상 가구는 수도권 2.5억원·그 밖 1.6억원, 80% 이내. 실제 금액은 보증 심사에 따라 달라집니다.'],
       ['금리', '연 2.5~3.5%(소득과 보증금에 따라). 우대금리는 합쳐 0.5%p까지(다자녀 0.7%p)이고, 최종 금리는 연 1.0% 밑으로 내려가지 않습니다.'],
       ['기간', '2년, 연장해 최장 10년(미성년 자녀 1명당 2년 더, 최장 20년)'],
-      ['신청', '기금e든든 온라인이나 수탁은행(우리, 신한, KB국민, NH농협, IBK기업 등). 심사 문의 HUG 1566-9009'],
+      ['신청', '기금e든든 온라인이나 수탁은행(우리, 신한, KB국민, NH농협, IBK기업 등). 잔금일과 전입일 중 빠른 날부터 3개월 안. 심사 문의 HUG 1566-9009'],
+      ['보증', 'HUG 전세금안심대출보증을 고르면 반환보증까지 같이 들어갑니다(나눌 수 없음). HF 전세자금보증이면 반환보증은 따로 듭니다.'],
     ],
     notes: [
       '2025.3.24 신청분부터 수도권만 금리를 0.2%p 올렸습니다(지방은 그대로).',
@@ -169,6 +258,7 @@ export const SUPPORT_PROGRAMS: SupportProgram[] = [
     apply: { label: '마이홈 안내', url: MYHOME_BEOTIMMOK },
     sources: [
       { title: '마이홈포털: 주택도시기금 버팀목 전세대출 안내', url: MYHOME_BEOTIMMOK, date: '' },
+      NHUF_LOAN_GUIDE,
       NHUF_RATE_0324,
       FSC_0627,
       { title: '한국경제: 10월부터 보금자리론 결혼 페널티 완화', url: 'https://www.hankyung.com/article/2026081300891', date: '2026-08-13' },
@@ -443,14 +533,16 @@ export const SUPPORT_PROGRAMS: SupportProgram[] = [
       ['보증료', '전세대출 특약보증 연 0.031% + 반환보증 연 0.097~0.211%'],
       ['금리', '은행마다 다릅니다. 2026년 8월 취급분 평균 연 4.13%(우리)~4.63%(신한)'],
       ['신청', '취급 은행(기업, 신한, 하나, 농협, 국민, 우리, 부산, 수협) 창구나 앱'],
+      ['버팀목과 함께', '버팀목도 이 보증으로 받을 수 있고, 이때 대출 보증과 반환보증은 나눌 수 없습니다. 수탁은행 창구에서 대출을 신청하면 보증도 같이 신청되고, 기금e든든으로 신청했으면 영업점에 가서 보증을 신청합니다. 기한은 잔금일과 전입신고일 중 빠른 날부터 3개월 안'],
     ],
     notes: [
-      '대출 자격(소득, 신용)과 신청 시기는 이번에 확인하지 못했습니다. 은행에서 확인하세요.',
+      '은행 일반 전세대출에서의 대출 자격(소득, 신용)은 이번에 확인하지 못했습니다. 은행에서 확인하세요.',
       'HUG 페이지 안에서도 한도 문구가 섞여 있어(대출 한도인지 보증 한도인지) 상담 때 다시 확인하세요.',
     ],
     apply: { label: 'HUG 상품개요', url: HUG_ANSHIM_URL },
     sources: [
       { title: 'HUG: 전세금안심대출보증 상품개요', url: HUG_ANSHIM_URL, date: '' },
+      NHUF_LOAN_GUIDE,
       HUG_ANSHIM_RATE,
       FSC_0627,
     ],
@@ -785,6 +877,15 @@ export const SUPPORT_TOOLS: SupportTool[] = [
     what: '같은 건물이나 동네의 전세·매매 실거래가로 보증금이 집값에 비해 얼마나 높은지(전세가율) 가늠합니다. 반환보증 가입 기준(집값의 90%)과도 맞춰 봅니다.',
     url: 'https://rt.molit.go.kr/',
     urlLabel: '실거래가 공개시스템',
+  },
+  {
+    name: '반환보증 가입 가능 여부',
+    when: '계약 전, 잔금 전',
+    what: "보증한도는 '집값 × 90% − 선순위 채권(등기부 을구의 근저당 등)'이고 이것이 보증금 이상이어야 합니다. 빌라처럼 공시가격으로 보는 집은 보증금(선순위 포함)이 공시가격의 126% 이하여야 합니다. 계약 기간 1년 이상, 공인중개사를 거친 계약이어야 하고 임대인 승계거부 특약이 있으면 안 됩니다. HUG 누리집의 보증신청 가능여부 확인이나, 아파트 등 집합건물이면 HF 신청가능여부 확인으로 미리 봅니다. 계약 뒤 잔금 전에는 안심전세 앱 전세보증 사전심사를 2026년 10월 말부터 운영한다는 보도가 있습니다.",
+    url: HUG_RETURN_URL,
+    urlLabel: 'HUG 상품개요',
+    more: { label: 'HF 가능 여부 확인', url: 'https://www.hf.go.kr/ko/sub02/sub02_05_06.do' },
+    source: { title: 'HUG: 전세보증금반환보증 자주하는 질문', url: 'https://www.khug.or.kr/hug/web/ig/dr/igdr000003.jsp?tabMenu=Y', date: '' },
   },
   {
     name: '안심전세 앱',
