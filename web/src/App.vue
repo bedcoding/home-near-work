@@ -20,6 +20,7 @@ import RoomsView from './components/RoomsView.vue';
 import RunHistory from './components/RunHistory.vue';
 import SitesTab from './components/SitesTab.vue';
 import SubscriptionsView from './components/SubscriptionsView.vue';
+import SupportView from './components/SupportView.vue';
 import { loadCatalog, setAreaEnabled, toggleStationArea, type CatalogStation } from './areaActions';
 import { auctionKindOf, inAuctionKind, isAuction, originalUrl, sortAuctions, type AuctionKind } from './auction';
 import { kindOf } from './kinds';
@@ -28,8 +29,8 @@ import { isPastNotice } from './notices';
 import { isRoomStay, sortRooms } from './rooms';
 import { siteLinks } from './siteLinks';
 
-type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'subs' | 'rooms' | 'notices' | 'sites' | 'runs' | 'areas' | 'alerts';
-const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'subs', 'rooms', 'notices', 'sites', 'runs', 'areas', 'alerts'];
+type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'subs' | 'rooms' | 'notices' | 'support' | 'sites' | 'runs' | 'areas' | 'alerts';
+const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'subs', 'rooms', 'notices', 'support', 'sites', 'runs', 'areas', 'alerts'];
 
 /** 머리 줄 높이(px). 필터 칸이 그 아래에 붙어 따라 내려온다(--app-header-height). */
 const headerEl = ref<HTMLElement | null>(null);
@@ -703,6 +704,7 @@ const tabs = computed<{ id: Tab; label: string; count: number | null; news?: num
     near: rentShown.value.filter((n) => n.current && nearReason(n, state.value?.gus ?? [], state.value?.nearNames ?? [])).length,
     title: 'SH, LH, 고방 등의 청년과 공공 임대 모집 공고', main: true,
   },
+  { id: 'support', label: '지원 제도', count: null, title: '전세 대출, 전세보증금 반환보증, 월세 지원 같은 국가와 서울시 제도', main: true },
   { id: 'hidden', label: '숨김함', count: hidden.value.length },
   { id: 'runs', label: '조회 기록', count: null },
   { id: 'sites', label: '사이트', count: null, title: '수집처 체크리스트' },
@@ -722,6 +724,7 @@ const filterUse = computed<string[] | 'all'>(() => {
     case 'star':
     case 'hidden':
     case 'subs':
+    case 'support':
     case 'runs':
     case 'sites':
     case 'areas':
@@ -941,6 +944,7 @@ const emptyText: Partial<Record<Tab, string>> = {
         v-else-if="tab === 'notices'" :notices="rentNotices" :sources="noticeSourcesOf('rent')" :status="noticeStatus"
         :gus="state?.gus ?? []" :names="state?.nearNames ?? []" :inside="filters.insideAreas" @ack="ackNotices"
       />
+      <SupportView v-else-if="tab === 'support'" @notices="tab = 'notices'" />
       <RunHistory v-else-if="tab === 'runs'" :refresh-key="runsKey" />
       <SitesTab
         v-else-if="tab === 'sites' && state" :state="state" :links="links" :ext-ready="!!ext" :notices="notices" :notice-status="noticeStatus"
