@@ -72,8 +72,9 @@ interface AptFilters {
   kind: AptKind | 'all';
   /** 빈 글자면 모든 구 */
   gu: string;
-  /** 세대수 하한(0이면 상관없음) */
+  /** 세대수 최소(0이면 없음)와 최대(null이면 없음) */
   minHouseholds: number;
+  maxHouseholds: number | null;
   /** 세대수를 모르는 것도 보이기 */
   unknown: boolean;
   /** 최저가·매매가 상한(만원), null이면 제한 없음 */
@@ -81,13 +82,14 @@ interface AptFilters {
 }
 const FILTER_KEY = 'hnw-apt-filters';
 function loadFilters(): AptFilters {
-  const d: AptFilters = { kind: 'all', gu: '', minHouseholds: 250, unknown: true, priceMax: null };
+  const d: AptFilters = { kind: 'all', gu: '', minHouseholds: 250, maxHouseholds: null, unknown: true, priceMax: null };
   try {
     const o = JSON.parse(load(FILTER_KEY) ?? '{}') as Partial<AptFilters>;
     return {
       kind: o.kind === 'all' || APT_KINDS.some((k) => k.id === o.kind) ? (o.kind as AptFilters['kind']) : d.kind,
       gu: typeof o.gu === 'string' && (o.gu === '' || SEOUL_GUS.includes(o.gu)) ? o.gu : d.gu,
-      minHouseholds: HOUSEHOLD_STEPS.includes(o.minHouseholds as number) ? (o.minHouseholds as number) : d.minHouseholds,
+      minHouseholds: o.minHouseholds === 0 || HOUSEHOLD_STEPS.includes(o.minHouseholds as number) ? (o.minHouseholds as number) : d.minHouseholds,
+      maxHouseholds: HOUSEHOLD_STEPS.includes(o.maxHouseholds as number) ? (o.maxHouseholds as number) : null,
       unknown: typeof o.unknown === 'boolean' ? o.unknown : d.unknown,
       priceMax: typeof o.priceMax === 'number' && o.priceMax > 0 ? o.priceMax : null,
     };
@@ -96,6 +98,7 @@ function loadFilters(): AptFilters {
   }
 }
 const f = reactive(loadFilters());
+if (f.maxHouseholds != null && f.maxHouseholds < f.minHouseholds) f.maxHouseholds = null;
 watch(f, (v) => store(FILTER_KEY, JSON.stringify(v)), { deep: true });
 /** 가격 상한 칸(빈칸이나 0 이하는 제한 없음) */
 const priceInput = computed({
@@ -106,10 +109,12 @@ const priceInput = computed({
   },
 });
 
+/** 세대수 최소·최대 중 하나라도 정했는지 */
+const householdsSet = computed(() => f.minHouseholds > 0 || f.maxHouseholds != null);
 const householdsOk = (l: ListingView) => {
-  if (!f.minHouseholds) return true;
+  if (!householdsSet.value) return true;
   const n = l.apt?.households;
-  return n == null ? f.unknown : n >= f.minHouseholds;
+  return n == null ? f.unknown : n >= f.minHouseholds && (f.maxHouseholds == null || n <= f.maxHouseholds);
 };
 const priceOk = (l: ListingView) => {
   const p = aptPrice(l);
@@ -188,7 +193,7 @@ function onRulesToggle(e: Event) {
 const dot = (date: string) => date.replace(/-/g, '.');
 
 /** 지도를 다시 맞추는 기준(필터가 바뀔 때만) */
-const fitKey = computed(() => [f.kind, f.gu, f.minHouseholds, f.unknown, f.priceMax].join('|'));
+const fitKey = computed(() => [f.kind, f.gu, f.minHouseholds, f.maxHouseholds, f.unknown, f.priceMax].join('|'));
 /** 지도에 진하게 보일 펼친 목록(이 탭은 없음) */
 const none: ListingView[] = [];
 </script>
@@ -282,13 +287,19 @@ const none: ListingView[] = [];
               <option v-for="gu in filterGus" :key="gu" :value="gu">{{ gu }}{{ guCounts.get(gu) ? ` ${guCounts.get(gu)}` : '' }}</option>
             </select>
           </label>
-          <label class="pick">
+          <span class="pick" role="group" aria-label="세대수 최소와 최대">
             <span>세대수</span>
-            <select v-model.number="f.minHouseholds">
-              <option v-for="n in HOUSEHOLD_STEPS" :key="n" :value="n">{{ n ? `${n.toLocaleString('ko-KR')}세대 이상` : '상관없음' }}</option>
+            <select v-model="f.minHouseholds" aria-label="최소 세대수">
+              <option :value="0">최소 없음</option>
+              <option v-for="n in HOUSEHOLD_STEPS" :key="n" :value="n" :disabled="f.maxHouseholds != null && n > f.maxHouseholds">{{ n.toLocaleString('ko-KR') }}세대</option>
             </select>
-          </label>
-          <label v-if="f.minHouseholds" class="check unknown">
+            <span aria-hidden="true">~</span>
+            <select v-model="f.maxHouseholds" aria-label="최대 세대수">
+              <option :value="null">최대 없음</option>
+              <option v-for="n in HOUSEHOLD_STEPS" :key="n" :value="n" :disabled="n < f.minHouseholds">{{ n.toLocaleString('ko-KR') }}세대</option>
+            </select>
+          </span>
+          <label v-if="householdsSet" class="check unknown">
             <input v-model="f.unknown" type="checkbox" /> 세대수 모르는 것도
           </label>
           <label class="pick price" title="경매·공매는 최저가, 매매는 매매가. 빈칸이면 제한 없음">
