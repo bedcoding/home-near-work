@@ -47,4 +47,8 @@ export const api = {
   houseTrades: (age: number) => request<HouseTradeSummary>('GET', `/api/house-trades?age=${age}`),
   /** 국토부 실거래를 지금 받고 요약을 돌려준다 */
   fetchHouseTrades: (age: number) => request<HouseTradeSummary>('POST', '/api/house-trades/fetch', { age }),
+  /** 서울 아파트 탭에서 고른 구를 통째로 바꾼다. 바뀐 목록을 돌려준다. */
+  setAptGus: (gus: string[]) => request<{ aptGus: string[] }>('PUT', '/api/apt-gus', { gus }),
+  /** 단지 세대수를 넣거나 고친다(null이면 지움) */
+  setHouseholds: (key: string, name: string, households: number | null) => request('PUT', '/api/apt-complexes', { key, name, households }),
 };

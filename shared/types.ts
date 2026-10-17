@@ -459,6 +459,8 @@ export interface ListingView extends NormalizedListing {
    * full은 풀옵션 표시(집토스, 피터팬, 제목이나 소개 글의 '풀옵션'). 아무것도 모르면 null.
    */
   options: { list: string[] | null; full: boolean } | null;
+  /** 서울 아파트면 구, 단지, 세대수(AptInfo). 아니면 null. */
+  apt: AptInfo | null;
 }
 
 /** 경매 탭 칸(주거, 상가, 토지)에 맞춘 매각 결과 종류. other는 산업용, 용도복합용 등 세 칸에 들지 않는 것. */
@@ -504,6 +506,45 @@ export interface AuctionResultView {
 
 /** 지역별 매각통계와 매각 결과 요약에서 서울 전체를 가리키는 이름(구 이름 자리에 쓴다) */
 export const SEOUL = '서울';
+
+/** 서울 25개 구(행정 코드 순서) */
+export const SEOUL_GUS = [
+  '종로구', '중구', '용산구', '성동구', '광진구', '동대문구', '중랑구', '성북구', '강북구', '도봉구', '노원구', '은평구', '서대문구',
+  '마포구', '양천구', '강서구', '구로구', '금천구', '영등포구', '동작구', '관악구', '서초구', '강남구', '송파구', '강동구',
+];
+
+/** 켜진 지역 반경 밖이라도 이만큼은 넉넉하게 저장해 둔다(보기에서 필터로 좁힌다). */
+export const COLLECT_MARGIN_M = 500;
+
+/**
+ * 건물 용도 글자가 아파트인지(법원경매 '아파트', 온비드 '아파트', 네이버 '아파트'와 '재건축').
+ * 아파트 분양권, 아파트형공장(지식산업센터), 경매 상가·토지 표시가 붙은 것은 뺀다.
+ */
+export const isApartmentType = (text: string | null | undefined) => {
+  const t = text ?? '';
+  return /아파트(?!형)|재건축/.test(t) && !/분양권/.test(t) && !t.startsWith(SHOP_PREFIX) && !t.startsWith(LAND_PREFIX);
+};
+
+/** 주소 글자의 서울 구 이름(서울 주소가 아니거나 못 찾으면 null). '서울시 강남구 역삼동', '서울특별시 강남구 …', '강남구 역삼동 …'(서울 뺀 것) */
+export function seoulGuOf(address: string | null | undefined): string | null {
+  const words = (address ?? '').trim().split(/\s+/);
+  if (words[0] && /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|충북|충남|전라|전북|전남|경상|경북|경남|제주)/.test(words[0]) && !words[0].startsWith('서울')) return null;
+  return words.slice(0, 3).find((w) => SEOUL_GUS.includes(w)) ?? null;
+}
+
+/**
+ * 서울 아파트 탭에 보이는 아파트 정보(법원경매·온비드·매매 매물 중 건물 용도가 아파트이고 서울 구를 아는 것).
+ * complexKey: 세대수를 같이 쓰는 단지 키(법원경매·온비드는 구·법정동·지번 'lot:강남구 대치동 316', 네이버는 단지 번호 'nv:1234',
+ * 지번을 못 찾으면 매물 하나 'id:courtauction:…'). complexName: 세대수 칸과 찾기에 쓰는 단지 이름이나 주소.
+ * households: 직접 넣은 세대수(모르면 null). property: 온비드 재산 종류('압류재산', '수탁재산' 등, 그 밖에는 null).
+ */
+export interface AptInfo {
+  gu: string;
+  complexKey: string;
+  complexName: string;
+  households: number | null;
+  property: string | null;
+}
 
 /** 비율(%) 여러 개의 요약: count 센 수, median 중간값, mean 평균, min 가장 낮은 값, max 가장 높은 값 */
 export interface RatioStats {
@@ -656,6 +697,8 @@ export interface AlertSettings {
   shopAuction: { on: boolean; priceMax: number | null; areaMax: number | null };
   /** 토지 경매(땅만 파는 물건) 새 물건, 최저가 상한(만원)과 면적 상한(㎡, 지분이면 지분만큼) */
   landAuction: { on: boolean; priceMax: number | null; areaMax: number | null };
+  /** 서울 아파트 탭에서 고른 구의 아파트 경매·공매 새 물건(켜진 지역 반경과 상관없음), 최저가 상한 */
+  aptAuction: { on: boolean; priceMax: number | null };
   /** 임대 공고(켜진 지역 근처) */
   rentNotices: boolean;
   /** 신탁 공매 공고 */
@@ -731,4 +774,6 @@ export interface AppState {
   gus: string[];
   /** 켜진 지역 바로 근처의 역과 지역 이름('역' 뺌). 공고 제목에 들었으면 '근처'로 표시한다(nearReason). */
   nearNames: string[];
+  /** 서울 아파트 탭에서 고른 구: 법원경매와 온비드가 회사와 멀어도 이 구의 아파트를 모은다(SEOUL_GUS 순서) */
+  aptGus: string[];
 }

@@ -66,7 +66,30 @@ app.get('/api/state', async (): Promise<AppState> => {
     captureNews: captureNews(),
     gus: gusFor(store.enabledAreas()),
     nearNames: nearNamesFor(store.enabledAreas()),
+    aptGus: store.aptGus(),
   };
+});
+
+/** 서울 아파트 탭에서 고른 구를 통째로 바꾼다(gus: 서울 구 이름 배열). 바뀐 목록을 돌려준다. */
+app.put<{ Body: { gus?: unknown } | null }>('/api/apt-gus', async (req, reply) => {
+  const gus = req.body?.gus;
+  if (!Array.isArray(gus) || !gus.every((g) => typeof g === 'string')) {
+    reply.code(400);
+    return { error: '구 이름 목록이 필요합니다.' };
+  }
+  return { aptGus: store.setAptGus(gus) };
+});
+
+/** 단지 세대수를 넣거나 고친다(households: 1~20000 정수, null이면 지움). key는 매물의 apt.complexKey, name은 단지 이름이나 주소. */
+app.put<{ Body: { key?: unknown; name?: unknown; households?: unknown } | null }>('/api/apt-complexes', async (req, reply) => {
+  const { key, name, households } = req.body ?? {};
+  const valid = households === null || (typeof households === 'number' && Number.isInteger(households) && households >= 1 && households <= 20000);
+  if (typeof key !== 'string' || !/^(lot|nv|id):/.test(key) || key.length > 200 || !valid) {
+    reply.code(400);
+    return { error: '세대수는 1에서 20,000 사이 정수로 넣어 주세요.' };
+  }
+  store.setComplexHouseholds(key, typeof name === 'string' ? name.slice(0, 120) : '', households as number | null);
+  return { ok: true };
 });
 
 /**

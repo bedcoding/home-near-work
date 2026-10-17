@@ -27,18 +27,22 @@ const AUTO_DAYS = [1, 2, 3, 4, 5, 6, 0].map((d) => ({ value: d, name: `매주 ${
 
 const error = ref<string | null>(null);
 
-type AmountRow = 'monthly' | 'jeonse' | 'short' | 'sale' | 'rooms' | 'auction' | 'shopAuction' | 'landAuction';
+type AmountRow = 'monthly' | 'jeonse' | 'short' | 'sale' | 'rooms' | 'auction' | 'aptAuction' | 'shopAuction' | 'landAuction';
 type Flag = 'rentNotices' | 'trustNotices' | 'subscriptions' | 'shopNotices' | 'landNotices' | 'priceChanges' | 'failures' | 'insideAreas' | 'captureSites';
 type Group = 'rent' | 'buy' | 'common';
 
 /** 매물 줄: 켜기와 상한 칸(key는 그 줄 설정의 값 이름, unit 없으면 만원) */
-const AMOUNT_ROWS: { row: AmountRow; name: string; group: Group; fields: { key: string; label: string; step: number; unit?: '㎡' }[] }[] = [
+const AMOUNT_ROWS: { row: AmountRow; name: string; group: Group; title?: string; fields: { key: string; label: string; step: number; unit?: '㎡' }[] }[] = [
   { row: 'monthly', name: '월세', group: 'rent', fields: [{ key: 'monthlyMax', label: '월세', step: 5 }, { key: 'depositMax', label: '보증금', step: 100 }] },
   { row: 'jeonse', name: '전세', group: 'rent', fields: [{ key: 'depositMax', label: '전세금', step: 1000 }] },
   { row: 'short', name: '단기', group: 'rent', fields: [{ key: 'monthlyMax', label: '월세', step: 5 }] },
   { row: 'rooms', name: '고시원과 쉐어', group: 'rent', fields: [{ key: 'monthlyMax', label: '가장 싼 방 월세', step: 5 }] },
   { row: 'sale', name: '매매', group: 'buy', fields: [{ key: 'priceMax', label: '매매가', step: 1000 }] },
   { row: 'auction', name: '경매', group: 'buy', fields: [{ key: 'priceMax', label: '최저가', step: 1000 }] },
+  {
+    row: 'aptAuction', name: '서울 아파트 경매', group: 'buy', title: '서울 아파트 탭에서 고른 구의 아파트 경매와 공매. 지역 반경과 상관없이 셉니다',
+    fields: [{ key: 'priceMax', label: '최저가', step: 1000 }],
+  },
   {
     row: 'shopAuction', name: '상가 경매', group: 'buy',
     fields: [{ key: 'priceMax', label: '최저가', step: 1000 }, { key: 'areaMax', label: '면적', step: 0.1, unit: '㎡' }],
@@ -155,7 +159,7 @@ async function toggleFlag(key: Flag, event: Event) {
     <div v-for="g in GROUPS" :key="g.id" class="group">
       <h3 :title="g.title">{{ g.name }} 알림</h3>
       <ul class="list">
-        <li v-for="r in AMOUNT_ROWS.filter((x) => x.group === g.id)" :key="r.row" class="row" :class="{ off: !settings[r.row].on }">
+        <li v-for="r in AMOUNT_ROWS.filter((x) => x.group === g.id)" :key="r.row" class="row" :class="{ off: !settings[r.row].on }" :title="r.title">
           <label class="check toggle">
             <input type="checkbox" :checked="settings[r.row].on" @change="toggleRow(r.row, $event)" />
             <strong>{{ r.name }}</strong>

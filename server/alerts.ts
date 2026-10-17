@@ -18,6 +18,7 @@ export const DEFAULT_ALERTS: AlertSettings = {
   auction: { on: true, priceMax: null },
   shopAuction: { on: true, priceMax: null, areaMax: null },
   landAuction: { on: true, priceMax: null, areaMax: null },
+  aptAuction: { on: true, priceMax: null },
   rentNotices: true,
   trustNotices: true,
   subscriptions: true,
@@ -49,7 +50,7 @@ export function normalizeAlerts(input: unknown, base: AlertSettings = DEFAULT_AL
     if (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 100_000) return v;
     throw new Error('면적은 ㎡ 숫자로 적어 주세요(빈칸은 제한 없음).');
   };
-  const [m, j, s, sa, r, a, sh, la] = ['monthly', 'jeonse', 'short', 'sale', 'rooms', 'auction', 'shopAuction', 'landAuction'].map(sub);
+  const [m, j, s, sa, r, a, sh, la, ap] = ['monthly', 'jeonse', 'short', 'sale', 'rooms', 'auction', 'shopAuction', 'landAuction', 'aptAuction'].map(sub);
   return {
     monthly: { on: flag(m.on, base.monthly.on), monthlyMax: amount(m.monthlyMax, base.monthly.monthlyMax), depositMax: amount(m.depositMax, base.monthly.depositMax) },
     jeonse: { on: flag(j.on, base.jeonse.on), depositMax: amount(j.depositMax, base.jeonse.depositMax) },
@@ -59,6 +60,7 @@ export function normalizeAlerts(input: unknown, base: AlertSettings = DEFAULT_AL
     auction: { on: flag(a.on, base.auction.on), priceMax: amount(a.priceMax, base.auction.priceMax) },
     shopAuction: { on: flag(sh.on, base.shopAuction.on), priceMax: amount(sh.priceMax, base.shopAuction.priceMax), areaMax: size(sh.areaMax, base.shopAuction.areaMax) },
     landAuction: { on: flag(la.on, base.landAuction.on), priceMax: amount(la.priceMax, base.landAuction.priceMax), areaMax: size(la.areaMax, base.landAuction.areaMax) },
+    aptAuction: { on: flag(ap.on, base.aptAuction.on), priceMax: amount(ap.priceMax, base.aptAuction.priceMax) },
     rentNotices: flag(o.rentNotices, base.rentNotices),
     trustNotices: flag(o.trustNotices, base.trustNotices),
     subscriptions: flag(o.subscriptions, base.subscriptions),
@@ -88,13 +90,13 @@ export function setAlertSettings(input: unknown): AlertSettings {
 }
 
 /** 새 소식이 보이는 대시보드 탭(App.vue의 탭 이름) */
-type NewsTab = 'news' | 'auction' | 'rooms' | 'subs' | 'notices';
+type NewsTab = 'news' | 'auction' | 'rooms' | 'subs' | 'notices' | 'apt';
 const LISTING_TAB: Record<ReturnType<typeof listingSection>, NewsTab> = { home: 'news', auction: 'auction', shop: 'auction', land: 'auction', room: 'rooms' };
 const NOTICE_TAB: Record<NoticeSection, NewsTab> = { rent: 'notices', trust: 'auction', subscription: 'subs', shop: 'auction', land: 'auction' };
 
-/** 이번 조회의 새 소식 하나: 신규·가격 변동 매물(changed: 가격 변동)이나 센 새 공고. */
+/** 이번 조회의 새 소식 하나: 신규·가격 변동 매물(changed: 가격 변동, aptGu: 서울 아파트 탭에서 고른 구의 아파트면 그 구)이나 센 새 공고. */
 export type NewsItem =
-  | { type: 'listing'; listing: NormalizedListing; changed: boolean }
+  | { type: 'listing'; listing: NormalizedListing; changed: boolean; aptGu?: string }
   | { type: 'notice'; source: NoticeSourceId; section: NoticeSection; url: string | null; title: string; near: string | null };
 
 /** 띄울 알림 하나. url: 알림을 누르면 열 주소. */
@@ -107,17 +109,17 @@ export interface Alert {
 /** 알림 줄: 매물 조건(거래 유형, 고시원과 쉐어, 경매)과 공고 */
 export type AlertRow =
   | 'monthly' | 'jeonse' | 'short' | 'rooms' | 'rentNotices'
-  | 'sale' | 'auction' | 'shopAuction' | 'shopNotices' | 'landAuction' | 'landNotices' | 'trustNotices' | 'subscriptions';
+  | 'sale' | 'auction' | 'aptAuction' | 'shopAuction' | 'shopNotices' | 'landAuction' | 'landNotices' | 'trustNotices' | 'subscriptions';
 /** 알림 묶음: rent 전월세(알림 하나), buy 매매 목적(따로 알림 하나) */
 type Purpose = 'rent' | 'buy';
 
 /** 제목에 적는 순서 */
 const ROWS: AlertRow[] = [
-  'monthly', 'jeonse', 'short', 'rooms', 'rentNotices', 'sale', 'auction', 'shopAuction', 'shopNotices', 'landAuction', 'landNotices', 'trustNotices', 'subscriptions',
+  'monthly', 'jeonse', 'short', 'rooms', 'rentNotices', 'sale', 'auction', 'aptAuction', 'shopAuction', 'shopNotices', 'landAuction', 'landNotices', 'trustNotices', 'subscriptions',
 ];
 const PURPOSE: Record<AlertRow, Purpose> = {
   monthly: 'rent', jeonse: 'rent', short: 'rent', rooms: 'rent', rentNotices: 'rent',
-  sale: 'buy', auction: 'buy', shopAuction: 'buy', shopNotices: 'buy', landAuction: 'buy', landNotices: 'buy', trustNotices: 'buy', subscriptions: 'buy',
+  sale: 'buy', auction: 'buy', aptAuction: 'buy', shopAuction: 'buy', shopNotices: 'buy', landAuction: 'buy', landNotices: 'buy', trustNotices: 'buy', subscriptions: 'buy',
 };
 /** 매매·전월세 거래 유형 줄(제목이 이것 하나면 '새 매물 N건'으로 적는다) */
 const DEAL_ROWS: AlertRow[] = ['monthly', 'jeonse', 'short', 'sale'];
@@ -139,6 +141,7 @@ export function rowLabel(row: AlertRow, s: AlertSettings): string {
     case 'sale': return `매매${upTo(s.sale.priceMax)}`;
     case 'rooms': return `고시원과 쉐어${upTo(s.rooms.monthlyMax)}`;
     case 'auction': return `경매${upTo(s.auction.priceMax)}`;
+    case 'aptAuction': return `서울 아파트 경매${upTo(s.aptAuction.priceMax)}`;
     case 'shopAuction': return `상가 경매${upTo(s.shopAuction.priceMax)}${s.shopAuction.areaMax == null ? '' : ` ${s.shopAuction.areaMax}㎡ 이하`}`;
     case 'landAuction': return `토지 경매${upTo(s.landAuction.priceMax)}${s.landAuction.areaMax == null ? '' : ` ${s.landAuction.areaMax}㎡ 이하`}`;
     case 'rentNotices': return '임대 공고';
@@ -154,7 +157,7 @@ export function coveredRows(sources: SourceId[], notices: NoticeSourceId[]): Set
   const rows = new Set<AlertRow>();
   for (const source of sources) {
     const section = listingSection({ source, buildingType: null });
-    if (section === 'auction') rows.add('auction').add('shopAuction').add('landAuction');
+    if (section === 'auction') rows.add('auction').add('aptAuction').add('shopAuction').add('landAuction');
     if (section === 'room') rows.add('rooms');
     if (hasHomeListings(source)) for (const row of DEAL_ROWS) rows.add(row);
   }
@@ -177,8 +180,19 @@ const under = (value: number | null, max: number | null) => max == null || value
 /** 켜 둔 매물 알림 줄 중 하나라도 맞는지 */
 export const matchesAlert = (l: NormalizedListing, s: AlertSettings, areas: Area[]) => matchingRows(l, s, areas).length > 0;
 
-/** 이 매물이 맞는 켜진 매물 알림 줄 */
-function matchingRows(l: NormalizedListing, s: AlertSettings, areas: Area[]): AlertRow[] {
+/**
+ * 이 매물이 맞는 켜진 매물 알림 줄. aptGu: 서울 아파트 탭에서 고른 구의 아파트(그 구).
+ * 고른 구의 아파트 경매·공매는 '경매' 줄에 맞지 않으면(반경 밖이거나 상한 넘음) '서울 아파트 경매' 줄로 센다(지역 반경 안만 설정과 상관없음).
+ */
+function matchingRows(l: NormalizedListing, s: AlertSettings, areas: Area[], aptGu?: string): AlertRow[] {
+  const rows = nearRows(l, s, areas);
+  const priceOk = s.aptAuction.priceMax == null || l.prices.some((p) => under(p.price, s.aptAuction.priceMax));
+  if (aptGu && listingSection(l) === 'auction' && s.aptAuction.on && priceOk && !rows.includes('auction')) rows.push('aptAuction');
+  return rows;
+}
+
+/** 켜진 지역 기준 매물 알림 줄(지역 반경 안만이면 반경 밖 매물은 없음) */
+function nearRows(l: NormalizedListing, s: AlertSettings, areas: Area[]): AlertRow[] {
   if (s.insideAreas && !insideRadius(areas, l)) return [];
   const has = (deal: DealType, ok: (p: PriceOption) => boolean) => l.prices.some((p) => p.deal === deal && ok(p));
   const section = listingSection(l);
@@ -258,10 +272,11 @@ export function buildAlerts(input: {
       continue;
     }
     const l = n.listing;
-    const rows = matchingRows(l, s, input.areas);
+    const rows = matchingRows(l, s, input.areas, n.aptGu);
     if (rows.length === 0 || (n.changed && !s.priceChanges)) continue;
-    // 법원경매 주소는 검색 화면이라 물건은 대시보드 경매 탭에서 연다.
-    const item = { url: l.source === 'courtauction' ? null : l.url, tab: LISTING_TAB[listingSection(l)] };
+    // 법원경매 주소는 검색 화면이라 물건은 대시보드 경매 탭(서울 아파트 경매 줄만 맞으면 서울 아파트 탭)에서 연다.
+    const tab: NewsTab = rows.every((r) => r === 'aptAuction') ? 'apt' : LISTING_TAB[listingSection(l)];
+    const item = { url: l.source === 'courtauction' ? null : l.url, tab };
     for (const purpose of new Set(rows.map((r) => PURPOSE[r]))) {
       const g = groups[purpose];
       if (n.changed) {

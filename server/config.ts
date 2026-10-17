@@ -37,7 +37,7 @@ export const HOST = '127.0.0.1';
 export const PORT = Number(process.env.PORT ?? 8787);
 export const DASHBOARD_URL = `http://localhost:${PORT}`;
 
-/** 설정한 반경 밖이라도 이만큼은 넉넉하게 저장해 둔다(보기에서 필터로 좁힌다). */
-export const COLLECT_MARGIN_M = 500;
+/** 설정한 반경 밖이라도 이만큼은 넉넉하게 저장해 둔다(화면도 같은 값으로 서울 아파트 탭에만 보일 매물을 가른다). */
+export { COLLECT_MARGIN_M } from '../shared/types.js';
 /** 페이지 사이 대기 시간(ms). */
 export const PAGE_DELAY_MS = 2000;
