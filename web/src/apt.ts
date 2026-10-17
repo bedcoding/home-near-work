@@ -30,8 +30,8 @@ export function aptPrice(l: Pick<ListingView, 'source' | 'prices'>): number | nu
   return p?.price ?? null;
 }
 
-/** 세대수 하한 고르기(0은 상관없음) */
-export const HOUSEHOLD_STEPS = [0, 150, 250, 300, 500, 1000];
+/** 세대수 최소·최대 고르기 칸의 값('없음'은 따로 둔다) */
+export const HOUSEHOLD_STEPS = [100, 150, 200, 250, 300, 500, 700, 1000, 1500, 2000, 3000];
 
 /**
  * 살 때 붙는 조건 한 줄. live: 실거주 조건(짧게), status: ok 법령이나 공식 자료·여러 보도로 확인,
@@ -137,9 +137,9 @@ export const APT_RULES: AptRule[] = [
   },
 ];
 
-/** 세대수 칸 아래 설명과 근거(short는 링크 글자). 기본 250세대는 고른 기준이고, 참고로 법에 있는 선(의무관리대상)과 대단지 기준을 같이 적는다. */
+/** 세대수 칸 아래 설명과 근거(short는 링크 글자). 참고로 법에 있는 선(의무관리대상)과 대단지 기준을 같이 적는다. */
 export const HOUSEHOLD_NOTE =
-  '세대수는 경매·공매·네이버 목록에 없어서 단지마다 한 번 넣습니다. 기본 250세대 이상은 바꿀 수 있습니다. 참고로 법에 있는 선은 의무관리대상(300세대 이상, 또는 150세대 이상이면서 승강기나 중앙·지역난방)이고, 대단지는 보통 1,000세대 이상을 말합니다.';
+  "세대수는 경매·공매·네이버 목록에 없어서 카드의 '세대수 넣기'로 단지마다 한 번 넣습니다. 참고로 법에 있는 선은 의무관리대상(300세대 이상, 또는 150세대 이상이면서 승강기나 중앙·지역난방)이고, 대단지는 보통 1,000세대 이상을 말합니다.";
 export const HOUSEHOLD_SOURCES: (SupportSource & { short: string })[] = [
   { short: '의무관리대상(국토부)', title: '국토교통부: 의무관리대상 공동주택 범위', url: 'https://www.molit.go.kr/USR/policyTarget/dtl.jsp?idx=405', date: '' },
   { short: '150세대 기준 기사', title: '기사: 소규모 공동주택, 체계적인 관리 받을 수 있는 길 열려(150세대 이상 승강기·중앙난방)', url: 'https://www.sateconomy.co.kr/news/view/179590143590779', date: '' },
