@@ -54,6 +54,18 @@ export interface SupportTool {
   more?: { label: string; url: string };
   /** 링크가 안내 화면이 아닐 때 따로 붙이는 근거 */
   source?: SupportSource;
+  /** 자세한 순서가 있는 탭 안 칸 */
+  toSection?: SupportSectionId;
+}
+
+/** '대출 받는 순서'와 '보험 되는지 먼저 확인하는 순서'의 한 단계. links는 그 단계에서 쓰는 공식 화면, toSection은 같이 볼 탭 안 칸 */
+export interface SupportStep {
+  /** 언제 할 일인지(계약 전, 잔금 날 등) */
+  when: string;
+  title: string;
+  text: string;
+  links?: { label: string; url: string }[];
+  toSection?: SupportSectionId;
 }
 
 export const SUPPORT_SECTIONS: {
@@ -142,17 +154,14 @@ const MOHW_2026: SupportSource = {
   date: '2025-07-31',
 };
 
-/**
- * 전세 대출 칸 맨 위 '대출 받는 순서'(버팀목 기준). 순서가 중요해서 때(when)를 붙여 위에서 아래로 보인다.
- * link는 그 단계에서 쓰는 공식 화면, toSection은 같이 볼 탭 안 칸이다.
- */
-export const LOAN_STEPS: { when: string; title: string; text: string; link?: { label: string; url: string }; toSection?: SupportSectionId }[] = [
+/** 전세 대출 칸 맨 위 '대출 받는 순서'(버팀목 기준). 순서가 중요해서 때(when)를 붙여 위에서 아래로 보인다. */
+export const LOAN_STEPS: SupportStep[] = [
   {
     when: '계약 전',
     title: '대출이 될지, 반환보증이 되는 집인지 먼저 확인',
-    text: "은행에서 소득, 신용, 한도로 대출이 될지 상담합니다. 그 집이 반환보증 기준에 맞는지도 따집니다. '집값 × 90% − 선순위 채권(등기부 을구의 근저당 등)'이 보증금 이상이어야 하고, 빌라처럼 공시가격으로 보는 집은 보증금이 공시가격의 126% 이하여야 합니다. 기준에 안 맞으면 반환보증이 붙은 대출(HUG 전세금안심대출보증)도 안 되고 보증금도 지키기 어렵습니다. 불법 건축물처럼 보증이 거절될 수 있는 집은 피합니다.",
-    link: { label: '기금e든든 자격 계산', url: 'https://nhuf.molit.go.kr/FP/FP08/FP0801/FP08010101.jsp' },
-    toSection: 'check',
+    text: "은행에서 소득, 신용, 한도로 대출이 될지 상담합니다. 그 집이 반환보증 기준에 맞는지도 따집니다. '집값 × 90% − 선순위 채권(등기부 을구의 근저당 등)'이 보증금 이상이어야 하고, 빌라처럼 공시가격으로 보는 집은 보증금이 공시가격의 126% 이하여야 합니다. 기준에 안 맞으면 반환보증이 붙은 대출(HUG 전세금안심대출보증)도 안 되고 보증금도 지키기 어렵습니다. 확인하는 순서와 계산기는 보증보험 칸에 있습니다.",
+    links: [{ label: '기금e든든 자격 계산', url: 'https://nhuf.molit.go.kr/FP/FP08/FP0801/FP08010101.jsp' }],
+    toSection: 'guard',
   },
   {
     when: '계약하는 날',
@@ -225,6 +234,113 @@ export const LOAN_HOWTO_SOURCES: SupportSource[] = [
   { title: '정책브리핑: 계약 해지하면 계약금을 돌려받을 수 있나요?', url: 'https://www.korea.kr/news/policyNewsView.do?newsId=148893172', date: '' },
   { title: '대한법률구조공단: 계약금 반환', url: 'https://support.klac.or.kr/front/contents/06/01005-01.do', date: '' },
 ];
+
+const HUG_FAQ_URL = 'https://www.khug.or.kr/hug/web/ig/dr/igdr000003.jsp?tabMenu=Y';
+const HF_CHECK_URL = 'https://www.hf.go.kr/ko/sub02/sub02_05_06.do';
+const SAFE_JEONSE_APP_URL = 'https://www.khug.or.kr/jeonse/web/s01/s010102.jsp';
+
+/** 보증보험 칸 맨 위 '보험 되는지 먼저 확인하는 순서'(HUG 전세보증금반환보증 기준). 계약 전에 끝내야 하는 것이 대부분이다. */
+export const GUARD_CHECK_STEPS: SupportStep[] = [
+  {
+    when: '집 보러 다닐 때',
+    title: '보증 대상 주택인지',
+    text: '아파트, 연립·다세대, 단독·다가구·다중주택, 주거용 오피스텔(계약서에 주거용 표시)이 대상입니다. 건축물대장에서 용도를 보고, 근린생활시설(이른바 근생빌라)이면 대상이 아닙니다. 건축물대장(집합건물은 전유부)에 위반건축물로 적혀 있으면 아파트가 아닌 한 가입이 안 됩니다.',
+    links: [
+      { label: '정부24 건축물대장', url: 'https://www.gov.kr/mw/AA020InfoCappView.do?CappBizCD=15000000098' },
+      { label: '세움터', url: 'https://www.eais.go.kr/' },
+    ],
+  },
+  {
+    when: '계약 전',
+    title: '집값 알아보기',
+    text: '아파트·오피스텔은 시세(KB시세, 한국부동산원 시세, 안심전세 앱 시세 하한가)를 씁니다. 시세가 없거나 빌라·단독·다가구면 공시가격(공동주택가격, 개별주택가격)의 140%가 집값입니다.',
+    links: [
+      { label: '공동주택가격(빌라)', url: 'https://www.gov.kr/mw/AA020InfoCappView.do?HighCtgCD=&CappBizCD=15000000682' },
+      { label: '개별주택가격(단독·다가구)', url: 'https://www.gov.kr/mw/AA020InfoCappView.do?CappBizCD=15000000681' },
+      { label: '부동산 공시가격 알리미', url: 'https://www.realtyprice.kr/' },
+    ],
+  },
+  {
+    when: '계약 전',
+    title: '선순위 채권 확인',
+    text: '등기부 을구의 근저당(채권최고액)이 선순위 채권입니다. 단독·다가구·다중주택은 나보다 먼저 들어온 다른 세대 보증금의 합계도 선순위 채권에 들어갑니다(집주인이 보여 줘야 하는 확정일자·보증금 정보와 전입세대확인서로 확인). 선순위 채권은 집값의 60% 이내여야 합니다.',
+    links: [{ label: '인터넷등기소', url: 'https://www.iros.go.kr/' }],
+  },
+  {
+    when: '계약 전',
+    title: '보증한도 계산',
+    text: '보증한도는 집값 × 90% − 선순위 채권이고, 내 보증금이 이 금액 이하여야 합니다. 서울(수도권)은 보증금 7억원까지입니다. 예: 공시가격 2억원 빌라에 근저당이 없으면 집값 2.8억원, 보증금 2.52억원까지. 아래 계산기로 바로 따져 볼 수 있습니다.',
+  },
+  {
+    when: '계약 전',
+    title: '집주인 확인',
+    text: '안심전세 앱에서 집주인의 HUG 보증사고 이력과 보증 가입 금지 여부를 봅니다(2025.6.23부터 계약 전에 비대면 조회).',
+    links: [{ label: '안심전세 앱', url: SAFE_JEONSE_APP_URL }],
+  },
+  {
+    when: '계약 전',
+    title: '공식으로 한 번 더',
+    text: 'HUG 누리집의 보증신청 가능여부 확인, HUG 콜센터(1566-9009)나 위탁은행 상담으로 확인합니다. 아파트 같은 집합건물이면 HF 신청가능여부 확인도 됩니다.',
+    links: [
+      { label: 'HUG 상품개요', url: HUG_RETURN_URL },
+      { label: 'HF 가능 여부 확인', url: HF_CHECK_URL },
+    ],
+  },
+  {
+    when: '계약하는 날',
+    title: '조건 맞추고 특약 넣기',
+    text: "계약 기간 1년 이상, 공인중개사를 거친 계약이어야 하고, 임대인 승계거부 특약이 있으면 안 됩니다. '반환보증에 가입할 수 없으면 계약을 해제하고 계약금을 돌려준다'는 특약을 넣습니다(문구는 전세 대출 칸).",
+    toSection: 'loan',
+  },
+  {
+    when: '계약 뒤 잔금 전',
+    title: '사전심사(예정)',
+    text: '안심전세 앱의 전세보증 사전심사로 잔금 전에 가입 가능 여부를 알려 준다는 보도가 있습니다(2026년 10월 말부터). HUG 공식 공지는 확인하지 못했습니다.',
+    links: [{ label: '안심전세 앱', url: SAFE_JEONSE_APP_URL }],
+  },
+  {
+    when: '잔금·전입 뒤',
+    title: '정식 가입',
+    text: '잔금일과 전입신고일 중 늦은 날부터 계약 기간의 절반이 지나기 전까지 신청합니다. 대출을 HUG 전세금안심대출보증으로 받았으면 반환보증이 이미 함께 들어 있습니다.',
+    links: [{ label: 'HUG 이용 절차와 서류', url: 'https://www.khug.or.kr/hug/web/ig/dr/igdr000002.jsp?tabMenu=Y' }],
+  },
+];
+
+export const GUARD_CHECK_SOURCES: SupportSource[] = [
+  { title: 'HUG: 전세보증금반환보증 상품개요(보증한도, 주택가격 산정)', url: HUG_RETURN_URL, date: '' },
+  { title: 'HUG: 전세보증금반환보증 자주하는 질문(위반건축물, 다가구 선순위 보증금)', url: HUG_FAQ_URL, date: '' },
+  { title: '모바일HUG: 전세보증반환 상품안내(근린생활시설 제외)', url: 'https://onestop.khug.or.kr/webView/webBiz/apply/goods001', date: '' },
+  { title: '한국주택금융공사: 전세지킴보증 신청가능여부 확인', url: HF_CHECK_URL, date: '' },
+  { title: '정책브리핑: 전세계약 전부터 임대인 동의 없이도 정보 확인 가능', url: 'https://www.korea.kr/news/policyNewsView.do?newsId=148943643', date: '' },
+];
+
+/**
+ * HUG 전세보증금반환보증 가입 기준(2026.10 조사): 집값의 90%까지, 공시가격으로 보는 집은 공시가격의 140%를 집값으로,
+ * 선순위 채권은 집값의 60% 이내, 보증금 수도권 7억원·그 밖 5억원 이하(금액은 만원).
+ */
+export const GUARANTEE_RULE = { ratio: 0.9, officialRate: 1.4, seniorMax: 0.6, cap: { capital: 70000, other: 50000 } };
+
+/** 반환보증 보증한도 대략 계산(금액은 만원). basis가 'official'이면 price는 공시가격이다. */
+export function guaranteeCheck(input: { basis: 'market' | 'official'; price: number; senior: number; deposit: number; capital: boolean }) {
+  const r = GUARANTEE_RULE;
+  const house = Math.round(input.basis === 'official' ? input.price * r.officialRate : input.price);
+  const limit = Math.floor(house * r.ratio) - input.senior;
+  const cap = input.capital ? r.cap.capital : r.cap.other;
+  const seniorOk = input.senior <= house * r.seniorMax;
+  const depositOk = input.deposit <= limit;
+  const capOk = input.deposit <= cap;
+  return {
+    house,
+    limit,
+    cap,
+    seniorOk,
+    depositOk,
+    capOk,
+    ok: seniorOk && depositOk && capOk,
+    /** 이 집에서 반환보증에 들 수 있는 가장 큰 보증금 */
+    maxDeposit: seniorOk ? Math.max(0, Math.min(limit, cap)) : 0,
+  };
+}
 
 export const SUPPORT_PROGRAMS: SupportProgram[] = [
   // ---------- 전세 대출 ----------
@@ -884,8 +1000,9 @@ export const SUPPORT_TOOLS: SupportTool[] = [
     what: "보증한도는 '집값 × 90% − 선순위 채권(등기부 을구의 근저당 등)'이고 이것이 보증금 이상이어야 합니다. 빌라처럼 공시가격으로 보는 집은 보증금(선순위 포함)이 공시가격의 126% 이하여야 합니다. 계약 기간 1년 이상, 공인중개사를 거친 계약이어야 하고 임대인 승계거부 특약이 있으면 안 됩니다. HUG 누리집의 보증신청 가능여부 확인이나, 아파트 등 집합건물이면 HF 신청가능여부 확인으로 미리 봅니다. 계약 뒤 잔금 전에는 안심전세 앱 전세보증 사전심사를 2026년 10월 말부터 운영한다는 보도가 있습니다.",
     url: HUG_RETURN_URL,
     urlLabel: 'HUG 상품개요',
-    more: { label: 'HF 가능 여부 확인', url: 'https://www.hf.go.kr/ko/sub02/sub02_05_06.do' },
-    source: { title: 'HUG: 전세보증금반환보증 자주하는 질문', url: 'https://www.khug.or.kr/hug/web/ig/dr/igdr000003.jsp?tabMenu=Y', date: '' },
+    more: { label: 'HF 가능 여부 확인', url: HF_CHECK_URL },
+    source: { title: 'HUG: 전세보증금반환보증 자주하는 질문', url: HUG_FAQ_URL, date: '' },
+    toSection: 'guard',
   },
   {
     name: '안심전세 앱',
