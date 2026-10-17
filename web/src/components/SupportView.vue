@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import {
-  LOAN_CLAUSES, LOAN_DEPOSIT_NOTES, LOAN_HOWTO_SOURCES, LOAN_STEPS,
+  GUARD_CHECK_SOURCES, GUARD_CHECK_STEPS, LOAN_CLAUSES, LOAN_DEPOSIT_NOTES, LOAN_HOWTO_SOURCES, LOAN_STEPS,
   SUPPORT_CHECKED, SUPPORT_LINKS, SUPPORT_PROGRAMS, SUPPORT_SECTIONS, SUPPORT_STEPS, SUPPORT_TOOLS,
   type SupportProgram, type SupportSectionId,
 } from '../support';
+import GuaranteeCalc from './GuaranteeCalc.vue';
+import SupportSteps from './SupportSteps.vue';
 
 // 지원 제도 탭: 전세 대출, 전세보증금 반환보증(보증보험), 월세 지원 같은 국가·서울시 제도와 계약 전 확인 도구를 칸별로 정리해 보인다.
 // 모으는 데이터가 아니라 조사한 날(SUPPORT_CHECKED) 기준으로 손으로 정리한 표다(web/src/support.ts). 그래서 조사한 날과 근거를 같이 보인다.
@@ -45,12 +47,19 @@ async function pickSection(id: SupportSectionId) {
 
 const STATUS_CLASS: Record<SupportProgram['status'], string> = { open: '', now: 'chip-near', period: 'chip-muted', closed: 'chip-muted', check: 'chip-warn' };
 
-/** 전세 대출 칸의 '대출 받는 순서'. 처음에는 펼쳐 두고, 접으면 다음에도 접힌 채로 연다. */
-const howtoOpen = ref(localStorage.getItem('hnw-support-howto') !== 'closed');
-function onHowtoToggle(e: Event) {
-  howtoOpen.value = (e.target as HTMLDetailsElement).open;
-  localStorage.setItem('hnw-support-howto', howtoOpen.value ? 'open' : 'closed');
+/** 칸 맨 위 순서 블록의 열림 상태. 처음에는 펼쳐 두고, 접으면 다음에도 접힌 채로 연다. */
+function foldMemory(key: string) {
+  const open = ref(localStorage.getItem(key) !== 'closed');
+  const onToggle = (e: Event) => {
+    open.value = (e.target as HTMLDetailsElement).open;
+    localStorage.setItem(key, open.value ? 'open' : 'closed');
+  };
+  return { open, onToggle };
 }
+/** 전세 대출 칸의 '대출 받는 순서' */
+const loanHowto = foldMemory('hnw-support-howto');
+/** 보증보험 칸의 '보험 되는지 먼저 확인하는 순서' */
+const guardHowto = foldMemory('hnw-support-guard-check');
 
 /** 특약 문구 복사. 클립보드를 못 쓰면 문구를 선택해 두어 Ctrl+C로 복사하게 한다. */
 const copied = ref<{ id: string; ok: boolean } | null>(null);
@@ -101,26 +110,30 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
 
     <p class="intro">{{ current.intro }}</p>
 
-    <details v-if="section === 'loan'" class="fold howto" :open="howtoOpen" @toggle="onHowtoToggle">
+    <details v-if="section === 'guard'" class="fold howto" :open="guardHowto.open.value" @toggle="guardHowto.onToggle">
+      <summary>
+        <span class="fold-name">보험 되는지 먼저 확인하는 순서</span>
+        <span class="howto-sub muted">HUG 반환보증 기준, 집 보러 다닐 때부터 정식 가입까지 순서대로</span>
+      </summary>
+      <div class="fold-body">
+        <SupportSteps :steps="GUARD_CHECK_STEPS" @section="pickSection" />
+        <GuaranteeCalc />
+        <div class="foot">
+          <span class="sources">
+            <span class="sources-label">근거</span>
+            <a v-for="s in GUARD_CHECK_SOURCES" :key="s.url" :href="s.url" target="_blank" rel="noopener">{{ s.title }}<span v-if="s.date" class="src-date num">{{ dot(s.date) }}</span></a>
+          </span>
+        </div>
+      </div>
+    </details>
+
+    <details v-if="section === 'loan'" class="fold howto" :open="loanHowto.open.value" @toggle="loanHowto.onToggle">
       <summary>
         <span class="fold-name">대출 받는 순서</span>
         <span class="howto-sub muted">버팀목 기준, 계약 전에 확인할 것부터 잔금 뒤까지 순서대로</span>
       </summary>
       <div class="fold-body">
-        <ol class="howto-steps">
-          <li v-for="(s, i) in LOAN_STEPS" :key="s.title">
-            <span class="step-no num">{{ i + 1 }}</span>
-            <div class="howto-step">
-              <span class="howto-when">{{ s.when }}</span>
-              <strong>{{ s.title }}</strong>
-              <p>{{ s.text }}</p>
-              <span v-if="s.link || s.toSection" class="howto-links">
-                <a v-if="s.link" :href="s.link.url" target="_blank" rel="noopener">{{ s.link.label }} ↗</a>
-                <button v-if="s.toSection" class="linkish" @click="pickSection(s.toSection)">{{ SUPPORT_SECTIONS.find((x) => x.id === s.toSection)?.name }} 칸</button>
-              </span>
-            </div>
-          </li>
-        </ol>
+        <SupportSteps :steps="LOAN_STEPS" @section="pickSection" />
 
         <div class="clauses">
           <div class="clauses-head">
@@ -221,6 +234,7 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
         <span class="tool-what">
           {{ t.what }}
           <a v-if="t.source" class="tool-source" :href="t.source.url" target="_blank" rel="noopener">근거: {{ t.source.title }}<span v-if="t.source.date" class="src-date num">{{ dot(t.source.date) }}</span></a>
+          <button v-if="t.toSection" class="linkish tool-more" @click="pickSection(t.toSection)">확인하는 순서와 계산기: {{ SUPPORT_SECTIONS.find((x) => x.id === t.toSection)?.name }} 칸</button>
         </span>
         <span class="tool-links">
           <a class="btn btn-sm" :href="t.url" target="_blank" rel="noopener">{{ t.urlLabel }} ↗</a>
@@ -319,19 +333,6 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
 .howto { scroll-margin-top: calc(var(--app-header-height, 80px) + 16px); }
 .howto > summary { align-items: baseline; }
 .howto-sub { font-size: 13px; }
-/* 단계는 위에서 아래로 한 줄씩, 번호 사이를 세로 선으로 잇는다(순서가 중요해서). */
-.howto-steps { display: grid; max-width: 900px; margin: 0; padding: 0; list-style: none; }
-.howto-steps li { position: relative; display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: start; gap: 12px; padding-bottom: 16px; }
-.howto-steps li::before { content: ''; position: absolute; left: 10px; top: 26px; bottom: 2px; width: 2px; border-radius: 1px; background: var(--line); }
-.howto-steps li:last-child { padding-bottom: 0; }
-.howto-steps li:last-child::before { display: none; }
-.howto-step { display: grid; gap: 1px; }
-.howto-when { font-size: 12px; font-weight: 700; color: var(--accent); }
-.howto-step strong { font-size: 14px; }
-.howto-step p { margin: 3px 0 0; font-size: 13px; line-height: 1.6; color: var(--ink-2); }
-.howto-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-top: 4px; font-size: 12px; }
-.howto-links a { color: var(--accent); text-decoration: none; }
-.howto-links a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .clauses { display: grid; gap: 8px; margin-top: 16px; }
 .clauses-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 13px; }
 .clauses-head .muted { font-size: 12px; }
@@ -353,6 +354,7 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
 .tool-source { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); text-decoration: none; overflow-wrap: anywhere; }
 .tool-source:hover { color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; }
 .tool-links { display: grid; gap: 6px; }
+.tool-more { display: block; margin-top: 4px; font-size: 12px; text-align: left; }
 .cross { margin: 4px 0 0; font-size: 13px; }
 
 @media (max-width: 720px) {
