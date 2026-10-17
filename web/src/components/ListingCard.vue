@@ -189,6 +189,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
         <span v-if="l.auction && l.auction.lots > 1" class="chip chip-room" title="같은 사건과 물건번호의 목록(토지, 호실)을 한 번에 매각">{{ l.auction.lots }}개 일괄매각</span>
         <span v-if="l.auction?.share" class="chip chip-warn" title="지분 매각: 땅 전체가 아니라 일부 지분만 판다. 면적은 지분만큼">지분</span>
         <span v-if="l.auction?.mgmt" class="chip chip-warn" :title="`물건 비고: ${l.auction.mgmt.text}`">{{ l.auction.mgmt.label }}</span>
+        <slot name="tags" />
         <span v-if="titleText" class="title" :title="l.title || undefined">{{ titleText }}</span>
         <span class="source muted">{{ SOURCE_LABEL[l.source] }}</span>
       </div>

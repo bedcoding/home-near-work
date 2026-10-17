@@ -1,10 +1,11 @@
 import { gusFor } from './gus.js';
 import { BlockedError, toNumber, type Collector, type CollectedItem } from './types.js';
 import { priceText } from '../../shared/format.js';
-import { LAND_PREFIX, SHOP_PREFIX, type NormalizedListing } from '../../shared/types.js';
+import { isApartmentType, LAND_PREFIX, SHOP_PREFIX, type NormalizedListing } from '../../shared/types.js';
 
 // 온비드(한국자산관리공사) 공매 중 서울 주거용, 가게(상가), 토지 매각 물건. 지도검색 화면을 조작하고, 화면이 받는 검색 응답(위경도 포함)을 읽는다.
 // 지도검색은 오늘부터 석 달 안에 입찰이 진행되는 물건만 보여 준다(화면 안내). 구 이름으로 검색하므로 구 전체를 매번 다시 본다.
+// 서울 아파트 탭에서 고른 구 중 켜진 지역 근처가 아닌 구도 같은 조건으로 검색하고 아파트만 남긴다.
 
 const HOME = 'https://www.onbid.co.kr/';
 const MAP_URL = 'https://www.onbid.co.kr/op/cltrpbancinf/cltr/cltrmapsrch/CltrMapSrchController/mvmnCltrMapSrchClg.do';
@@ -138,11 +139,16 @@ export const onbid: Collector = {
   wholeDistrict: true,
   emptyOk: true,
   async collect(ctx) {
-    const gus = gusFor(ctx.areas);
+    const near = gusFor(ctx.areas);
+    const aptGus = new Set(ctx.aptGus);
+    /** 고른 구 중 근처가 아닌 구: 아파트만 남긴다 */
+    const aptOnly = ctx.aptGus.filter((gu) => !near.includes(gu));
+    const gus = [...near, ...aptOnly];
     if (!gus.length) {
       ctx.log('온비드: 켜진 지역이 서울 구에 닿지 않아 건너뜁니다');
       return [];
     }
+    if (aptOnly.length) ctx.log(`온비드: 서울 아파트 탭에서 고른 ${aptOnly.join(', ')}는 아파트만 남깁니다`);
     const { session } = ctx;
     const page = session.page;
     const before = page.viewportSize();
@@ -194,8 +200,9 @@ export const onbid: Collector = {
       await confirm('scrh_usg');
 
       const out: CollectedItem[] = [];
-      for (const gu of gus) {
-        ctx.progress(`온비드: '${gu}' 검색`);
+      /** 구 하나를 검색해 그 구 물건을 out에 더한다. onlyApt면 아파트만 남긴다. */
+      const searchGu = async (gu: string, onlyApt: boolean) => {
+        ctx.progress(`온비드: '${gu}' 검색${onlyApt ? '(아파트만)' : ''}`);
         await idle();
         const input = page.locator('#srchMapSwd');
         await session.click(input);
@@ -226,13 +233,29 @@ export const onbid: Collector = {
         }
         if (!Array.isArray(data.cltrClgVOList)) throw new Error('검색 결과를 읽지 못했습니다. 사이트 화면 구조가 바뀌었을 수 있습니다.');
         const rows = data.cltrClgVOList.filter((row) => (row.sidoSgkEmd ?? '').startsWith(`서울특별시 ${gu}`));
-        ctx.log(`온비드: ${gu} ${rows.length}건 (응답 ${data.cltrClgVOList.length}건)`);
         const screenshot = await session.screenshot('onbid', `지도검색 ${gu}`);
+        let kept = 0;
         for (const row of rows) {
           const listing = normalize(row);
-          if (listing) out.push({ listing, raw: row, pageUrl: MAP_URL, screenshot });
+          // 고른 구의 아파트는 반경 밖이어도 저장한다(서울 아파트 탭).
+          const apt = !!listing && aptGus.has(gu) && isApartmentType(listing.buildingType);
+          if (!listing || (onlyApt && !apt)) continue;
+          out.push({ listing, raw: row, pageUrl: MAP_URL, screenshot, aptGu: apt ? gu : undefined });
+          kept++;
         }
+        ctx.log(`온비드: ${gu} ${onlyApt ? `아파트 ${kept}건(그 구 ${rows.length}건 중)` : `${rows.length}건`} (응답 ${data.cltrClgVOList.length}건)`);
         await session.pause(800);
+      };
+      for (const gu of near) await searchGu(gu, false);
+      for (const gu of aptOnly) {
+        try {
+          await searchGu(gu, true);
+        } catch (e) {
+          // 고른 구(아파트만)는 그 구만 건너뛰고 계속한다(다 돈 것으로 보지 않아 그 구 물건이 '사라짐'이 되지 않는다).
+          if (e instanceof BlockedError) throw e;
+          ctx.log(`온비드: ${gu} 검색을 못 했습니다(${e instanceof Error ? e.message.split('\n')[0] : String(e)})`);
+          ctx.partial(`온비드 ${gu}`);
+        }
       }
       return out;
     } finally {

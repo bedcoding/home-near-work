@@ -14,7 +14,7 @@ import { parseNaverList } from './naver-parse.js';
 import { notify } from './notify.js';
 import { applyResults } from './runner.js';
 import type { CollectedItem } from './collectors/types.js';
-import type { RunSourceSummary } from '../shared/types.js';
+import { isApartmentType, seoulGuOf, type NormalizedListing, type RunSourceSummary } from '../shared/types.js';
 
 export const NAVER_SNAPSHOT_DIR = path.join(DATA_DIR, 'naver-snapshots');
 const EXTENSION_MANIFEST = path.join(ROOT, 'extension', 'manifest.json');
@@ -335,6 +335,13 @@ export function processPendingDabangCaptures(): { fetched: number; newCount: num
   return result;
 }
 
+/** 서울 아파트 탭에서 고른 구(aptGus)의 아파트 매매 매물이면 그 구(반경 밖이어도 저장한다). */
+function naverAptGu(listing: NormalizedListing, aptGus: string[]): string | undefined {
+  if (!isApartmentType(listing.buildingType) || !listing.prices.some((p) => p.deal === 'sale')) return undefined;
+  const gu = /서울/.test(listing.address ?? '') ? seoulGuOf(listing.address) : null;
+  return gu && aptGus.includes(gu) ? gu : undefined;
+}
+
 /**
  * 아직 읽지 않은 네이버 응답 중 매물 목록을 매물로 바꿔 저장한다.
  * 동그라미(묶음)를 누르면 그 묶음 번호(clusterId)와 안의 매물 목록이 함께 온다.
@@ -345,6 +352,7 @@ export function processPendingNaverCaptures() {
   const pending = store.pendingNaverCaptures();
   if (!pending.length) return;
   const areas = store.enabledAreas();
+  const aptGus = store.aptGus();
   const marks = readMarks();
   const views = readViews();
   let marked = false;
@@ -374,7 +382,7 @@ export function processPendingNaverCaptures() {
       /* 요청 본문이 JSON이 아니면 묶음 번호 없이 저장한다 */
     }
     const seenBefore = clusterId ? store.naverCluster(clusterId) : null;
-    const items: CollectedItem[] = parsed.items.map((i) => ({ listing: i.listing, raw: i.raw, pageUrl: row.pageUrl, screenshot: null }));
+    const items: CollectedItem[] = parsed.items.map((i) => ({ listing: i.listing, raw: i.raw, pageUrl: row.pageUrl, screenshot: null, aptGu: naverAptGu(i.listing, aptGus) }));
     const runId = captureRunId();
     const summary = applyResults(runId, 'naver', items, areas, false, undefined, {
       status: 'ok',

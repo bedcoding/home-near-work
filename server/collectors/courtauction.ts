@@ -5,13 +5,14 @@ import { PAGE_DELAY_MS } from '../config.js';
 import { gusFor } from './gus.js';
 import { BlockedError, toNumber, type Collector, type CollectedItem } from './types.js';
 import { floorText, money } from '../../shared/format.js';
-import { LAND_PREFIX, SHOP_PREFIX, type ExplainRow, type NormalizedListing } from '../../shared/types.js';
+import { isApartmentType, LAND_PREFIX, SHOP_PREFIX, type ExplainRow, type NormalizedListing } from '../../shared/types.js';
 
 // 법원경매정보(매일 01:00~06:00 서비스 중단).
 // 검색 화면에서 소재지(지번주소) → 서울특별시 → 구 → 용도(건물 > 주거용건물, 건물 > 상업용및업무용, 토지)를 차례로 고르고 검색한다.
 // 데이터는 그때 화면이 불러오는 검색 응답을 같이 읽는다.
 // 매각기일 기간은 화면마다 정해져 있다: 물건상세검색은 오늘부터 14일, 매각예정물건은 15일 뒤부터 60일 뒤까지(기본값이 그 범위).
 // 그래서 구마다 두 화면을 차례로 본다. 두 화면의 결과 화면·검색 응답은 같다.
+// 켜진 지역 근처 구는 세 용도를 다 보고, 서울 아파트 탭에서 고른 구 중 근처가 아닌 구는 주거용 건물만 검색해 아파트만 남긴다.
 
 export const FORM_URL = 'https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ151F00.xml';
 /** 매각예정물건(15일 뒤부터 60일 뒤까지 매각기일) 검색 화면 */
@@ -245,11 +246,23 @@ export const courtauction: Collector = {
     const { session } = ctx;
     const page = session.page;
     const items: CollectedItem[] = [];
-    const gus = gusFor(ctx.areas);
+    const near = gusFor(ctx.areas);
+    const aptGus = new Set(ctx.aptGus);
+    /** 고른 구 중 근처가 아닌 구: 주거용 건물만 검색해 아파트만 남긴다 */
+    const aptOnly = ctx.aptGus.filter((gu) => !near.includes(gu));
+    const plan = [
+      ...near.map((gu) => ({ gu, searches: [...SEARCHES], onlyApt: false })),
+      ...aptOnly.map((gu) => ({ gu, searches: [SEARCHES[0]], onlyApt: true })),
+    ];
     ctx.log(
-      gus.length
-        ? `법원경매: 소재지 ${gus.join(', ')}의 주거용 건물, 상업용 건물, 토지를 검색합니다`
-        : '법원경매: 켜진 지역 근처에 서울 역이 없어 구를 정하지 못해 건너뜁니다(검색은 서울특별시만 합니다)',
+      [
+        near.length
+          ? `법원경매: 소재지 ${near.join(', ')}의 주거용 건물, 상업용 건물, 토지를 검색합니다`
+          : `법원경매: 켜진 지역 근처에 서울 역이 없어 근처 구를 정하지 못했습니다(검색은 서울특별시만 합니다)${aptOnly.length ? '' : '. 건너뜁니다'}`,
+        aptOnly.length ? `서울 아파트 탭에서 고른 ${aptOnly.join(', ')}는 주거용 건물을 검색해 아파트만 남깁니다` : '',
+      ]
+        .filter(Boolean)
+        .join('. '),
     );
 
     const readRows = async (response: Response | null) => {
@@ -319,25 +332,28 @@ export const courtauction: Collector = {
       return found;
     };
 
-    for (const [i, gu] of gus.entries()) {
+    for (const [i, { gu, searches, onlyApt }] of plan.entries()) {
       const rows = new Map<string, any>();
       /** 목록 행 번호(docid) → 그 행을 읽은 화면 주소와 스크린샷 */
       const seenOn = new Map<string, { url: string; shot: string | null }>();
       /** 검색 종류(주거, 상가, 토지)마다 찾은 목록 행 번호 */
       const idsOf = { home: new Set<string>(), shop: new Set<string>(), land: new Set<string>() };
       for (const screen of SCREENS) {
-        for (const search of SEARCHES) {
+        for (const search of searches) {
           const usage = searchName(search);
           let found: Map<string, any> | null = null;
           try {
-            found = await searchScreen(screen, gu, `(${i + 1}/${gus.length})`, search);
+            found = await searchScreen(screen, gu, `(${i + 1}/${plan.length})`, search);
           } catch (e) {
-            // 첫 화면 검색이 안 되면 이 소스를 멈추고, 매각예정물건만 안 되면 앞 화면 결과로 계속한다.
-            if (e instanceof BlockedError || screen === SCREENS[0]) throw e;
+            // 근처 구는 첫 화면 검색이 안 되면 이 소스를 멈추고, 매각예정물건만 안 되면 앞 화면 결과로 계속한다.
+            // 고른 구(아파트만)는 그 화면만 건너뛰고 계속한다(다 돈 것으로 보지 않아 그 구 물건이 '사라짐'이 되지 않는다).
+            if (e instanceof BlockedError || (screen === SCREENS[0] && !onlyApt)) throw e;
             ctx.log(`법원경매: ${gu} ${screen.name} ${usage}를 보지 못했습니다(${e instanceof Error ? e.message.split('\n')[0] : String(e)})`);
+            if (onlyApt) ctx.partial(`법원경매 ${gu} ${screen.name}`);
           }
           if (!found) {
             ctx.log(`법원경매: ${gu} ${screen.name} ${usage} 검색 응답을 받지 못했습니다`);
+            if (onlyApt) ctx.partial(`법원경매 ${gu} ${screen.name}`);
             continue;
           }
           const shot = await session.screenshot('courtauction', `${gu} ${screen.name} ${usage}`);
@@ -361,7 +377,10 @@ export const courtauction: Collector = {
         // 상업용 검색에만 나온 물건은 경매 탭 상가 칸에, 땅만 파는 물건은 토지 칸에 보이도록 용도 앞에 표시를 붙인다(주거용 검색에도 나오면 주거).
         if (landOnly) listing.buildingType = `${LAND_PREFIX}${listing.buildingType ?? '토지'}`;
         else if (inShop && !inHome) listing.buildingType = `${SHOP_PREFIX}${listing.buildingType ?? '상가'}`;
-        items.push({ listing, raw: lot.length === 1 ? lot[0] : lot, pageUrl: at?.url ?? FORM_URL, screenshot: at?.shot ?? null });
+        // 고른 구의 아파트는 반경 밖이어도 저장한다(서울 아파트 탭). 근처가 아닌 고른 구에서는 아파트만 남긴다.
+        const apt = inHome && aptGus.has(gu) && isApartmentType(listing.buildingType);
+        if (onlyApt && !apt) continue;
+        items.push({ listing, raw: lot.length === 1 ? lot[0] : lot, pageUrl: at?.url ?? FORM_URL, screenshot: at?.shot ?? null, aptGu: apt ? gu : undefined });
       }
     }
     return items;
