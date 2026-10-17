@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
-  hasHomeListings, inGus, nearReason, noticeSection, noticeSourcesOf, SOURCE_LABEL,
+  COLLECT_MARGIN_M, hasHomeListings, inGus, nearReason, noticeSection, noticeSourcesOf, SOURCE_LABEL,
   type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type DealType, type ExplainRow, type HouseTradeSummary, type ListingView,
   type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type SourceId, type Verdict,
 } from '../../shared/types';
@@ -9,6 +9,7 @@ import { api } from './api';
 import { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, loadFilters, passes, saveFilters, type Filters } from './filters';
 import { dateTime, distanceM, radiusText } from './format';
 import AlertsTab from './components/AlertsTab.vue';
+import AptView from './components/AptView.vue';
 import AreaSettings from './components/AreaSettings.vue';
 import AuctionView from './components/AuctionView.vue';
 import FilterPanel from './components/FilterPanel.vue';
@@ -22,6 +23,7 @@ import SitesTab from './components/SitesTab.vue';
 import SubscriptionsView from './components/SubscriptionsView.vue';
 import SupportView from './components/SupportView.vue';
 import { loadCatalog, setAreaEnabled, toggleStationArea, type CatalogStation } from './areaActions';
+import { aptKindOf } from './apt';
 import { auctionKindOf, inAuctionKind, isAuction, originalUrl, sortAuctions, type AuctionKind } from './auction';
 import { kindOf } from './kinds';
 import { MODULAR_LINKS } from './modular';
@@ -29,8 +31,8 @@ import { isPastNotice } from './notices';
 import { isRoomStay, sortRooms } from './rooms';
 import { siteLinks } from './siteLinks';
 
-type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'subs' | 'rooms' | 'notices' | 'support' | 'sites' | 'runs' | 'areas' | 'alerts';
-const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'subs', 'rooms', 'notices', 'support', 'sites', 'runs', 'areas', 'alerts'];
+type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'apt' | 'subs' | 'rooms' | 'notices' | 'support' | 'sites' | 'runs' | 'areas' | 'alerts';
+const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'apt', 'subs', 'rooms', 'notices', 'support', 'sites', 'runs', 'areas', 'alerts'];
 
 /** 머리 줄 높이(px). 필터 칸이 그 아래에 붙어 따라 내려온다(--app-header-height). */
 const headerEl = ref<HTMLElement | null>(null);
@@ -131,10 +133,17 @@ const inSite = (l: ListingView) => site.value === 'all' || l.source === site.val
 const usesSiteTabs = computed(() => tab.value === 'star' || tab.value === 'hidden');
 
 const current = computed(() => listings.value.filter((l) => l.status === 'active' && l.verdict !== 'discard'));
+/** 켜진 지역 반경(+모을 때 여유) 안인지. 위치를 모르면 밖으로 본다. */
+const insideMargin = (l: ListingView) =>
+  l.lat != null && l.lng != null && areas.value.some((a) => distanceM(a.lat, a.lng, l.lat!, l.lng!) <= a.radiusM + COLLECT_MARGIN_M);
+/** 서울 아파트 탭에서만 보는 매물: 서울 아파트 경매·공매·매매 중 켜진 지역 반경(+여유) 밖(고른 구라서 모은 것) */
+const farApt = (l: ListingView) => !!l.apt && aptKindOf(l) !== null && !insideMargin(l);
+/** 회사 근처 탭(매물, 경매, 집터, 고시원과 쉐어)에 보이는 매물: 먼 서울 아파트는 뺀다 */
+const nearCurrent = computed(() => current.value.filter((l) => !farApt(l)));
 /** 매물이 보이는 곳: 매매와 전월세(매물 탭), 경매 탭, 고시원과 쉐어 탭. 관심과 숨김함에는 모두 보인다. */
 type Section = 'home' | 'auction' | 'room';
 const sectionOf = (l: ListingView): Section => (isAuction(l) ? 'auction' : isRoomStay(l) ? 'room' : 'home');
-const homes = computed(() => current.value.filter((l) => sectionOf(l) === 'home'));
+const homes = computed(() => nearCurrent.value.filter((l) => sectionOf(l) === 'home'));
 /** 필터 거래 유형 칸: 단기는 단기 매물이 있을 때(지역 반경 밖 포함, 거래 유형 필터는 빼고)나 골라 둔 때만 보인다. */
 const dealChoices = computed<DealType[]>(() => {
   const loose = { ...filters.value, deals: [], insideAreas: false };
@@ -179,7 +188,7 @@ const shopFilters = computed<Filters>(() => ({
   text: filters.value.text,
 }));
 const auctionFilterOf = (l: ListingView) => (auctionKindOf(l) === 'home' ? auctionFilters.value : shopFilters.value);
-const auctionsAll = computed(() => current.value.filter((l) => sectionOf(l) === 'auction'));
+const auctionsAll = computed(() => nearCurrent.value.filter((l) => sectionOf(l) === 'auction'));
 /** 경매 탭에서 고른 종류(주거, 상가). 다음에 열어도 유지한다. 단독과 토지는 집터 탭에서 본다. */
 const AUCTION_KINDS: AuctionKind[] = ['home', 'shop'];
 const savedKind = localStorage.getItem('hnw-auction-kind') as AuctionKind | null;
@@ -285,10 +294,36 @@ const plotKinds = computed(() => {
   return { ...auctionKinds.value, house: count('house'), land: count('land') };
 });
 
+// ---------- 서울 아파트 ----------
+/** 서울 아파트 탭: 서울 아파트 경매·공매·매매 매물(고른 구라서 모은 먼 것과 회사 근처 것 모두). 필터는 탭 안에 따로 있다. */
+const aptAll = computed(() => current.value.filter((l) => !!l.apt && aptKindOf(l) !== null));
+/** 서울 아파트 탭에서 보이는 매물(화면 순서). 키보드 이동에 쓴다. */
+const aptVisible = ref<ListingView[]>([]);
+/** 서울 아파트 탭에서 고른 구를 바꾼다(다음 조회부터 그 구의 아파트를 모음). */
+async function setAptGus(gus: string[]) {
+  error.value = null;
+  try {
+    await api.setAptGus(gus);
+    await refreshState();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+/** 단지 세대수를 넣거나 지운다(같은 단지 물건에 같이 보임). */
+async function setHouseholds(key: string, name: string, households: number | null) {
+  error.value = null;
+  try {
+    await api.setHouseholds(key, name, households);
+    await refreshListings();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
 // ---------- 고시원과 쉐어 ----------
 /** 고시원과 쉐어 탭은 거래 유형, 매물 유형, 무옵션 필터를 보지 않는다(모두 월세이고, 종류는 탭 안 종류 칸으로 고름). */
 const roomFilters = computed(() => ({ ...filters.value, deals: [], kinds: [], noOptionsOnly: false }));
-const roomsAll = computed(() => current.value.filter((l) => sectionOf(l) === 'room'));
+const roomsAll = computed(() => nearCurrent.value.filter((l) => sectionOf(l) === 'room'));
 const rooms = computed(() => sortRooms(roomsAll.value.filter((l) => passes(l, roomFilters.value, areas.value))));
 const roomsOutside = computed(() => outsideCount(roomsAll.value, roomFilters.value, rooms.value.length));
 /** 고시원과 쉐어 탭에서 고른 종류의 매물(화면 순서). 키보드 이동에 쓴다. */
@@ -343,7 +378,9 @@ async function ackNotices(ids: number[]) {
 const overviewVisible = ref<ListingView[]>([]);
 const overview = ref<InstanceType<typeof Overview> | null>(null);
 
-const lists: Partial<Record<Tab, { readonly value: ListingView[] }>> = { overview: overviewVisible, star: starred, hidden, auction: auctions, plot: plotList, rooms: roomsVisible };
+const lists: Partial<Record<Tab, { readonly value: ListingView[] }>> = {
+  overview: overviewVisible, star: starred, hidden, auction: auctions, plot: plotList, apt: aptVisible, rooms: roomsVisible,
+};
 const currentList = computed(() => lists[tab.value]?.value ?? []);
 const selectedId = computed(() => currentList.value[selected.value]?.id ?? null);
 const selectedListing = computed(() => currentList.value[selected.value] ?? null);
@@ -361,6 +398,7 @@ function setVisible(target: { value: ListingView[] }, owner: Tab, list: ListingV
 }
 const setOverviewVisible = (list: ListingView[]) => setVisible(overviewVisible, 'overview', list);
 const setRoomsVisible = (list: ListingView[]) => setVisible(roomsVisible, 'rooms', list);
+const setAptVisible = (list: ListingView[]) => setVisible(aptVisible, 'apt', list);
 
 function selectListing(l: ListingView) {
   const i = currentList.value.findIndex((x) => x.id === l.id);
@@ -692,6 +730,10 @@ const tabs = computed<{ id: Tab; label: string; count: number | null; news?: num
     title: '집을 지을 땅이나 헐고 지을 헌 집: 단독주택과 토지의 경매, 매매 매물, 실거래, LH 토지 공고', main: true,
   },
   {
+    id: 'apt', label: '서울 아파트', count: aptAll.value.length, news: aptAll.value.filter(hasNews).length,
+    title: '고른 서울 구의 아파트 경매, 공매, 매매(회사와 멀어도). 세대수와 살 때 붙는 조건(실거주, 대출, 양도세)', main: true,
+  },
+  {
     id: 'subs', label: '청약', count: subNotices.value.filter((n) => !isPastNotice(n)).length, news: subNotices.value.filter((n) => n.isNew).length,
     title: '서울 청약(분양) 공고: 접수 예정과 접수중', main: true,
   },
@@ -716,6 +758,7 @@ const moreTabs = computed(() => tabs.value.filter((t) => !t.main));
 
 /**
  * 탭마다 필터 칸에서 안 쓰는 칸(흐리게 보임). 'all'은 필터를 안 쓰는 탭이라 모든 칸이 흐리다(칸은 그 자리에 그대로 있다).
+ * 서울 아파트 탭은 회사 근처 조건이 맞지 않아 탭 안에 필터(종류, 구, 세대수, 가격)를 따로 둔다.
  * 경매 탭은 거래 유형을 안 보고, 상가는 지역과 검색어만 본다. 집터 탭은 단독이면 경매 탭 주거와 같고 토지는 상가와 같다.
  * 고시원과 쉐어는 거래 유형과 매물 유형, 임대 공고는 '지역 반경 안만'만 본다.
  */
@@ -724,6 +767,7 @@ const filterUse = computed<string[] | 'all'>(() => {
     case 'star':
     case 'hidden':
     case 'subs':
+    case 'apt':
     case 'support':
     case 'runs':
     case 'sites':
@@ -932,6 +976,13 @@ const emptyText: Partial<Record<Tab, string>> = {
           @ack-notices="ackNotices" @run="startRun(['courtauction', 'onbid'])"
         />
       </template>
+      <AptView
+        v-else-if="tab === 'apt'" :listings="aptAll" :areas="areas" :selected-id="selectedId" :running="!!running"
+        :apt-gus="state?.aptGus ?? []" :near-gus="state?.gus ?? []" :region-stats="auctionResults.stats"
+        @visible="setAptVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
+        @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @pick="addPickedArea" @area="turnOffArea"
+        @run="startRun(['courtauction', 'onbid'])" @gus="setAptGus" @households="setHouseholds"
+      />
       <template v-else-if="tab === 'rooms'">
         <RoomsView
           ref="roomsView" :listings="rooms" :outside="roomsOutside" :areas="areas" :selected-id="selectedId"

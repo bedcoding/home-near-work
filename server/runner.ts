@@ -13,7 +13,7 @@ import { comparePrices, identityKey, priceSignature } from './identity.js';
 import { notify } from './notify.js';
 import { priceText } from '../shared/format.js';
 import {
-  inGus, listingSection, nearReason, noticeSection, noticeSourcesOf, regionalSection,
+  inGus, listingSection, nearReason, noticeSection, noticeSourcesOf, regionalSection, SEOUL_GUS,
   type Area, type NormalizedListing, type NoticeSection, type RunProgress, type RunSourceSummary, type RunSummary, type SourceId,
 } from '../shared/types.js';
 
@@ -124,7 +124,10 @@ export interface ApplyOptions {
   news?: NewsItem[];
 }
 
-/** 받은 매물을 저장하고 신규·가격 변동·재등록을 판정한다. 모든 소스가 이 함수 하나를 거친다. */
+/**
+ * 받은 매물을 저장하고 신규·가격 변동·재등록을 판정한다. 모든 소스가 이 함수 하나를 거친다.
+ * 켜진 지역 반경(+여유) 밖 매물은 저장하지 않는다. 다만 서울 아파트 탭에서 고른 구의 아파트(aptGu)는 저장한다.
+ */
 export function applyResults(
   runId: number,
   source: SourceId,
@@ -137,22 +140,26 @@ export function applyResults(
   const status = options.status ?? (complete ? 'ok' : 'error');
   const summary: RunSourceSummary = { source, status, fetched: items.length, kept: 0, newCount: 0, priceChanged: 0, relisted: 0, baselineAreas: [], error };
   // 기준점은 소스와 지역마다 둔다. 경매의 상가와 토지는 '<소스>:shop', '<소스>:land'로 따로 둔다(나중에 모으기 시작해도 처음 것은 기준만).
+  // 지역 밖에서 모은 고른 구의 아파트는 '<소스>:apt'로 구마다 둔다(자리 번호 store.aptSpot, 구를 새로 고르면 그 구의 처음 것은 기준만).
   const baseKeyOf = (l: NormalizedListing) => {
     const section = listingSection(l);
     return section === 'shop' || section === 'land' ? `${source}:${section}` : source;
   };
-  /** 기준점 키 → 아직 기준점이 없는 지역 */
-  const lacking = new Map<string, Set<number>>();
-  const lackingFor = (key: string) => {
-    let set = lacking.get(key);
-    if (!set) {
-      set = new Set(areas.filter((a) => !store.hasBaseline(key, a.id)).map((a) => a.id));
-      lacking.set(key, set);
+  /** '기준점 키|자리 번호' → 이번 조회 전에 그 자리에 기준점이 없었는지(자리는 켜진 지역 번호나 store.aptSpot) */
+  const lackCache = new Map<string, boolean>();
+  const lacks = (key: string, spot: number) => {
+    const k = `${key}|${spot}`;
+    let v = lackCache.get(k);
+    if (v === undefined) {
+      v = !store.hasBaseline(key, spot);
+      lackCache.set(k, v);
     }
-    return set;
+    return v;
   };
-  /** '기준점 키|지역 번호' → 이번에 그 지역에 저장한 매물 수 */
+  /** '기준점 키|자리 번호' → 이번에 그 자리에 저장한 매물 수 */
   const keptPerKey = new Map<string, number>();
+  /** keptPerKey 키를 기준점 키와 자리 번호로 */
+  const splitKey = (k: string): [string, number] => [k.slice(0, k.lastIndexOf('|')), Number(k.slice(k.lastIndexOf('|') + 1))];
   const discarded = store.allVerdicts().filter((v) => v.verdict === 'discard');
   const discardedByKey = new Map(discarded.map((v) => [v.identity_key, v.listing_id]));
   const discardedIds = new Set(discarded.map((v) => v.listing_id));
@@ -161,9 +168,9 @@ export function applyResults(
   const keptPerArea = new Map<number, number>();
 
   store.db.transaction(() => {
-    for (const { listing, raw, pageUrl, screenshot } of unique.values()) {
+    for (const { listing, raw, pageUrl, screenshot, aptGu } of unique.values()) {
       const area = coveringArea(areas, listing.lat, listing.lng);
-      if (!area) {
+      if (!area && !aptGu) {
         // 반경(+여유) 밖이라 저장하지 않은 매물도 조회 기록에 남겨, 조용히 사라지는 매물이 없게 한다.
         const near = nearestArea(areas, listing.lat, listing.lng);
         store.addExcluded(runId, {
@@ -179,8 +186,9 @@ export function applyResults(
         continue;
       }
       summary.kept += 1;
-      const baseKey = baseKeyOf(listing);
-      keptPerKey.set(`${baseKey}|${area.id}`, (keptPerKey.get(`${baseKey}|${area.id}`) ?? 0) + 1);
+      const baseKey = area ? baseKeyOf(listing) : `${source}:apt`;
+      const spot = area ? area.id : store.aptSpot(aptGu!);
+      keptPerKey.set(`${baseKey}|${spot}`, (keptPerKey.get(`${baseKey}|${spot}`) ?? 0) + 1);
       const id = `${source}:${listing.sourceId}`;
       seen.add(id);
       const key = identityKey(listing);
@@ -195,7 +203,7 @@ export function applyResults(
         if (change) {
           store.addEvent(runId, id, change, { before, after: listing.prices });
           summary.priceChanged += 1;
-          if (!discardedIds.has(id)) options.news?.push({ type: 'listing', listing, changed: true });
+          if (!discardedIds.has(id)) options.news?.push({ type: 'listing', listing, changed: true, aptGu });
         }
         continue;
       }
@@ -207,10 +215,10 @@ export function applyResults(
         store.setVerdict(id, 'discard', `relisted:${original}`);
         store.addEvent(runId, id, 'relisted_hidden', { original });
         summary.relisted += 1;
-      } else if (options.isBaseline ? !options.isBaseline(listing) : !lackingFor(baseKey).has(area.id)) {
+      } else if (options.isBaseline ? !options.isBaseline(listing) : !lacks(baseKey, spot)) {
         store.addEvent(runId, id, 'new');
         summary.newCount += 1;
-        options.news?.push({ type: 'listing', listing, changed: false });
+        options.news?.push({ type: 'listing', listing, changed: false, aptGu });
       }
     }
 
@@ -223,23 +231,29 @@ export function applyResults(
         .map((r) => r.id);
       store.markGone(gone);
     }
-    // 기준점은 이번에 실제로 매물을 받은 지역만 저장한다(못 받았는데 저장하면 다음 조회에서 전부 '신규'가 된다).
+    // 기준점은 이번에 실제로 매물을 받은 자리만 저장한다(못 받았는데 저장하면 다음 조회에서 전부 '신규'가 된다).
     if (!options.isBaseline) {
-      for (const [key, set] of lacking) {
-        for (const areaId of set) if (keptPerKey.get(`${key}|${areaId}`)) store.setBaseline(key, areaId, runId);
+      for (const k of keptPerKey.keys()) {
+        const [key, spot] = splitKey(k);
+        if (lacks(key, spot)) store.setBaseline(key, spot, runId);
       }
     }
   })();
-  summary.baselineAreas = options.isBaseline
-    ? []
-    : areas
-        .filter((a) => [...lacking].some(([key, set]) => set.has(a.id) && keptPerKey.get(`${key}|${a.id}`)))
+  if (!options.isBaseline) {
+    /** 이번에 새로 기준을 잡은 [기준점 키, 자리 번호] */
+    const fresh = [...keptPerKey.keys()].map(splitKey).filter(([key, spot]) => lacks(key, spot));
+    summary.baselineAreas = [
+      ...areas
+        .filter((a) => fresh.some(([, spot]) => spot === a.id))
         .map((a) => {
-          const keys = [...lacking].filter(([key, set]) => set.has(a.id) && keptPerKey.get(`${key}|${a.id}`)).map(([key]) => key);
+          const keys = fresh.filter(([, spot]) => spot === a.id).map(([key]) => key);
           // 주거 기준점 없이 상가나 토지만 새로 기준을 잡았으면 이름 뒤에 표시한다.
           const kinds = [...new Set(keys.map((k) => (k.endsWith(':shop') ? '상가' : k.endsWith(':land') ? '토지' : '')))];
           return kinds.includes('') ? a.name : `${a.name}(${kinds.join(', ')})`;
-        });
+        }),
+      ...SEOUL_GUS.filter((gu) => fresh.some(([, spot]) => spot === store.aptSpot(gu))).map((gu) => `${gu} 아파트`),
+    ];
+  }
   return summary;
 }
 
@@ -321,7 +335,9 @@ async function execute(
     state.session = session;
     // 브라우저를 여는 사이에 멈춤을 눌렀으면 바로 닫는다.
     if (state.stopping) await session.close();
-    const ctx = {
+    /** 지금 도는 사이트가 일부(고른 구 하나 등)를 보지 못한 까닭 */
+    let missed: string[] = [];
+    const ctx: CollectContext = {
       runId,
       areas,
       session,
@@ -331,12 +347,19 @@ async function execute(
         state.message = message;
         void session!.banner(message);
       },
+      aptGus: store.aptGus(),
+      partial: (reason: string) => {
+        missed.push(reason);
+      },
     };
     for (const collector of collectors) {
       if (state.stopping) break;
       let items: CollectedItem[] = [];
       let complete = true;
       let error: string | undefined;
+      /** 일부만 못 보고 끝났다(실패로 치지 않음) */
+      let partOnly = false;
+      missed = [];
       try {
         items = await collector.collect(ctx);
         if (state.stopping) {
@@ -349,6 +372,12 @@ async function execute(
           complete = false;
           error = '받은 매물이 0건입니다. 사이트 화면 구조가 바뀌었을 수 있습니다.';
           log(`${collector.label} 경고: ${error}`);
+        } else if (missed.length) {
+          // 일부를 못 봤으면 받은 것은 저장하되 '사라짐' 처리는 하지 않는다(실패로는 치지 않는다).
+          complete = false;
+          partOnly = true;
+          error = `일부를 보지 못함: ${[...new Set(missed)].join(', ')}`;
+          log(`${collector.label}: ${error}`);
         }
       } catch (e) {
         complete = false;
@@ -356,10 +385,16 @@ async function execute(
         error = state.stopping ? '중단함' : e instanceof Error ? e.message.split('\n')[0] : String(e);
         log(state.stopping ? `${collector.label}: 중단함` : `${collector.label} ${e instanceof BlockedError ? '차단' : '오류'}: ${error}`);
       }
-      const summary = applyResults(runId, collector.id, items, areas, complete, error, { goneOutsideRadius: collector.wholeDistrict, news });
+      const summary = applyResults(runId, collector.id, items, areas, complete, error, {
+        goneOutsideRadius: collector.wholeDistrict,
+        news,
+        // 일부만 못 본 것은 실패로 치지 않는다(받은 것은 그대로 쓰고, 기록에 까닭이 남음).
+        status: complete || partOnly ? 'ok' : 'error',
+      });
       summaries.push(summary);
       const baseline = summary.baselineAreas.length ? `, 기준점 저장: ${summary.baselineAreas.join(', ')}` : '';
-      log(`${collector.label}: 받은 ${summary.fetched}건, 지역 안 ${summary.kept}건, 신규 ${summary.newCount}, 가격 변동 ${summary.priceChanged}, 재등록 숨김 ${summary.relisted}${baseline}`);
+      const kept = ctx.aptGus.length ? '지역 안과 고른 구 아파트' : '지역 안';
+      log(`${collector.label}: 받은 ${summary.fetched}건, ${kept} ${summary.kept}건, 신규 ${summary.newCount}, 가격 변동 ${summary.priceChanged}, 재등록 숨김 ${summary.relisted}${baseline}`);
     }
     // 법원경매를 돈 조회는 매각 결과(지난 매각기일의 매각대금, 유찰)와 지역별 매각통계도 모은다.
     // 공고만 확인도 매각 결과를 모은 지 오래됐으면(courtResultsDue) 모은다.
@@ -398,6 +433,8 @@ async function execute(
     const summary = finish('done', null);
     log('조회 끝');
     const covered = coveredRows(collectors.map((c) => c.id), plan.notices.map((nc) => nc.id));
+    // 고른 구가 없으면 서울 아파트 경매 줄은 이번에 확인한 것이 아니다.
+    if (!ctx.aptGus.length) covered.delete('aptAuction');
     for (const alert of buildAlerts({ news: shown, sources: summary.sources, areas, settings: alertSettings(), quiet: quiet || noticesOnly, covered })) {
       notify(alert.title, alert.message, alert.url);
     }

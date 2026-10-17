@@ -3,8 +3,9 @@ import { toNumber } from './collectors/types.js';
 import { looksSimilar } from './identity.js';
 import { manwon } from '../shared/format.js';
 import {
-  isDetachedHouseType, NOTICE_SHORT, noticeSourcesOf, SEOUL, type AuctionResultSummary, type AuctionResultView, type AuctionSummaryKind, type ListingView,
-  type NormalizedListing, type NoticeFacts, type NoticeView, type PriceChangeType, type PriceOption, type RatioStats, type TrustDocRound, type TrustDocView,
+  isApartmentType, isDetachedHouseType, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seoulGuOf, type AptInfo, type AuctionResultSummary, type AuctionResultView,
+  type AuctionSummaryKind, type ListingView, type NormalizedListing, type NoticeFacts, type NoticeView, type PriceChangeType, type PriceOption, type RatioStats,
+  type TrustDocRound, type TrustDocView,
 } from '../shared/types.js';
 
 type CourtRow = {
@@ -82,6 +83,56 @@ function onbidRef(raw: unknown): ListingView['auction'] {
   };
 }
 
+/** 주소 글자에서 법정동 바로 뒤의 지번('316', '123-4', 산이면 '산12'). 못 찾으면 null. */
+function jibunAfter(address: string, dong: string): string | null {
+  const name = dong.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = new RegExp(`${name}\\s*(산\\s*)?(\\d+(?:-\\d+)?)`).exec(address);
+  return m ? `${m[1] ? '산' : ''}${m[2]}` : null;
+}
+
+/** 단지 이름 자리: 주소에서 '서울특별시'를 빼고 건물 동·층·호 앞까지('강남구 대치동 316 은마아파트 제12동 제3층' → '강남구 대치동 316 은마아파트') */
+function complexNameOf(address: string): string {
+  const plain = address.replace(/^서울(특별)?시\s*/, '').replace(/\s+/g, ' ').trim();
+  const cut = plain.search(/\s(제\s*)?[0-9A-Za-z가-힣]*\d+\s*동(?=[\s,]|$)|\s(제\s*)?(지하\s*)?\d+\s*층|\s(제\s*)?\d+\s*호/);
+  return (cut > 0 ? plain.slice(0, cut) : plain).replace(/[,\s]+$/, '');
+}
+
+/**
+ * 서울 아파트면 구, 단지 키와 이름, 직접 넣은 세대수, 온비드 재산 종류(AptInfo). 아파트가 아니거나 서울 구를 모르면 null.
+ * 단지 키: 법원경매·온비드는 구, 법정동, 주소의 지번('lot:강남구 대치동 316'), 네이버는 단지 번호('nv:1234'), 못 정하면 매물 하나('id:…').
+ */
+function aptRef(id: string, source: string, l: NormalizedListing, raw: unknown, households: Map<string, number>): AptInfo | null {
+  if (!isApartmentType(l.buildingType)) return null;
+  const address = l.address ?? '';
+  let gu: string | null = null;
+  let complexKey: string | null = null;
+  let complexName = address ? complexNameOf(address) : l.title;
+  let property: string | null = null;
+  if (source === 'courtauction') {
+    const row = (Array.isArray(raw) ? raw[0] : raw) as CourtRow;
+    gu = typeof row?.hjguSigu === 'string' && SEOUL_GUS.includes(row.hjguSigu) ? row.hjguSigu : seoulGuOf(address);
+  } else if (source === 'onbid') {
+    const row = (raw ?? {}) as { sidoSgkEmd?: unknown; scrnPrptDvsnNm?: unknown };
+    const words = String(row.sidoSgkEmd ?? '').split(/\s+/);
+    gu = SEOUL_GUS.includes(words[1]) ? words[1] : seoulGuOf(address);
+    property = typeof row.scrnPrptDvsnNm === 'string' && row.scrnPrptDvsnNm.trim() ? row.scrnPrptDvsnNm.trim() : null;
+  } else {
+    gu = /서울/.test(address) ? seoulGuOf(address) : null;
+    if (source === 'naver') {
+      const rep = (raw as { representativeArticleInfo?: { complexNumber?: unknown; complexName?: unknown } } | null)?.representativeArticleInfo;
+      if (rep?.complexNumber != null && String(rep.complexNumber)) complexKey = `nv:${rep.complexNumber}`;
+      if (typeof rep?.complexName === 'string' && rep.complexName.trim()) complexName = rep.complexName.trim();
+    }
+  }
+  if (!gu) return null;
+  if (!complexKey && (source === 'courtauction' || source === 'onbid') && l.dong) {
+    const jibun = jibunAfter(address, l.dong);
+    if (jibun) complexKey = `lot:${gu} ${l.dong} ${jibun}`;
+  }
+  complexKey ??= `id:${id}`;
+  return { gu, complexKey, complexName: complexName.slice(0, 80), households: households.get(complexKey) ?? null, property };
+}
+
 const FULL_OPTION = /풀\s*옵션|풀옵/;
 const NO_OPTION = /무\s*옵션|노\s*옵션|옵션\s*없음/;
 
@@ -116,8 +167,9 @@ export function buildListingViews(): ListingView[] {
   const rows = store.allListings();
   const courtRaw = store.rawBySource('courtauction');
   const onbidRaw = store.rawBySource('onbid');
-  /** 옵션을 읽는 원본(집토스 옵션 목록, 피터팬 풀옵션 표시, 네이버 소개 글) */
+  /** 옵션을 읽는 원본(집토스 옵션 목록, 피터팬 풀옵션 표시, 네이버 소개 글과 단지 번호) */
   const optionRaw = new Map([...store.rawBySource('ziptoss'), ...store.rawBySource('peterpanz'), ...store.rawBySource('naver')]);
+  const households = store.complexHouseholds();
   const verdicts = new Map(store.allVerdicts().map((v) => [v.listing_id, v]));
   const events = store.unackedEvents();
   const newIds = new Set(events.filter((e) => e.type === 'new').map((e) => e.listing_id));
@@ -152,6 +204,7 @@ export function buildListingViews(): ListingView[] {
       seenRef: row.seen_ref ? JSON.parse(row.seen_ref) : null,
       auction: row.source === 'courtauction' ? auctionRef(courtRaw.get(row.id)) : row.source === 'onbid' ? onbidRef(onbidRaw.get(row.id)) : null,
       options: optionsRef(row.source, optionRaw.get(row.id), data.title ?? ''),
+      apt: aptRef(row.id, row.source, data, row.source === 'courtauction' ? courtRaw.get(row.id) : row.source === 'onbid' ? onbidRaw.get(row.id) : optionRaw.get(row.id), households),
     };
   });
 }

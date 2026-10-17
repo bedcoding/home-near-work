@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import Database from 'better-sqlite3';
 import { DATA_DIR, DB_PATH, RUNS_DIR } from './config.js';
 import { DEFAULT_AREAS, findStation } from './stations.js';
-import { CAPTURE_SOURCES } from '../shared/types.js';
+import { CAPTURE_SOURCES, SEOUL_GUS } from '../shared/types.js';
 import type {
   Area,
   AuctionResultKind,
@@ -334,12 +334,70 @@ CREATE TABLE IF NOT EXISTS house_trades (
 CREATE INDEX IF NOT EXISTS house_trades_date ON house_trades (contract_date);
 `);
 
+// 서울 아파트 탭에서 직접 넣은 단지 세대수. key는 AptInfo.complexKey('lot:강남구 대치동 316', 'nv:1234'), name은 넣을 때 보인 단지 이름이나 주소.
+db.exec(`
+CREATE TABLE IF NOT EXISTS apt_complexes (
+  key TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  households INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`);
+
 export function getSetting(key: string): string | null {
   return (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
 }
 
 export function setSetting(key: string, value: string) {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+}
+
+// ---------- 서울 아파트 탭 ----------
+
+/** 서울 아파트 탭에서 고른 구(설정 apt_gus, SEOUL_GUS 순서). 고른 적이 없으면 빈 배열. */
+export function aptGus(): string[] {
+  try {
+    const list: unknown = JSON.parse(getSetting('apt_gus') ?? '[]');
+    return Array.isArray(list) ? SEOUL_GUS.filter((gu) => list.includes(gu)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 지역 밖에서 모은 고른 구 아파트의 기준점 자리 번호(구마다 음수라 켜진 지역 번호와 겹치지 않는다). 기준점 키는 '<소스>:apt'. */
+export const aptSpot = (gu: string) => -(SEOUL_GUS.indexOf(gu) + 1);
+
+/**
+ * 서울 아파트 탭에서 고른 구를 통째로 바꾼다(서울 구가 아닌 이름은 버린다). 바뀐 목록을 돌려준다.
+ * 뺀 구는 아파트 기준점도 지운다(나중에 다시 고르면 그때 처음 본 것을 기준으로만 잡아 '신규'가 쏟아지지 않게).
+ */
+export function setAptGus(list: string[]): string[] {
+  const before = aptGus();
+  const next = SEOUL_GUS.filter((gu) => list.includes(gu));
+  db.transaction(() => {
+    setSetting('apt_gus', JSON.stringify(next));
+    const drop = db.prepare("DELETE FROM baselines WHERE source LIKE '%:apt' AND area_id = ?");
+    for (const gu of before) if (!next.includes(gu)) drop.run(aptSpot(gu));
+  })();
+  return next;
+}
+
+/** 직접 넣은 단지 세대수(단지 키 → 세대수) */
+export function complexHouseholds(): Map<string, number> {
+  const rows = db.prepare('SELECT key, households FROM apt_complexes').all() as { key: string; households: number }[];
+  return new Map(rows.map((r) => [r.key, r.households]));
+}
+
+/** 단지 세대수를 넣거나 고친다. households가 null이면 지운다. */
+export function setComplexHouseholds(key: string, name: string, households: number | null) {
+  if (households == null) {
+    db.prepare('DELETE FROM apt_complexes WHERE key = ?').run(key);
+    return;
+  }
+  db.prepare(
+    `INSERT INTO apt_complexes (key, name, households, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET name = excluded.name, households = excluded.households, updated_at = excluded.updated_at`,
+  ).run(key, name, households, nowIso());
 }
 
 // ---------- 공고 ----------
@@ -589,10 +647,7 @@ export function listingPlaces(): { address: string; lat: number; lng: number }[]
 }
 
 /** 서울 25개 구 */
-export const SEOUL_GUS = [
-  '종로구', '중구', '용산구', '성동구', '광진구', '동대문구', '중랑구', '성북구', '강북구', '도봉구', '노원구', '은평구', '서대문구',
-  '마포구', '양천구', '강서구', '구로구', '금천구', '영등포구', '동작구', '관악구', '서초구', '강남구', '송파구', '강동구',
-];
+export { SEOUL_GUS };
 
 export function newNoticeCount(): number {
   return (db.prepare('SELECT COUNT(*) AS n FROM notices WHERE is_new = 1 AND first_seen_at >= ?').get(newsSince()) as { n: number }).n;
