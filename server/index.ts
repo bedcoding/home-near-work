@@ -10,6 +10,7 @@ import { DASHBOARD_URL, HOST, PORT, RUNS_DIR, WEB_DIST } from './config.js';
 import * as store from './db.js';
 import { openCourtItem } from './court-viewer.js';
 import { buildHouseTradeSummary, collectHouseTrades } from './house-trades.js';
+import { fillHouseholds, householdsFillState } from './building-register.js';
 import {
   acceptCaptures, extensionVersion, finishCaptureSession, naverCaptureState, naverMarks, processPendingNaverCaptures, saveSnapshot, type CaptureInput,
 } from './naver-capture.js';
@@ -67,6 +68,7 @@ app.get('/api/state', async (): Promise<AppState> => {
     gus: gusFor(store.enabledAreas()),
     nearNames: nearNamesFor(store.enabledAreas()),
     aptGus: store.aptGus(),
+    householdsFill: householdsFillState(),
   };
 });
 
@@ -78,6 +80,16 @@ app.put<{ Body: { gus?: unknown } | null }>('/api/apt-gus', async (req, reply) =
     return { error: '구 이름 목록이 필요합니다.' };
   }
   return { aptGus: store.setAptGus(gus) };
+});
+
+/** 경매·공매 아파트 단지 세대수를 건축물대장에서 지금 채운다(공공데이터포털 키가 있을 때). 결과 한 줄을 돌려준다. */
+app.post('/api/apt-households/fill', async (_req, reply) => {
+  try {
+    return { text: await fillHouseholds() };
+  } catch (e) {
+    reply.code(502);
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 });
 
 /** 단지 세대수를 넣거나 고친다(households: 1~20000 정수, null이면 지움). key는 매물의 apt.complexKey, name은 단지 이름이나 주소. */

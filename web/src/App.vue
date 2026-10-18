@@ -309,6 +309,18 @@ async function setAptGus(gus: string[]) {
     error.value = e instanceof Error ? e.message : String(e);
   }
 }
+/** 건축물대장 세대수 채우기: 지금 채우는 중과 난 오류(마지막 결과는 state.householdsFill) */
+const householdsFill = ref<{ running: boolean; error: string | null }>({ running: false, error: null });
+async function fillHouseholds() {
+  householdsFill.value = { running: true, error: null };
+  try {
+    await api.fillHouseholds();
+    householdsFill.value = { running: false, error: null };
+  } catch (e) {
+    householdsFill.value = { running: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  await Promise.all([refreshListings(), refreshState()]).catch(() => {});
+}
 /** 단지 세대수를 넣거나 지운다(같은 단지 물건에 같이 보임). */
 async function setHouseholds(key: string, name: string, households: number | null) {
   error.value = null;
@@ -979,9 +991,10 @@ const emptyText: Partial<Record<Tab, string>> = {
       <AptView
         v-else-if="tab === 'apt'" :listings="aptAll" :areas="areas" :selected-id="selectedId" :running="!!running"
         :apt-gus="state?.aptGus ?? []" :near-gus="state?.gus ?? []" :region-stats="auctionResults.stats"
+        :fill="state?.householdsFill ?? { key: false, last: null }" :filling="householdsFill.running" :fill-error="householdsFill.error"
         @visible="setAptVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
         @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @pick="addPickedArea" @area="turnOffArea"
-        @run="startRun(['courtauction', 'onbid'])" @gus="setAptGus" @households="setHouseholds"
+        @run="startRun(['courtauction', 'onbid'])" @gus="setAptGus" @households="setHouseholds" @fill="fillHouseholds"
       />
       <template v-else-if="tab === 'rooms'">
         <RoomsView
