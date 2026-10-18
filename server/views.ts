@@ -158,22 +158,46 @@ function aptRef(
   };
 }
 
+/** 다세대·연립 같은 빌라(아파트, 오피스텔, 단독주택 갈래는 뺀다) */
+const isVillaType = (t: string | null | undefined) => /다세대|연립|빌라|도시형생활주택/.test(t ?? '') && !isApartmentType(t) && !isDetachedHouseType(t) && !/오피스텔/.test(t ?? '');
+
 /**
- * 집터 탭 경매·공매(단독주택 갈래 주거, 땅만 파는 토지)의 재개발 구역 정보. 다른 물건은 null.
- * 지번 키와 필지 번호를 못 정하면 why에 까닭(서울 밖, 지번 없음, 법정동 코드 모름)을 둔다.
+ * 재개발 구역 정보(PlotZone). 경매·공매는 단독주택 갈래 주거, 땅만 파는 토지, 아파트, 빌라를 주소의 지번으로 보고,
+ * 네이버 서울 아파트 매매는 단지 키('nv:1234')로 묶어 단지 좌표로 찾은 필지(points)로 본다. 다른 물건은 null.
+ * 지번 키와 필지 번호를 못 정하면 why에 까닭(서울 밖, 지번 없음, 법정동 코드 모름, 좌표에 필지 없음)을 둔다.
  */
-function zoneRef(source: string, l: NormalizedListing, raw: unknown, zones: Map<string, LandZoneCheck>): PlotZone | null {
+function zoneRef(
+  source: string, l: NormalizedListing, raw: unknown, zones: Map<string, LandZoneCheck>, points: Map<string, store.PointParcel>,
+): PlotZone | null {
+  if (source === 'naver') return naverZoneRef(l, raw, zones, points);
   if (source !== 'courtauction' && source !== 'onbid') return null;
   const section = listingSection({ source: source as SourceId, buildingType: l.buildingType });
-  if (section !== 'land' && !(section === 'auction' && isDetachedHouseType(l.buildingType))) return null;
+  const t = l.buildingType;
+  const form = section === 'land' ? 'land' : section !== 'auction' ? null : isDetachedHouseType(t) ? 'house' : isApartmentType(t) ? 'apt' : isVillaType(t) ? 'villa' : null;
+  if (!form) return null;
+  const base = { form, basis: 'lot', parcel: null, point: null } as const;
   const { gu, lot } = auctionLot(source, l, raw);
   const parsed = lot ? parseLot(lot) : null;
   const pnu = parsed ? pnuOf(parsed) : null;
   if (!lot || !pnu) {
     const why = !gu ? '서울 주소가 아니라 확인하지 않음' : !lot || !parsed ? '주소에서 지번을 못 찾음' : `법정동 코드를 모름(${parsed.gu} ${parsed.dong})`;
-    return { lot: null, pnu: null, why, check: null };
+    return { ...base, lot: null, pnu: null, why, check: null };
   }
-  return { lot, pnu, why: null, check: zones.get(lot) ?? null };
+  return { ...base, lot, pnu, why: null, check: zones.get(lot) ?? null };
+}
+
+/** 네이버 서울 아파트 매매의 구역 정보: 단지 번호와 좌표가 있어야 본다(매물 주소에는 지번이 없다). */
+function naverZoneRef(l: NormalizedListing, raw: unknown, zones: Map<string, LandZoneCheck>, points: Map<string, store.PointParcel>): PlotZone | null {
+  if (!isApartmentType(l.buildingType) || !l.prices.some((p) => p.deal === 'sale') || !seoulGuOf(l.address ?? '')) return null;
+  const complex = (raw as { representativeArticleInfo?: { complexNumber?: unknown } } | null)?.representativeArticleInfo?.complexNumber;
+  const point = l.lat != null && l.lng != null ? { lat: l.lat, lng: l.lng } : null;
+  const base = { form: 'apt', basis: 'point', parcel: null, point } as const;
+  if (complex == null || !String(complex) || !point) return { ...base, lot: null, pnu: null, why: '단지 번호나 좌표가 없어 확인하지 않음', check: null };
+  const lot = `nv:${complex}`;
+  const p = points.get(lot);
+  if (!p || p.status === 'error') return { ...base, lot, pnu: null, why: p?.error ? `단지 좌표로 필지를 못 찾음(${p.error})` : null, check: null };
+  if (p.status === 'none' || !p.pnu) return { ...base, lot, pnu: null, why: '단지 좌표에 필지가 없음', check: null };
+  return { ...base, lot, pnu: p.pnu, parcel: p.addr, why: null, check: zones.get(lot) ?? null };
 }
 
 const FULL_OPTION = /풀\s*옵션|풀옵/;
@@ -215,6 +239,7 @@ export function buildListingViews(): ListingView[] {
   const households = store.complexHouseholds();
   const registry = store.registryRows();
   const zones = store.zoneChecks();
+  const points = store.pointParcels();
   const verdicts = new Map(store.allVerdicts().map((v) => [v.listing_id, v]));
   const events = store.unackedEvents();
   const newIds = new Set(events.filter((e) => e.type === 'new').map((e) => e.listing_id));
@@ -251,7 +276,7 @@ export function buildListingViews(): ListingView[] {
       auction: row.source === 'courtauction' ? auctionRef(courtRaw.get(row.id)) : row.source === 'onbid' ? onbidRef(onbidRaw.get(row.id)) : null,
       options: optionsRef(row.source, optionRaw.get(row.id), data.title ?? ''),
       apt: aptRef(row.id, row.source, data, raw, households, registry),
-      zone: zoneRef(row.source, data, raw, zones),
+      zone: zoneRef(row.source, data, raw, zones, points),
     };
   });
 }

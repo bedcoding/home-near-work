@@ -461,7 +461,7 @@ export interface ListingView extends NormalizedListing {
   options: { list: string[] | null; full: boolean } | null;
   /** 서울 아파트면 구, 단지, 세대수(AptInfo). 아니면 null. */
   apt: AptInfo | null;
-  /** 집터 탭 경매·공매(단독, 토지)면 재개발 구역 확인 정보(PlotZone). 아니면 null. */
+  /** 경매·공매(단독주택 갈래, 토지, 아파트, 빌라)나 네이버 서울 아파트 매매면 재개발 구역 확인 정보(PlotZone). 아니면 null. */
   zone: PlotZone | null;
 }
 
@@ -595,14 +595,21 @@ export interface LandZoneCheck {
 }
 
 /**
- * 집터 탭 경매·공매(단독, 토지)의 재개발 구역 정보. lot: 조회에 쓰는 지번 키('lot:강남구 대치동 316'),
- * pnu: 필지 번호 19자리, 둘 다 못 정하면 null이고 why가 그 까닭. check: 조회 결과(아직 안 봤으면 null).
+ * 경매·공매(단독주택 갈래 주거, 토지, 아파트, 빌라)와 네이버 아파트 매매의 재개발 구역 정보.
+ * lot: 조회에 쓰는 키(경매·공매는 지번 키 'lot:강남구 대치동 316', 네이버는 단지 키 'nv:1234'), pnu: 필지 번호 19자리.
+ * 못 정하면 pnu가 null이고 why가 그 까닭이다(네이버 단지의 필지를 아직 안 찾았으면 why도 null). check: 조회 결과(아직 안 봤으면 null).
+ * form: 물건 갈래(house 단독주택, land 토지, apt 아파트, villa 다세대·연립 같은 빌라). basis: lot 주소의 지번, point 네이버 단지 좌표로 찾은 필지(parcel이 그 필지 주소).
+ * point: 네이버 단지 좌표(필지를 찾을 때 씀, 경매·공매는 null).
  */
 export interface PlotZone {
   lot: string | null;
   pnu: string | null;
   why: string | null;
   check: LandZoneCheck | null;
+  form: 'house' | 'land' | 'apt' | 'villa';
+  basis: 'lot' | 'point';
+  parcel: string | null;
+  point: { lat: number; lng: number } | null;
 }
 
 /** 비율(%) 여러 개의 요약: count 센 수, median 중간값, mean 평균, min 가장 낮은 값, max 가장 높은 값 */
@@ -867,6 +874,13 @@ export interface MarketChart {
   lines: MarketLine[];
 }
 
+/** KB 월간 지수의 마지막 달까지 1년, 5년, 10년 변동률(%, 모르면 null) */
+export interface MarketChanges {
+  y1: number | null;
+  y5: number | null;
+  y10: number | null;
+}
+
 /** 서울 아파트 지금 흐름 요약. 변동률은 %, 모르면 null. */
 export interface MarketNow {
   /** KB 주간 매매가격지수 마지막 기준일(YYYY-MM-DD) */
@@ -878,10 +892,10 @@ export interface MarketNow {
   w52: number | null;
   /** 4주 변동률로 본 방향: +0.1% 넘으면 up, -0.1% 밑이면 down, 그 사이 flat */
   trend: 'up' | 'down' | 'flat' | null;
-  /** KB 월간 지수 마지막 달(YYYY-MM)과 그 달까지 12개월 변동률(서울, 전국) */
+  /** KB 월간 지수 마지막 달(YYYY-MM)과 그 달까지 1년, 5년, 10년 변동률(서울, 전국) */
   month: string | null;
-  yearSeoul: number | null;
-  yearNation: number | null;
+  seoulChange: MarketChanges;
+  nationChange: MarketChanges;
   /** KB 주간 매수우위지수 마지막 기준일, 서울과 전국 값, 서울 최근 4주 평균 */
   buyerWeek: string | null;
   buyerSeoul: number | null;
@@ -909,8 +923,8 @@ export interface MarketTier {
   price84: number;
   /** 거래가 중간값(만원) */
   median: number;
-  /** KB 월간 지수로 본 이 구의 12개월 변동률(%) */
-  yoy: number | null;
+  /** KB 월간 지수로 본 이 구의 1년, 5년, 10년 변동률 */
+  change: MarketChanges;
   near: boolean;
   /** 법정동별(평당 중간값 높은 순) */
   dongs: { dong: string; count: number; pyeong: number }[];

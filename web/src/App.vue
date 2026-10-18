@@ -23,6 +23,7 @@ import RunHistory from './components/RunHistory.vue';
 import SitesTab from './components/SitesTab.vue';
 import SubscriptionsView from './components/SubscriptionsView.vue';
 import SupportView from './components/SupportView.vue';
+import ZoneBanner from './components/ZoneBanner.vue';
 import { loadCatalog, setAreaEnabled, toggleStationArea, type CatalogStation } from './areaActions';
 import { aptKindOf } from './apt';
 import { auctionKindOf, inAuctionKind, isAuction, originalUrl, sortAuctions, type AuctionKind } from './auction';
@@ -986,7 +987,9 @@ const emptyText: Partial<Record<Tab, string>> = {
           <ListingCard
             v-for="(l, i) in currentList" :key="l.id" :listing="l" :areas="areas" :selected="i === selected"
             @select="selected = i" @open="openOriginal(l)" @verdict="(v) => setVerdict(l, v)" @source="sourceOf = l" @raw="showRaw(l)"
-          />
+          >
+            <template v-if="l.zone" #banner><ZoneBanner part="banner" :listing="l" :key-set="zoneCheck.key" /></template>
+          </ListingCard>
           <p v-if="!currentList.length" class="empty muted">
             <template v-if="site === 'naver' && !listings.some((l) => l.source === 'naver')">
               네이버 매물은 크롬 확장으로 받습니다. 네이버 부동산 지도에서 동그라미를 눌러 목록을 보시면 여기에 모입니다.<br />
@@ -1037,10 +1040,10 @@ const emptyText: Partial<Record<Tab, string>> = {
       <AptView
         v-else-if="tab === 'apt'" :listings="aptAll" :areas="areas" :selected-id="selectedId" :running="!!running"
         :apt-gus="state?.aptGus ?? []" :near-gus="state?.gus ?? []" :region-stats="auctionResults.stats"
-        :fill="state?.householdsFill ?? { key: false, last: null }" :filling="householdsFill.running" :fill-error="householdsFill.error"
+        :fill="state?.householdsFill ?? { key: false, last: null }" :filling="householdsFill.running" :fill-error="householdsFill.error" :zone="zoneCheck"
         @visible="setAptVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
         @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @pick="addPickedArea" @area="turnOffArea"
-        @run="startRun(['courtauction', 'onbid'])" @gus="setAptGus" @households="setHouseholds" @fill="fillHouseholds"
+        @run="startRun(['courtauction', 'onbid'])" @gus="setAptGus" @households="setHouseholds" @fill="fillHouseholds" @zone-check="checkZones"
       />
       <MarketView v-else-if="tab === 'market'" :view="market" :fetching="marketFetching" :error="marketError" :running="!!running" @fetch="fetchMarket" />
       <template v-else-if="tab === 'rooms'">
