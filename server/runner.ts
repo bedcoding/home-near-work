@@ -8,6 +8,7 @@ import { COLLECT_MARGIN_M } from './config.js';
 import { collectCourtResults, courtResultsDue } from './court-results.js';
 import * as store from './db.js';
 import { collectHouseTrades, HOUSE_TRADES_SOURCE, houseTradesDue } from './house-trades.js';
+import { fillHouseholds, REGISTRY_SOURCE, registryKey } from './building-register.js';
 import { distanceM, nearestArea } from './geo.js';
 import { comparePrices, identityKey, priceSignature } from './identity.js';
 import { notify } from './notify.js';
@@ -412,6 +413,15 @@ async function execute(
         log(`${HOUSE_TRADES_SOURCE}: ${await collectHouseTrades(record)}`);
       } catch (e) {
         log(`${HOUSE_TRADES_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      }
+    }
+    // 법원경매나 온비드를 돈 조회는 공공데이터포털 키가 있으면 아파트 단지 세대수를 건축물대장에서 채운다(아직 안 본 단지만).
+    if (!state.stopping && registryKey() && collectors.some((c) => c.id === 'courtauction' || c.id === 'onbid')) {
+      try {
+        const record = (url: string, status: number | null, note: string) => store.addRequest(runId, REGISTRY_SOURCE, 'data', url, status, note);
+        log(`${REGISTRY_SOURCE} 세대수: ${await fillHouseholds(record)}`);
+      } catch (e) {
+        log(`${REGISTRY_SOURCE} 세대수 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
     await collectNotices(ctx, areas, plan.notices, log, () => state.stopping, news);

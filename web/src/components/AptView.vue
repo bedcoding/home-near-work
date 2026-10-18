@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import { SEOUL_GUS, type Area, type CourtRegionStat, type ListingView, type Verdict } from '../../../shared/types';
+import { SEOUL_GUS, type AppState, type Area, type CourtRegionStat, type ListingView, type Verdict } from '../../../shared/types';
 import type { CatalogStation } from '../areaActions';
 import {
   APT_CHECKED, APT_KINDS, APT_RULES, APT_STATUS_TEXT, APT_SUMMARY, aptKindOf, aptPrice, HOUSEHOLD_NOTE, HOUSEHOLD_SOURCES, HOUSEHOLD_STEPS, liveChip,
@@ -31,6 +31,10 @@ const props = defineProps<{
   nearGus: string[];
   /** 법원 지역별 매각통계(예상 낙찰가) */
   regionStats: CourtRegionStat[];
+  /** 건축물대장 세대수 채우기 상태(키를 넣었는지, 마지막 결과), 지금 채우는 중, 채우다 난 오류 */
+  fill: AppState['householdsFill'];
+  filling: boolean;
+  fillError: string | null;
 }>();
 const emit = defineEmits<{
   select: [ListingView];
@@ -47,6 +51,8 @@ const emit = defineEmits<{
   gus: [string[]];
   /** 단지 세대수 넣기(null이면 지움) */
   households: [key: string, name: string, households: number | null];
+  /** 건축물대장에서 세대수 채우기 */
+  fill: [];
   /** 지금 보이는 목록(화면 순서, 키보드 이동에 씀) */
   visible: [ListingView[]];
 }>();
@@ -192,6 +198,9 @@ function onRulesToggle(e: Event) {
 }
 const dot = (date: string) => date.replace(/-/g, '.');
 
+/** 세대수 채운 때('10월 18일 21:05') */
+const fillDay = (iso: string) => new Date(iso).toLocaleString('ko-KR', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+
 /** 지도를 다시 맞추는 기준(필터가 바뀔 때만) */
 const fitKey = computed(() => [f.kind, f.gu, f.minHouseholds, f.maxHouseholds, f.unknown, f.priceMax].join('|'));
 /** 지도에 진하게 보일 펼친 목록(이 탭은 없음) */
@@ -313,6 +322,18 @@ const none: ListingView[] = [];
           <a v-for="s in HOUSEHOLD_SOURCES" :key="s.url" :href="s.url" target="_blank" rel="noopener" class="hh-src" :title="s.title">{{ s.short }} ↗</a>
           <span v-if="hiddenByHouseholds" class="hidden-count">세대수 조건으로 가린 {{ hiddenByHouseholds }}건</span>
         </p>
+        <div class="fill-row">
+          <button
+            type="button" class="btn btn-sm" :disabled="!fill.key || filling"
+            :title="fill.key
+              ? '경매·공매 아파트 중 세대수를 모르는 단지를 건축물대장(공공데이터포털)에서 찾아 채웁니다. 법원경매나 온비드를 조회할 때도 알아서 채웁니다.'
+              : '공공데이터포털 인증키가 있어야 합니다. config/local.json에 dataGoKrKey를 넣어 주세요(README의 서울 아파트 탭).'"
+            @click="emit('fill')"
+          >{{ filling ? '채우는 중…' : '건축물대장에서 세대수 채우기' }}</button>
+          <span v-if="fillError" class="fill-msg err" role="alert">{{ fillError }}</span>
+          <span v-else-if="!fill.key" class="fill-msg muted">공공데이터포털 키가 없어 못 채웁니다(README 참고)</span>
+          <span v-else-if="fill.last" class="fill-msg" :class="fill.last.ok ? 'muted' : 'err'">{{ fillDay(fill.last.at) }} {{ fill.last.text }}</span>
+        </div>
 
         <section v-if="auctions.length" class="group">
           <h3 class="group-head">
@@ -434,6 +455,10 @@ const none: ListingView[] = [];
 .hh-src { margin-left: 8px; color: var(--accent); text-decoration: none; white-space: nowrap; }
 .hh-src:hover { text-decoration: underline; text-underline-offset: 3px; }
 .hidden-count { margin-left: 8px; font-weight: 700; color: var(--ink-2); }
+.fill-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: -6px; }
+.fill-row .btn { min-height: 32px; font-size: 13px; }
+.fill-msg { font-size: 12px; }
+.fill-msg.err { font-weight: 700; color: var(--new); }
 .group { display: grid; gap: 8px; }
 .group-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0; font-size: 17px; font-weight: 800; }
 .group-count { font-size: 14px; font-weight: 600; }
@@ -448,6 +473,7 @@ const none: ListingView[] = [];
   .map { position: static; order: 1; height: auto; min-height: 0; }
   .filters { order: 0; }
   .hh-note { order: 0; margin: 0; }
+  .fill-row { order: 0; margin: 0; }
   .group, .empty { order: 2; }
 }
 @media (max-width: 600px) {
