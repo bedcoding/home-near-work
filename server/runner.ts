@@ -9,6 +9,7 @@ import { collectCourtResults, courtResultsDue } from './court-results.js';
 import * as store from './db.js';
 import { collectHouseTrades, HOUSE_TRADES_SOURCE, houseTradesDue } from './house-trades.js';
 import { fillHouseholds, REGISTRY_SOURCE, registryKey } from './building-register.js';
+import { checkZones, vworldKey, ZONE_SOURCE } from './land-zones.js';
 import { distanceM, nearestArea } from './geo.js';
 import { comparePrices, identityKey, priceSignature } from './identity.js';
 import { notify } from './notify.js';
@@ -422,6 +423,15 @@ async function execute(
         log(`${REGISTRY_SOURCE} 세대수: ${await fillHouseholds(record)}`);
       } catch (e) {
         log(`${REGISTRY_SOURCE} 세대수 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      }
+    }
+    // 법원경매나 온비드를 돈 조회는 브이월드 키가 있으면 집터 경매·공매(단독, 토지)가 재개발 쪽 구역 안인지 토지이용계획으로 본다(아직 안 본 필지만).
+    if (!state.stopping && vworldKey() && collectors.some((c) => c.id === 'courtauction' || c.id === 'onbid')) {
+      try {
+        const record = (url: string, status: number | null, note: string) => store.addRequest(runId, ZONE_SOURCE, 'data', url, status, note);
+        log(`${ZONE_SOURCE} 재개발 구역: ${await checkZones(record)}`);
+      } catch (e) {
+        log(`${ZONE_SOURCE} 재개발 구역 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
     await collectNotices(ctx, areas, plan.notices, log, () => state.stopping, news);

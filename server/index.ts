@@ -11,6 +11,7 @@ import * as store from './db.js';
 import { openCourtItem } from './court-viewer.js';
 import { buildHouseTradeSummary, collectHouseTrades } from './house-trades.js';
 import { fillHouseholds, householdsFillState } from './building-register.js';
+import { checkZones, zoneCheckState } from './land-zones.js';
 import {
   acceptCaptures, extensionVersion, finishCaptureSession, naverCaptureState, naverMarks, processPendingNaverCaptures, saveSnapshot, type CaptureInput,
 } from './naver-capture.js';
@@ -69,6 +70,7 @@ app.get('/api/state', async (): Promise<AppState> => {
     nearNames: nearNamesFor(store.enabledAreas()),
     aptGus: store.aptGus(),
     householdsFill: householdsFillState(),
+    zoneCheck: zoneCheckState(),
   };
 });
 
@@ -86,6 +88,16 @@ app.put<{ Body: { gus?: unknown } | null }>('/api/apt-gus', async (req, reply) =
 app.post('/api/apt-households/fill', async (_req, reply) => {
   try {
     return { text: await fillHouseholds() };
+  } catch (e) {
+    reply.code(502);
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+/** 집터 경매·공매(단독, 토지)가 재개발 쪽 구역 안인지 토지이용계획으로 지금 확인한다(브이월드 키가 있을 때). 결과 한 줄을 돌려준다. */
+app.post('/api/plot-zones/check', async (_req, reply) => {
+  try {
+    return { text: await checkZones() };
   } catch (e) {
     reply.code(502);
     return { error: e instanceof Error ? e.message : String(e) };

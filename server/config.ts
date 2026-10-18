@@ -10,12 +10,15 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
  * knownStations: 지역과 상관없이 늘 아는 역 이름(집토스 역 페이지, 법원경매 구, 근처 이름에 씀).
  * celibBranches: 모을 셀립 지점(이름, 지점 화면 주소의 slug, 입주 신청 화면 번호 p).
  * dataGoKrKey: 공공데이터포털 인증키.
+ * vworldKey: 브이월드 오픈API 인증키(국가중점 API), vworldDomain: 그 키를 받을 때 적은 서비스 URL(없으면 http://localhost).
  */
 export interface LocalConfig {
   defaultAreas?: { station: string; radiusM: number; enabled: boolean }[];
   knownStations?: string[];
   celibBranches?: { name: string; slug: string; p: number }[];
   dataGoKrKey?: string;
+  vworldKey?: string;
+  vworldDomain?: string;
 }
 export const LOCAL_CONFIG_PATH = path.join(ROOT, 'config', 'local.json');
 export const LOCAL: LocalConfig = (() => {
