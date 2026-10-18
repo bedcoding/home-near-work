@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   COLLECT_MARGIN_M, hasHomeListings, inGus, nearReason, noticeSection, noticeSourcesOf, SOURCE_LABEL,
-  type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type DealType, type ExplainRow, type HouseTradeSummary, type ListingView,
+  type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type DealType, type ExplainRow, type HouseTradeSummary, type ListingView, type MarketView as MarketData,
   type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type SourceId, type Verdict,
 } from '../../shared/types';
 import { api } from './api';
@@ -15,6 +15,7 @@ import AuctionView from './components/AuctionView.vue';
 import FilterPanel from './components/FilterPanel.vue';
 import ListingCard from './components/ListingCard.vue';
 import ListingDetail from './components/ListingDetail.vue';
+import MarketView from './components/MarketView.vue';
 import NoticesView from './components/NoticesView.vue';
 import Overview from './components/Overview.vue';
 import RoomsView from './components/RoomsView.vue';
@@ -31,8 +32,8 @@ import { isPastNotice } from './notices';
 import { isRoomStay, sortRooms } from './rooms';
 import { siteLinks } from './siteLinks';
 
-type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'apt' | 'subs' | 'rooms' | 'notices' | 'support' | 'sites' | 'runs' | 'areas' | 'alerts';
-const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'apt', 'subs', 'rooms', 'notices', 'support', 'sites', 'runs', 'areas', 'alerts'];
+type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'apt' | 'market' | 'subs' | 'rooms' | 'notices' | 'support' | 'sites' | 'runs' | 'areas' | 'alerts';
+const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'apt', 'market', 'subs', 'rooms', 'notices', 'support', 'sites', 'runs', 'areas', 'alerts'];
 
 /** 머리 줄 높이(px). 필터 칸이 그 아래에 붙어 따라 내려온다(--app-header-height). */
 const headerEl = ref<HTMLElement | null>(null);
@@ -241,6 +242,34 @@ async function fetchHouseTrades() {
     houseFetching.value = false;
   }
 }
+/** 시세 통계 탭 자료. 탭을 처음 열 때 읽고, 조회가 끝나거나 근처 구가 바뀌면 이미 읽었을 때만 다시 읽는다. */
+const market = ref<MarketData | null>(null);
+const marketFetching = ref(false);
+const marketError = ref<string | null>(null);
+async function loadMarket() {
+  try {
+    market.value = await api.market();
+  } catch {
+    /* 연결이 끊긴 것은 연결 안내가 알린다 */
+  }
+}
+const reloadMarket = () => (market.value ? loadMarket() : Promise.resolve());
+/** 시세 통계 자료를 지금 받는다(탭의 '지금 받기') */
+async function fetchMarket() {
+  marketFetching.value = true;
+  marketError.value = null;
+  try {
+    market.value = await api.fetchMarket();
+  } catch (e) {
+    marketError.value = e instanceof Error ? e.message : String(e);
+    await loadMarket();
+  } finally {
+    marketFetching.value = false;
+  }
+}
+watch(tab, (t) => {
+  if (t === 'market' && !market.value) void loadMarket();
+}, { immediate: true });
 /** 켜 둔 지역 근처 구의 법원경매 매각 결과, 그 구들과 서울 전체의 지역별 매각통계와 결과 요약(경매 탭 맨 위 '매각 결과' 칸). 근처 구가 바뀌면 다시 받는다. */
 const auctionResults = ref<{ results: AuctionResultView[]; stats: CourtRegionStat[]; compare: AuctionResultSummary[] }>({ results: [], stats: [], compare: [] });
 async function loadAuctionResults() {
@@ -253,7 +282,7 @@ async function loadAuctionResults() {
 watch(
   () => (state.value?.gus ?? []).join(','),
   (now, before) => {
-    if (before && now !== before) void Promise.all([loadAuctionResults(), loadHouseTrades()]);
+    if (before && now !== before) void Promise.all([loadAuctionResults(), loadHouseTrades(), reloadMarket()]);
   },
 );
 /** '지역 반경 안만' 때문에 가린 경매 수(고른 종류) */
@@ -463,7 +492,7 @@ async function poll() {
     // 조회가 끝났을 때, 서버가 다시 켜진 뒤 처음 연결될 때, 크롬 확장이 네이버 화면 데이터를 새로 보냈을 때 목록도 새로 받는다.
     const naverChanged = naverBefore != null && state.value?.naverCapture.total !== naverBefore;
     if ((wasRunning && !running.value) || connectionError.value || naverChanged) {
-      await Promise.all([refreshListings(), loadNotices(), loadAuctionResults(), loadHouseTrades()]);
+      await Promise.all([refreshListings(), loadNotices(), loadAuctionResults(), loadHouseTrades(), reloadMarket()]);
       runsKey.value += 1;
     }
     connectionError.value = null;
@@ -759,6 +788,9 @@ const tabs = computed<{ id: Tab; label: string; count: number | null; news?: num
     title: '고른 서울 구의 아파트 경매, 공매, 매매(회사와 멀어도). 세대수와 살 때 붙는 조건(실거주, 대출, 양도세)', main: true,
   },
   {
+    id: 'market', label: '시세 통계', count: null, title: '오르는 때와 내리는 때(KB 지수, 매수우위지수, 실거래 거래량), 구별 급지와 평당가', main: true,
+  },
+  {
     id: 'subs', label: '청약', count: subNotices.value.filter((n) => !isPastNotice(n)).length, news: subNotices.value.filter((n) => n.isNew).length,
     title: '서울 청약(분양) 공고: 접수 예정과 접수중', main: true,
   },
@@ -793,6 +825,7 @@ const filterUse = computed<string[] | 'all'>(() => {
     case 'hidden':
     case 'subs':
     case 'apt':
+    case 'market':
     case 'support':
     case 'runs':
     case 'sites':
@@ -1009,6 +1042,7 @@ const emptyText: Partial<Record<Tab, string>> = {
         @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @pick="addPickedArea" @area="turnOffArea"
         @run="startRun(['courtauction', 'onbid'])" @gus="setAptGus" @households="setHouseholds" @fill="fillHouseholds"
       />
+      <MarketView v-else-if="tab === 'market'" :view="market" :fetching="marketFetching" :error="marketError" :running="!!running" @fetch="fetchMarket" />
       <template v-else-if="tab === 'rooms'">
         <RoomsView
           ref="roomsView" :listings="rooms" :outside="roomsOutside" :areas="areas" :selected-id="selectedId"
