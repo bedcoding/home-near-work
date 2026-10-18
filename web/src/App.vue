@@ -321,6 +321,19 @@ async function fillHouseholds() {
   }
   await Promise.all([refreshListings(), refreshState()]).catch(() => {});
 }
+/** 집터 재개발 구역 확인: 지금 확인하는 중과 난 오류(마지막 결과는 state.zoneCheck) */
+const zoneChecking = ref<{ running: boolean; error: string | null }>({ running: false, error: null });
+const zoneCheck = computed(() => ({ ...(state.value?.zoneCheck ?? { key: false, last: null }), checking: zoneChecking.value.running, error: zoneChecking.value.error }));
+async function checkZones() {
+  zoneChecking.value = { running: true, error: null };
+  try {
+    await api.checkZones();
+    zoneChecking.value = { running: false, error: null };
+  } catch (e) {
+    zoneChecking.value = { running: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  await Promise.all([refreshListings(), refreshState()]).catch(() => {});
+}
 /** 단지 세대수를 넣거나 지운다(같은 단지 물건에 같이 보임). */
 async function setHouseholds(key: string, name: string, households: number | null) {
   error.value = null;
@@ -975,7 +988,7 @@ const emptyText: Partial<Record<Tab, string>> = {
       </template>
       <template v-else-if="tab === 'plot'">
         <AuctionView
-          title="집터" :kind-ids="PLOT_KINDS" :sales="plotSales" :trust="false" :links="MODULAR_LINKS"
+          title="집터" :kind-ids="PLOT_KINDS" :sales="plotSales" :trust="false" :links="MODULAR_LINKS" :zone="zoneCheck"
           :listings="plotAuctions" :outside="plotOutside" :areas="areas" :selected-id="selectedId" :running="!!running"
           :kind="plotKind" :kinds="plotKinds" @kind="(k) => (plotKind = k, selected = 0)"
           :sort="auctionSort" @sort="(v) => (auctionSort = v, selected = 0)"
@@ -985,7 +998,7 @@ const emptyText: Partial<Record<Tab, string>> = {
           @house-age="(a) => (houseAge = a)" @house-fetch="fetchHouseTrades"
           @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
           @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @pick="addPickedArea" @area="turnOffArea"
-          @ack-notices="ackNotices" @run="startRun(['courtauction', 'onbid'])"
+          @ack-notices="ackNotices" @run="startRun(['courtauction', 'onbid'])" @zone-check="checkZones"
         />
       </template>
       <AptView

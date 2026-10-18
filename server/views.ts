@@ -1,11 +1,12 @@
 import * as store from './db.js';
 import { toNumber } from './collectors/types.js';
 import { looksSimilar } from './identity.js';
+import { parseLot, pnuOf } from './lots.js';
 import { manwon } from '../shared/format.js';
 import {
-  isApartmentType, isDetachedHouseType, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seoulGuOf, type AptInfo, type AptRegistry, type AuctionResultSummary, type AuctionResultView,
-  type AuctionSummaryKind, type ListingView, type NormalizedListing, type NoticeFacts, type NoticeView, type PriceChangeType, type PriceOption, type RatioStats,
-  type TrustDocRound, type TrustDocView,
+  isApartmentType, isDetachedHouseType, listingSection, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seoulGuOf, type AptInfo, type AptRegistry, type AuctionResultSummary,
+  type AuctionResultView, type AuctionSummaryKind, type LandZoneCheck, type ListingView, type NormalizedListing, type NoticeFacts, type NoticeView, type PlotZone,
+  type PriceChangeType, type PriceOption, type RatioStats, type SourceId, type TrustDocRound, type TrustDocView,
 } from '../shared/types.js';
 
 type CourtRow = {
@@ -98,6 +99,24 @@ function complexNameOf(address: string): string {
 }
 
 /**
+ * 경매·공매 물건의 서울 구와 지번 키('lot:강남구 대치동 316'). 구는 법원경매면 소재지 구(hjguSigu), 온비드면 시도·시군구·읍면동 글자,
+ * 없으면 주소 글자에서 찾는다. 구를 모르면(서울 밖) gu가 null, 주소에서 법정동 뒤 지번을 못 찾으면 lot이 null.
+ */
+function auctionLot(source: 'courtauction' | 'onbid', l: NormalizedListing, raw: unknown): { gu: string | null; lot: string | null } {
+  const address = l.address ?? '';
+  let gu: string | null;
+  if (source === 'courtauction') {
+    const row = (Array.isArray(raw) ? raw[0] : raw) as CourtRow;
+    gu = typeof row?.hjguSigu === 'string' && SEOUL_GUS.includes(row.hjguSigu) ? row.hjguSigu : seoulGuOf(address);
+  } else {
+    const words = String((raw as { sidoSgkEmd?: unknown } | null)?.sidoSgkEmd ?? '').split(/\s+/);
+    gu = SEOUL_GUS.includes(words[1]) ? words[1] : seoulGuOf(address);
+  }
+  const jibun = gu && l.dong ? jibunAfter(address, l.dong) : null;
+  return { gu, lot: jibun ? `lot:${gu} ${l.dong} ${jibun}` : null };
+}
+
+/**
  * 서울 아파트면 구, 단지 키와 이름, 세대수(직접 넣은 값, 없으면 건축물대장 값), 대장 조회 결과, 온비드 재산 종류(AptInfo).
  * 아파트가 아니거나 서울 구를 모르면 null.
  * 단지 키: 법원경매·온비드는 구, 법정동, 주소의 지번('lot:강남구 대치동 316'), 네이버는 단지 번호('nv:1234'), 못 정하면 매물 하나('id:…').
@@ -111,14 +130,10 @@ function aptRef(
   let complexKey: string | null = null;
   let complexName = address ? complexNameOf(address) : l.title;
   let property: string | null = null;
-  if (source === 'courtauction') {
-    const row = (Array.isArray(raw) ? raw[0] : raw) as CourtRow;
-    gu = typeof row?.hjguSigu === 'string' && SEOUL_GUS.includes(row.hjguSigu) ? row.hjguSigu : seoulGuOf(address);
-  } else if (source === 'onbid') {
-    const row = (raw ?? {}) as { sidoSgkEmd?: unknown; scrnPrptDvsnNm?: unknown };
-    const words = String(row.sidoSgkEmd ?? '').split(/\s+/);
-    gu = SEOUL_GUS.includes(words[1]) ? words[1] : seoulGuOf(address);
-    property = typeof row.scrnPrptDvsnNm === 'string' && row.scrnPrptDvsnNm.trim() ? row.scrnPrptDvsnNm.trim() : null;
+  if (source === 'courtauction' || source === 'onbid') {
+    ({ gu, lot: complexKey } = auctionLot(source, l, raw));
+    const kind = source === 'onbid' ? (raw as { scrnPrptDvsnNm?: unknown } | null)?.scrnPrptDvsnNm : null;
+    property = typeof kind === 'string' && kind.trim() ? kind.trim() : null;
   } else {
     gu = /서울/.test(address) ? seoulGuOf(address) : null;
     if (source === 'naver') {
@@ -128,10 +143,6 @@ function aptRef(
     }
   }
   if (!gu) return null;
-  if (!complexKey && (source === 'courtauction' || source === 'onbid') && l.dong) {
-    const jibun = jibunAfter(address, l.dong);
-    if (jibun) complexKey = `lot:${gu} ${l.dong} ${jibun}`;
-  }
   complexKey ??= `id:${id}`;
   const manual = households.get(complexKey) ?? null;
   const reg = registry.get(complexKey) ?? null;
@@ -145,6 +156,24 @@ function aptRef(
     registry: reg,
     property,
   };
+}
+
+/**
+ * 집터 탭 경매·공매(단독주택 갈래 주거, 땅만 파는 토지)의 재개발 구역 정보. 다른 물건은 null.
+ * 지번 키와 필지 번호를 못 정하면 why에 까닭(서울 밖, 지번 없음, 법정동 코드 모름)을 둔다.
+ */
+function zoneRef(source: string, l: NormalizedListing, raw: unknown, zones: Map<string, LandZoneCheck>): PlotZone | null {
+  if (source !== 'courtauction' && source !== 'onbid') return null;
+  const section = listingSection({ source: source as SourceId, buildingType: l.buildingType });
+  if (section !== 'land' && !(section === 'auction' && isDetachedHouseType(l.buildingType))) return null;
+  const { gu, lot } = auctionLot(source, l, raw);
+  const parsed = lot ? parseLot(lot) : null;
+  const pnu = parsed ? pnuOf(parsed) : null;
+  if (!lot || !pnu) {
+    const why = !gu ? '서울 주소가 아니라 확인하지 않음' : !lot || !parsed ? '주소에서 지번을 못 찾음' : `법정동 코드를 모름(${parsed.gu} ${parsed.dong})`;
+    return { lot: null, pnu: null, why, check: null };
+  }
+  return { lot, pnu, why: null, check: zones.get(lot) ?? null };
 }
 
 const FULL_OPTION = /풀\s*옵션|풀옵/;
@@ -185,6 +214,7 @@ export function buildListingViews(): ListingView[] {
   const optionRaw = new Map([...store.rawBySource('ziptoss'), ...store.rawBySource('peterpanz'), ...store.rawBySource('naver')]);
   const households = store.complexHouseholds();
   const registry = store.registryRows();
+  const zones = store.zoneChecks();
   const verdicts = new Map(store.allVerdicts().map((v) => [v.listing_id, v]));
   const events = store.unackedEvents();
   const newIds = new Set(events.filter((e) => e.type === 'new').map((e) => e.listing_id));
@@ -200,6 +230,7 @@ export function buildListingViews(): ListingView[] {
 
   return parsed.map(({ row, data }) => {
     const verdict = verdicts.get(row.id);
+    const raw = row.source === 'courtauction' ? courtRaw.get(row.id) : row.source === 'onbid' ? onbidRaw.get(row.id) : optionRaw.get(row.id);
     const reason = verdict?.reason ?? null;
     // 원본 데이터 설명표는 '원본 데이터' 버튼을 누를 때 따로 불러온다.
     const { explain: _explain, ...rest } = data;
@@ -219,10 +250,8 @@ export function buildListingViews(): ListingView[] {
       seenRef: row.seen_ref ? JSON.parse(row.seen_ref) : null,
       auction: row.source === 'courtauction' ? auctionRef(courtRaw.get(row.id)) : row.source === 'onbid' ? onbidRef(onbidRaw.get(row.id)) : null,
       options: optionsRef(row.source, optionRaw.get(row.id), data.title ?? ''),
-      apt: aptRef(
-        row.id, row.source, data, row.source === 'courtauction' ? courtRaw.get(row.id) : row.source === 'onbid' ? onbidRaw.get(row.id) : optionRaw.get(row.id),
-        households, registry,
-      ),
+      apt: aptRef(row.id, row.source, data, raw, households, registry),
+      zone: zoneRef(row.source, data, raw, zones),
     };
   });
 }

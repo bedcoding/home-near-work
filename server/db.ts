@@ -9,6 +9,8 @@ import type {
   AuctionResultKind,
   CourtRegionStat,
   ExcludedRow,
+  LandZone,
+  LandZoneCheck,
   NormalizedListing,
   NoticeFacts,
   NoticeSourceId,
@@ -358,6 +360,19 @@ CREATE TABLE IF NOT EXISTS apt_registry (
 );
 `);
 
+// 집터 탭 경매·공매의 재개발 구역 확인 결과(브이월드 토지이용계획). lot은 PlotZone.lot('lot:강남구 대치동 316'), pnu는 필지 번호,
+// zones는 걸린 구역 목록(shared/types LandZone 배열 JSON).
+db.exec(`
+CREATE TABLE IF NOT EXISTS land_zones (
+  lot TEXT PRIMARY KEY,
+  pnu TEXT NOT NULL,
+  status TEXT NOT NULL,
+  zones TEXT NOT NULL,
+  error TEXT,
+  checked_at TEXT NOT NULL
+);
+`);
+
 export function getSetting(key: string): string | null {
   return (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
 }
@@ -423,6 +438,22 @@ export function saveRegistry(key: string, r: AptRegistry) {
      ON CONFLICT(key) DO UPDATE SET status = excluded.status, households = excluded.households, buildings = excluded.buildings, floors = excluded.floors,
        name = excluded.name, purpose = excluded.purpose, basis = excluded.basis, error = excluded.error, checked_at = excluded.checked_at`,
   ).run(key, r.status, r.households, r.buildings, r.floors, r.name, r.purpose, r.basis, r.error, r.checkedAt);
+}
+
+/** 재개발 구역 확인 결과(지번 키 → LandZoneCheck) */
+export function zoneChecks(): Map<string, LandZoneCheck> {
+  const rows = db.prepare('SELECT * FROM land_zones').all() as {
+    lot: string; status: LandZoneCheck['status']; zones: string; error: string | null; checked_at: string;
+  }[];
+  return new Map(rows.map((r) => [r.lot, { status: r.status, zones: JSON.parse(r.zones) as LandZone[], checkedAt: r.checked_at, error: r.error }]));
+}
+
+/** 재개발 구역 확인 결과를 저장한다(같은 지번은 바꾼다). */
+export function saveZoneCheck(lot: string, pnu: string, c: LandZoneCheck) {
+  db.prepare(
+    `INSERT INTO land_zones (lot, pnu, status, zones, error, checked_at) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(lot) DO UPDATE SET pnu = excluded.pnu, status = excluded.status, zones = excluded.zones, error = excluded.error, checked_at = excluded.checked_at`,
+  ).run(lot, pnu, c.status, JSON.stringify(c.zones), c.error, c.checkedAt);
 }
 
 /** 단지 세대수를 넣거나 고친다. households가 null이면 지운다. */

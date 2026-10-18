@@ -51,6 +51,8 @@ export const api = {
   setAptGus: (gus: string[]) => request<{ aptGus: string[] }>('PUT', '/api/apt-gus', { gus }),
   /** 경매·공매 아파트 단지 세대수를 건축물대장에서 지금 채운다. 결과 한 줄을 돌려준다. */
   fillHouseholds: () => request<{ text: string }>('POST', '/api/apt-households/fill'),
+  /** 집터 경매·공매의 재개발 구역을 토지이용계획으로 지금 확인한다. 결과 한 줄을 돌려준다. */
+  checkZones: () => request<{ text: string }>('POST', '/api/plot-zones/check'),
   /** 단지 세대수를 넣거나 고친다(null이면 지움) */
   setHouseholds: (key: string, name: string, households: number | null) => request('PUT', '/api/apt-complexes', { key, name, households }),
 };
