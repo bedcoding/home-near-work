@@ -379,6 +379,8 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
 .now { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
 .now-card { display: grid; align-content: start; gap: 3px; min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-size: 13px; }
 .now-name { font-size: 13px; font-weight: 700; color: var(--ink-2); }
+/* 지표 이름 아래 줄에 출처(좁은 카드에서 이름 가운데가 끊기지 않게) */
+.now-name .muted { display: block; font-size: 12px; font-weight: 500; }
 .now-big { font-size: 20px; font-weight: 800; color: var(--ink); }
 .now-big.up { color: var(--up); }
 .now-big.down { color: var(--down); }
