@@ -68,16 +68,29 @@ const signals = computed(() => {
   ].filter((x): x is { name: string; up: boolean; down: boolean; text: string } => !!x);
 });
 
-// ---------- 가격지수 그래프 ----------
+// ---------- 그래프 기간(세 그래프가 같이 쓴다) ----------
 const RANGES = [
-  { id: '3y', label: '3년', months: 36 },
-  { id: '10y', label: '10년', months: 120 },
-  { id: 'all', label: '전체', months: Infinity },
+  { id: '3y', label: '3년', years: 3 },
+  { id: '5y', label: '5년', years: 5 },
+  { id: '10y', label: '10년', years: 10 },
+  { id: '20y', label: '20년', years: 20 },
+  { id: 'all', label: '전체', years: Infinity },
 ] as const;
 type RangeId = (typeof RANGES)[number]['id'];
-const range = ref<RangeId>(load<RangeId>('hnw-market-range', '10y'));
+const savedRange = load<string>('hnw-market-range', '10y');
+const range = ref<RangeId>(RANGES.some((r) => r.id === savedRange) ? (savedRange as RangeId) : '10y');
 watch(range, (r) => save('hnw-market-range', r));
+const rangeYears = computed(() => RANGES.find((r) => r.id === range.value)!.years);
+/** 고른 기간의 첫 자리: 마지막 날에서 그 햇수만큼 앞선 날(월간 YYYY-MM, 주간 YYYY-MM-DD) 이후 */
+function rangeStart(dates: string[]): number {
+  if (!dates.length || rangeYears.value === Infinity) return 0;
+  const last = dates[dates.length - 1];
+  const cutoff = `${Number(last.slice(0, 4)) - rangeYears.value}${last.slice(4)}`;
+  const i = dates.findIndex((d) => d >= cutoff);
+  return i < 0 ? 0 : i;
+}
 
+// ---------- 가격지수 그래프 ----------
 const priceLines = computed(() => props.view?.price.lines ?? []);
 const topLines = computed(() => priceLines.value.filter((l) => l.kind !== 'gu'));
 const guLines = computed(() => priceLines.value.filter((l) => l.kind === 'gu'));
@@ -99,8 +112,7 @@ function colorsOf(lines: MarketLine[]): Map<string, string> {
 const priceChart = computed(() => {
   const v = props.view;
   if (!v) return { dates: [] as string[], series: [] as ChartSeries[], changes: [] as { name: string; color: string; change: number | null }[] };
-  const months = RANGES.find((r) => r.id === range.value)!.months;
-  const from = Math.max(0, v.price.dates.length - months);
+  const from = rangeStart(v.price.dates);
   const dates = v.price.dates.slice(from);
   const lines = v.price.lines.filter((l) => shownCodes.value.includes(l.code));
   const colors = colorsOf(lines);
@@ -127,9 +139,13 @@ function toggleBuyer(code: string) {
 const buyerChart = computed(() => {
   const v = props.view;
   if (!v) return { dates: [] as string[], series: [] as ChartSeries[] };
+  const from = rangeStart(v.buyer.dates);
   const lines = v.buyer.lines.filter((l) => buyerShown.value.includes(l.code));
   const colors = colorsOf(lines);
-  return { dates: v.buyer.dates, series: lines.map((l) => ({ id: l.code, name: l.name, color: colors.get(l.code)!, values: l.values.map((x) => (x == null ? null : Math.round(x * 10) / 10)) })) };
+  return {
+    dates: v.buyer.dates.slice(from),
+    series: lines.map((l) => ({ id: l.code, name: l.name, color: colors.get(l.code)!, values: l.values.slice(from).map((x) => (x == null ? null : Math.round(x * 10) / 10)) })),
+  };
 });
 
 // ---------- 거래량 그래프 ----------
@@ -145,16 +161,27 @@ const volumeChart = computed(() => {
   const counts = volumeGu.value === '서울' ? v.seoul : (v.gus.find((g) => g.gu === volumeGu.value)?.counts ?? v.seoul);
   const complete = counts.length - v.incomplete;
   const avg = counts.map((_, i) => (i >= 11 && i < complete ? Math.round(counts.slice(i - 11, i + 1).reduce((a, b) => a + b, 0) / 12) : null));
+  const from = rangeStart(v.months);
   return {
-    dates: v.months,
+    dates: v.months.slice(from),
     series: [
-      { id: 'count', name: '거래', color: LINE_COLORS.seoul, values: counts, bar: true },
-      { id: 'avg', name: '12달 평균', color: '#b74757', values: avg },
+      { id: 'count', name: '거래', color: LINE_COLORS.seoul, values: counts.slice(from), bar: true },
+      { id: 'avg', name: '12달 평균', color: '#b74757', values: avg.slice(from) },
     ],
   };
 });
 
 // ---------- 급지표 ----------
+const CHANGE_SPANS = [
+  { id: 'y1', label: '1년' },
+  { id: 'y5', label: '5년' },
+  { id: 'y10', label: '10년' },
+] as const;
+type ChangeSpan = (typeof CHANGE_SPANS)[number]['id'];
+const savedSpan = load<string>('hnw-market-tier-change', 'y5');
+const changeSpan = ref<ChangeSpan>(CHANGE_SPANS.some((c) => c.id === savedSpan) ? (savedSpan as ChangeSpan) : 'y5');
+watch(changeSpan, (c) => save('hnw-market-tier-change', c));
+const changeLabel = computed(() => CHANGE_SPANS.find((c) => c.id === changeSpan.value)!.label);
 const openGu = ref<string | null>(null);
 const toggleGu = (gu: string) => (openGu.value = openGu.value === gu ? null : gu);
 /** 급지 묶음마다 구들(순위 순) */
@@ -215,11 +242,16 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
           <span class="num">3개월 {{ count(now?.volume3 ?? null) }}건, 1년 전 {{ count(now?.volume3LastYear ?? null) }}건({{ pct(changeOf(now?.volume3 ?? null, now?.volume3LastYear ?? null)) }})</span>
           <span class="muted now-foot">신고 기한(계약 뒤 30일)이 지난 마지막 달 기준</span>
         </div>
-        <div class="now-card">
-          <span class="now-name">서울과 전국 <span class="muted">KB 월간, 1년 변동</span></span>
-          <b class="now-big num">서울 {{ pct(now?.yearSeoul ?? null) }}</b>
-          <span class="num">전국 {{ pct(now?.yearNation ?? null) }}</span>
-          <span class="muted now-foot">{{ now?.month ? `${dot(now.month)}까지 12개월` : '' }}</span>
+        <div class="now-card now-long">
+          <span class="now-name">서울과 전국 <span class="muted">KB 월간, 길게 본 변동</span></span>
+          <table v-if="now" class="long num">
+            <thead><tr><th scope="col"><span class="sr-only">지역</span></th><th scope="col">1년</th><th scope="col">5년</th><th scope="col">10년</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">서울</th><td>{{ pct(now.seoulChange.y1) }}</td><td>{{ pct(now.seoulChange.y5) }}</td><td>{{ pct(now.seoulChange.y10) }}</td></tr>
+              <tr><th scope="row">전국</th><td>{{ pct(now.nationChange.y1) }}</td><td>{{ pct(now.nationChange.y5) }}</td><td>{{ pct(now.nationChange.y10) }}</td></tr>
+            </tbody>
+          </table>
+          <span class="muted now-foot">{{ now?.month ? `${dot(now.month)}까지` : '' }}</span>
         </div>
       </section>
       <p v-if="signals.length" class="signals">
@@ -231,7 +263,7 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
       <section class="block" aria-labelledby="market-price">
         <div class="block-head">
           <h3 id="market-price" class="block-title">아파트 매매가격지수 <span class="muted">KB 월간, 고른 기간 첫 달 = 100</span></h3>
-          <div class="seg" role="group" aria-label="기간">
+          <div class="seg" role="group" aria-label="그래프 기간(세 그래프 같이)">
             <button v-for="r in RANGES" :key="r.id" type="button" :class="{ on: range === r.id }" :aria-pressed="range === r.id" @click="range = r.id">{{ r.label }}</button>
           </div>
         </div>
@@ -260,6 +292,9 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
       <section class="block" aria-labelledby="market-buyer">
         <div class="block-head">
           <h3 id="market-buyer" class="block-title">매수우위지수 <span class="muted">KB 주간, 100보다 크면 사려는 쪽이 많음</span></h3>
+          <div class="seg" role="group" aria-label="그래프 기간(세 그래프 같이)">
+            <button v-for="r in RANGES" :key="r.id" type="button" :class="{ on: range === r.id }" :aria-pressed="range === r.id" @click="range = r.id">{{ r.label }}</button>
+          </div>
         </div>
         <div class="chips" role="group" aria-label="보일 지역">
           <button
@@ -273,13 +308,18 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
       <section class="block" aria-labelledby="market-volume">
         <div class="block-head">
           <h3 id="market-volume" class="block-title">아파트 거래량 <span class="muted">국토부 실거래, 계약한 달 기준</span></h3>
-          <label class="pick">
-            <span class="sr-only">지역</span>
-            <select v-model="volumeGu">
-              <option value="서울">서울 전체</option>
-              <option v-for="g in volumeGuChoices" :key="g.gu" :value="g.gu">{{ g.gu }}{{ g.near ? ' (근처)' : '' }}</option>
-            </select>
-          </label>
+          <div class="head-tools">
+            <label class="pick">
+              <span class="sr-only">지역</span>
+              <select v-model="volumeGu">
+                <option value="서울">서울 전체</option>
+                <option v-for="g in volumeGuChoices" :key="g.gu" :value="g.gu">{{ g.gu }}{{ g.near ? ' (근처)' : '' }}</option>
+              </select>
+            </label>
+            <div class="seg" role="group" aria-label="그래프 기간(세 그래프 같이)">
+              <button v-for="r in RANGES" :key="r.id" type="button" :class="{ on: range === r.id }" :aria-pressed="range === r.id" @click="range = r.id">{{ r.label }}</button>
+            </div>
+          </div>
         </div>
         <TimeChart :dates="volumeChart.dates" :series="volumeChart.series" label="서울 아파트 월별 거래량" :format="countFormat" :faded="view.volume.incomplete" zero />
         <p class="muted note">
@@ -292,6 +332,9 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
       <section class="block" aria-labelledby="market-tiers">
         <div class="block-head">
           <h3 id="market-tiers" class="block-title">구별 급지와 평당가 <span class="muted">아파트 실거래, 공식 분류 아님</span></h3>
+          <div class="seg" role="group" aria-label="변동 기간">
+            <button v-for="c in CHANGE_SPANS" :key="c.id" type="button" :class="{ on: changeSpan === c.id }" :aria-pressed="changeSpan === c.id" @click="changeSpan = c.id">{{ c.label }} 변동</button>
+          </div>
         </div>
         <p v-if="view.tiers" class="muted note">
           계약일 {{ dot(view.tiers.from) }} ~ {{ dot(view.tiers.to) }}, 해제된 거래 뺌. 전용면적 평당 중간값 순위로 {{ view.tiers.gus.length }}개 구를 다섯 묶음으로 고르게 나눴습니다.
@@ -306,7 +349,7 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
                 <th scope="col" class="r">평당 중간값</th>
                 <th scope="col" class="r">84㎡로 치면</th>
                 <th scope="col" class="r wide">거래가 중간값</th>
-                <th scope="col" class="r" title="KB 월간 매매가격지수로 본 최근 12개월 변동">1년 변동</th>
+                <th scope="col" class="r" :title="`KB 월간 매매가격지수로 본 최근 ${changeLabel} 변동`">{{ changeLabel }} 변동</th>
                 <th scope="col" class="r wide">거래</th>
               </tr>
             </thead>
@@ -324,7 +367,7 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
                   <td class="num r strong">{{ manwon(t.pyeong) }}</td>
                   <td class="num r" :title="manwon(t.price84)">{{ eok(t.price84) }}</td>
                   <td class="num r wide" :title="manwon(t.median)">{{ eok(t.median) }}</td>
-                  <td class="num r" :class="{ up: (t.yoy ?? 0) > 0, down: (t.yoy ?? 0) < 0 }">{{ pct(t.yoy) }}</td>
+                  <td class="num r" :class="{ up: (t.change[changeSpan] ?? 0) > 0, down: (t.change[changeSpan] ?? 0) < 0 }">{{ pct(t.change[changeSpan]) }}</td>
                   <td class="num r wide">{{ count(t.count) }}</td>
                 </tr>
                 <template v-if="openGu === t.gu">
@@ -385,6 +428,16 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
 .now-big.up { color: var(--up); }
 .now-big.down { color: var(--down); }
 .now-foot { font-size: 12px; }
+/* 휴대폰처럼 카드가 두 줄로 놓이면 길게 본 변동 표는 한 줄을 다 쓴다 */
+@media (max-width: 560px) {
+  .now-long { grid-column: 1 / -1; }
+}
+.long { border-collapse: collapse; font-size: 13px; }
+.long th, .long td { padding: 2px 8px 2px 0; text-align: right; white-space: nowrap; }
+.long thead th { font-size: 11px; font-weight: 600; color: var(--muted); }
+.long tbody th { text-align: left; font-weight: 700; }
+.long td { font-weight: 700; }
+.head-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .signals { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: -4px 0 0; font-size: 13px; }
 .signals-label { font-weight: 700; }
 .signal { padding: 1px 8px; border-radius: 999px; background: var(--surface-2); font-weight: 700; color: var(--ink-2); }

@@ -5,22 +5,27 @@ import { toNumber } from './collectors/types.js';
 import { buildListingViews } from './views.js';
 import type { AppState, LandZone, LandZoneCheck } from '../shared/types.js';
 
-// 집터 탭 경매·공매(단독, 토지)가 재개발 쪽 구역 안인지 브이월드 국가중점데이터 API의 토지이용계획(getLandUseAttr)으로 본다.
-// 주소의 지번으로 만든 필지 번호(PNU, lots.ts)로 부르고, 응답(landUses.field)의 용도지역지구명(prposAreaDstrcCodeNm) 중
+// 경매·공매(단독주택 갈래, 토지, 아파트, 빌라)와 네이버 서울 아파트 매매가 재개발 쪽 구역 안인지 브이월드 국가중점데이터 API의
+// 토지이용계획(getLandUseAttr)으로 본다. 경매·공매는 주소의 지번으로 만든 필지 번호(PNU, lots.ts)로, 네이버 아파트는 지번이 없어
+// 단지 좌표가 든 필지를 브이월드 2D 데이터 API의 연속지적도(LP_PA_CBND_BUBUN, geomFilter POINT)로 먼저 찾아 그 필지 번호로 부른다.
+// 토지이용계획 응답(landUses.field)의 용도지역지구명(prposAreaDstrcCodeNm) 중
 // 정비구역, 재개발구역, 재정비촉진지구, 소규모주택정비 관리지역, 건축허가·착공제한지역 같은 것만 남긴다(zoneKind).
 // 인증키는 config/local.json의 vworldKey. 키를 받을 때 적은 서비스 URL(vworldDomain, 없으면 http://localhost)을 domain 값과
 // Referer 머리글로 같이 보낸다(Referer가 없으면 INCORRECT_KEY를 준다는 기록이 있다). 키는 요청 기록이나 오류 글자에 남기지 않는다.
 // 이 프로그램을 만든 작업 환경에서는 브이월드에 닿지 않아 실제 응답으로 확인하지 못했다. 주소, 입력값, 응답 칸과 구역 이름은
 // 이 API를 쓰는 공개 코드(cadastral-mcp, ToJIDAEJANG)와 seoul-redev-registry 저장소에 쌓인 2026년 9~10월 응답 기록으로 확인했다.
+// 연속지적도 요청과 응답(response.status OK·NOT_FOUND·ERROR, result.featureCollection.features[].properties.pnu·addr)은
+// 같은 두 코드(cadastral-mcp의 BOX 조회, ToJIDAEJANG의 POINT 조회)를 따랐다.
 
-/** 요청 주소 앞부분. HNW_VWORLD_BASE로 바꿀 수 있다(시험용 가짜 서버). */
+/** 요청 주소 앞부분. HNW_VWORLD_BASE, HNW_VWORLD_DATA_BASE로 바꿀 수 있다(시험용 가짜 서버). */
 const BASE = process.env.HNW_VWORLD_BASE ?? 'https://api.vworld.kr/ned/data';
+const DATA_BASE = process.env.HNW_VWORLD_DATA_BASE ?? 'https://api.vworld.kr/req/data';
 /** 요청 기록에 남길 곳 이름(조회 기록의 요청 표에 그대로 보인다) */
 export const ZONE_SOURCE = '토지이용계획';
 const TIMEOUT_MS = 20000;
 /** 확인한 필지를 다시 보는 간격(일). 구역 지정은 바뀌므로 한 달마다 다시 본다. 실패한 것은 매번 다시 본다. */
 const RECHECK_DAYS = 30;
-/** 한 번에 보는 필지 수(나머지는 다음에). 필지 하나에 요청 한 번이다. */
+/** 한 번에 보는 필지 수(나머지는 다음에). 필지 하나에 요청 한 번이다. 좌표로 필지를 찾는 단지 수도 같다. */
 const MAX_LOTS = 150;
 /** 요청 사이 쉬는 시간(ms) */
 const PAUSE_MS = 300;
@@ -177,6 +182,64 @@ async function landUseRows(pnu: string, key: string, record: RecordRequest): Pro
   }
 }
 
+/**
+ * 좌표(WGS84)가 든 필지를 연속지적도에서 찾는다. 찾으면 status ok와 필지 번호, 주소, 그 자리에 필지가 없으면(NOT_FOUND) none.
+ * 키·권한 문제(2D 데이터 API를 고르지 않은 키 등)나 연결 실패는 fatal ZoneError, 그 밖의 오류는 ZoneError.
+ */
+export async function parcelAt(point: { lat: number; lng: number }, key: string, record: RecordRequest = () => {}): Promise<store.PointParcel> {
+  const domain = vworldDomain();
+  const query = new URLSearchParams({
+    service: 'data', version: '2.0', request: 'GetFeature', data: 'LP_PA_CBND_BUBUN', geomFilter: `POINT(${point.lng} ${point.lat})`,
+    crs: 'EPSG:4326', format: 'json', size: '10', page: '1', domain,
+  }).toString();
+  const shown = `${DATA_BASE}?${query}`;
+  const url = `${DATA_BASE}?key=${encodeURIComponent(key)}&${query}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: { Referer: domain }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  } catch (e) {
+    record(shown, null, '연결 실패');
+    throw new ZoneError(`브이월드에 연결하지 못했습니다(${hide(errText(e), key)})`, true);
+  }
+  const text = hide(await res.text(), key);
+  if (!res.ok) {
+    record(shown, res.status, '오류');
+    throw new ZoneError(`브이월드 연속지적도 응답 오류(HTTP ${res.status}: ${text.slice(0, 120)})`, res.status >= 500);
+  }
+  let data: { response?: { status?: unknown; result?: { featureCollection?: { features?: unknown } } } };
+  try {
+    data = JSON.parse(text);
+  } catch {
+    record(shown, res.status, '읽지 못함');
+    throw new ZoneError(`브이월드 연속지적도 응답을 읽지 못했습니다(${text.slice(0, 120)})`, true);
+  }
+  const checkedAt = new Date().toISOString();
+  if (data.response?.status === 'NOT_FOUND') {
+    record(shown, res.status, '그 자리에 필지 없음');
+    return { status: 'none', pnu: null, addr: null, error: null, checkedAt };
+  }
+  const err = errorOf(data);
+  if (err || data.response?.status !== 'OK') {
+    const detail = err ? `${err.code}${err.text ? `: ${err.text}` : ''}` : `상태 ${String(data.response?.status ?? '없음')}`;
+    record(shown, res.status, `오류 ${detail}`);
+    if (err && /KEY|LIMIT|AUTH|DOMAIN|DENIED|SERVICE/i.test(err.code)) {
+      throw new ZoneError(`브이월드가 연속지적도 조회를 거절했습니다(${detail}). 인증키에 2D 데이터 API를 함께 신청했는지 확인해 주세요.`, true);
+    }
+    throw new ZoneError(`연속지적도 조회 오류(${detail})`, false);
+  }
+  const features = data.response.result?.featureCollection?.features;
+  const list = (Array.isArray(features) ? features : []) as { properties?: { pnu?: unknown; addr?: unknown } }[];
+  const hit = list.find((f) => /^\d{19}$/.test(String(f.properties?.pnu ?? '')));
+  if (!hit) {
+    record(shown, res.status, `필지 번호 없음(${list.length}건)`);
+    return { status: 'none', pnu: null, addr: null, error: null, checkedAt };
+  }
+  const pnu = String(hit.properties!.pnu);
+  const addr = typeof hit.properties?.addr === 'string' && hit.properties.addr.trim() ? hit.properties.addr.trim() : null;
+  record(shown, res.status, `필지 ${addr ?? pnu}`);
+  return { status: 'ok', pnu, addr, error: null, checkedAt };
+}
+
 /** 필지 번호 하나의 토지이용계획을 읽어 재개발 쪽 구역만 남긴다(구역 안·정비 구역 먼저). 응답이 비면 status empty. */
 export async function lookupZones(pnu: string, key: string, record: RecordRequest = () => {}): Promise<LandZoneCheck> {
   const rows = await landUseRows(pnu, key, record);
@@ -203,8 +266,10 @@ export async function lookupZones(pnu: string, key: string, record: RecordReques
 let running: Promise<string> | null = null;
 
 /**
- * 집터 경매·공매 중 아직 구역을 안 본(또는 RECHECK_DAYS가 지났거나 실패한) 필지의 토지이용계획을 읽어 저장한다.
- * 한 번에 MAX_LOTS곳까지. 결과 한 줄을 돌려주고 마지막 결과로 남긴다. 키가 없거나 키·서비스 문제면 오류를 던진다. 이미 확인하는 중이면 그 결과를 기다린다.
+ * 아직 구역을 안 본(또는 RECHECK_DAYS가 지났거나 실패한) 필지의 토지이용계획을 읽어 저장한다. 그 전에 필지를 아직 못 찾은 네이버 아파트 단지는
+ * 단지 좌표로 필지부터 찾는다(찾은 것은 다시 찾지 않고 실패한 것만 다시). 둘 다 한 번에 MAX_LOTS곳까지.
+ * 결과 한 줄을 돌려주고 마지막 결과로 남긴다. 키가 없거나 토지이용계획 쪽 키·서비스 문제면 오류를 던진다
+ * (좌표 필지 찾기만 거절되면 그 단지들은 건너뛰고 결과 줄에 까닭을 붙인다). 이미 확인하는 중이면 그 결과를 기다린다.
  */
 export function checkZones(record: RecordRequest = () => {}): Promise<string> {
   running ??= check(record).finally(() => {
@@ -221,27 +286,62 @@ async function check(record: RecordRequest): Promise<string> {
   const key = vworldKey();
   if (!key) throw new Error('브이월드 인증키가 없습니다. config/local.json에 vworldKey를 넣어 주세요(README의 집터 탭 참고).');
   const known = store.zoneChecks();
+  const found = store.pointParcels();
   const since = Date.now() - RECHECK_DAYS * 86400000;
   const lots = new Map<string, string>();
+  /** 단지 좌표로 필지를 찾을 네이버 아파트(단지 키 → 좌표) */
+  const points = new Map<string, { lat: number; lng: number }>();
+  const due = (lot: string) => {
+    const c = known.get(lot);
+    return !c || c.status === 'error' || Date.parse(c.checkedAt) < since;
+  };
   for (const l of buildListingViews()) {
     const z = l.zone;
-    if (l.status !== 'active' || !z?.lot || !z.pnu) continue;
-    const c = known.get(z.lot);
-    if (c && c.status !== 'error' && Date.parse(c.checkedAt) >= since) continue;
-    lots.set(z.lot, z.pnu);
+    if (l.status !== 'active' || !z?.lot) continue;
+    if (z.pnu) {
+      if (due(z.lot)) lots.set(z.lot, z.pnu);
+    } else if (z.basis === 'point' && z.point && (!found.has(z.lot) || found.get(z.lot)!.status === 'error')) {
+      points.set(z.lot, z.point);
+    }
+  }
+  const pointCount = { ok: 0, none: 0, failed: 0 };
+  let pointStop: string | null = null;
+  const pointBatch = [...points].slice(0, MAX_LOTS);
+  for (const [lot, point] of pointBatch) {
+    try {
+      const p = await parcelAt(point, key, record);
+      store.savePointParcel(lot, point, p);
+      if (p.status === 'ok' && p.pnu) {
+        pointCount.ok++;
+        if (due(lot)) lots.set(lot, p.pnu);
+      } else pointCount.none++;
+    } catch (e) {
+      const message = errText(e);
+      if (e instanceof ZoneError && e.fatal) {
+        pointStop = message;
+        break;
+      }
+      pointCount.failed++;
+      store.savePointParcel(lot, point, { status: 'error', pnu: null, addr: null, error: message, checkedAt: new Date().toISOString() });
+    }
+    await wait(PAUSE_MS);
   }
   const batch = [...lots].slice(0, MAX_LOTS);
+  // 같은 필지(경매 물건과 네이버 단지가 같은 필지일 때)는 한 번만 부르고 결과를 키마다 저장한다.
+  const byPnu = new Map<string, string[]>();
+  for (const [lot, pnu] of batch) byPnu.set(pnu, [...(byPnu.get(pnu) ?? []), lot]);
   const count = { inside: 0, edge: 0, clear: 0, empty: 0, failed: 0 };
   let streak = 0;
-  for (const [lot, pnu] of batch) {
+  for (const [pnu, keys] of byPnu) {
     try {
       const c = await lookupZones(pnu, key, record);
-      store.saveZoneCheck(lot, pnu, c);
+      for (const lot of keys) store.saveZoneCheck(lot, pnu, c);
       streak = 0;
-      if (c.status === 'empty') count.empty++;
-      else if (c.zones.some((z) => z.overlap !== '접함')) count.inside++;
-      else if (c.zones.length) count.edge++;
-      else count.clear++;
+      const n = keys.length;
+      if (c.status === 'empty') count.empty += n;
+      else if (c.zones.some((z) => z.overlap !== '접함')) count.inside += n;
+      else if (c.zones.length) count.edge += n;
+      else count.clear += n;
     } catch (e) {
       const message = errText(e);
       const done = count.inside + count.edge + count.clear + count.empty;
@@ -251,8 +351,8 @@ async function check(record: RecordRequest): Promise<string> {
         throw new Error(text);
       }
       streak++;
-      count.failed++;
-      store.saveZoneCheck(lot, pnu, { status: 'error', zones: [], checkedAt: new Date().toISOString(), error: message });
+      count.failed += keys.length;
+      for (const lot of keys) store.saveZoneCheck(lot, pnu, { status: 'error', zones: [], checkedAt: new Date().toISOString(), error: message });
     }
     await wait(PAUSE_MS);
   }
@@ -264,7 +364,17 @@ async function check(record: RecordRequest): Promise<string> {
     count.empty ? `응답 없음 ${count.empty}곳` : '',
     count.failed ? `실패 ${count.failed}곳` : '',
   ].filter(Boolean);
-  const text = batch.length ? `구역 확인 ${batch.length}곳: ${parts.join(', ')}${rest > 0 ? `, 남은 ${rest}곳은 다음에` : ''}` : '새로 볼 필지가 없습니다';
-  setLast(true, text);
+  const pointParts = [
+    pointCount.ok ? `찾음 ${pointCount.ok}곳` : '',
+    pointCount.none ? `필지 없음 ${pointCount.none}곳` : '',
+    pointCount.failed ? `실패 ${pointCount.failed}곳` : '',
+    points.size > pointBatch.length && !pointStop ? `남은 ${points.size - pointBatch.length}곳은 다음에` : '',
+  ].filter(Boolean);
+  const text = [
+    batch.length ? `구역 확인 ${batch.length}곳: ${parts.join(', ')}${rest > 0 ? `, 남은 ${rest}곳은 다음에` : ''}` : '새로 볼 필지가 없습니다',
+    pointParts.length ? `네이버 단지 좌표로 필지 찾기: ${pointParts.join(', ')}` : '',
+    pointStop ? `네이버 단지 좌표로 필지 찾기 멈춤: ${pointStop}` : '',
+  ].filter(Boolean).join(' / ');
+  setLast(!pointStop, text);
   return text;
 }

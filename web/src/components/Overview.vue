@@ -7,6 +7,7 @@ import type { CatalogStation } from '../areaActions';
 import { money, radiusText } from '../format';
 import CountTooltip from './CountTooltip.vue';
 import ListingCard from './ListingCard.vue';
+import ZoneBanner from './ZoneBanner.vue';
 import OverviewMap from './OverviewMap.vue';
 
 type Point = { lat: number; lng: number };
@@ -495,7 +496,9 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
                   v-for="e in r.shown" :key="e.listing.id" :listing="e.listing" :areas="areas" :selected="e.listing.id === selectedId"
                   @select="emit('select', e.listing)" @open="emit('open', e.listing)" @verdict="(v) => emit('verdict', e.listing, v)"
                   @source="emit('source', e.listing)" @raw="emit('raw', e.listing)"
-                />
+                >
+                  <template v-if="e.listing.zone" #banner><ZoneBanner part="banner" :listing="e.listing" :key-set="false" /></template>
+                </ListingCard>
               </div>
             </div>
           </div>

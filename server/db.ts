@@ -373,6 +373,21 @@ CREATE TABLE IF NOT EXISTS land_zones (
 );
 `);
 
+// 네이버 아파트 단지 좌표로 찾은 필지(브이월드 연속지적도). key는 PlotZone.lot('nv:1234'), status ok(찾음), none(그 좌표에 필지 없음), error.
+// addr은 필지 주소('서울특별시 강남구 대치동 316'). 단지 자리는 바뀌지 않으므로 찾은 것은 다시 보지 않고, 실패한 것만 다음에 다시 본다.
+db.exec(`
+CREATE TABLE IF NOT EXISTS point_parcels (
+  key TEXT PRIMARY KEY,
+  lat REAL NOT NULL,
+  lng REAL NOT NULL,
+  status TEXT NOT NULL,
+  pnu TEXT,
+  addr TEXT,
+  error TEXT,
+  checked_at TEXT NOT NULL
+);
+`);
+
 // 시세 통계 탭. apt_trades는 국토부 실거래가 서울 아파트 매매(거래 하나에 한 줄, key는 구, 동, 번지, 단지명, 전용면적, 계약일, 금액, 층을 잇고
 // 뒤에 같은 줄의 순번 '#1'), contract_date YYYY-MM-DD, price 만원, area_m2 전용면적 ㎡, canceled_at 해제사유발생일.
 // market_series는 KB 통계 시계열(series는 kb-stats의 SERIES id, region_code는 KB 지역코드, date는 월간 YYYY-MM, 주간 YYYY-MM-DD,
@@ -485,6 +500,32 @@ export function saveZoneCheck(lot: string, pnu: string, c: LandZoneCheck) {
     `INSERT INTO land_zones (lot, pnu, status, zones, error, checked_at) VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(lot) DO UPDATE SET pnu = excluded.pnu, status = excluded.status, zones = excluded.zones, error = excluded.error, checked_at = excluded.checked_at`,
   ).run(lot, pnu, c.status, JSON.stringify(c.zones), c.error, c.checkedAt);
+}
+
+/** 좌표로 찾은 필지 하나 */
+export interface PointParcel {
+  status: 'ok' | 'none' | 'error';
+  pnu: string | null;
+  addr: string | null;
+  error: string | null;
+  checkedAt: string;
+}
+
+/** 네이버 단지 좌표로 찾은 필지(key → 결과) */
+export function pointParcels(): Map<string, PointParcel> {
+  const rows = db.prepare('SELECT key, status, pnu, addr, error, checked_at FROM point_parcels').all() as {
+    key: string; status: PointParcel['status']; pnu: string | null; addr: string | null; error: string | null; checked_at: string;
+  }[];
+  return new Map(rows.map((r) => [r.key, { status: r.status, pnu: r.pnu, addr: r.addr, error: r.error, checkedAt: r.checked_at }]));
+}
+
+/** 좌표로 찾은 필지를 저장한다(같은 key는 바꾼다). */
+export function savePointParcel(key: string, point: { lat: number; lng: number }, p: PointParcel) {
+  db.prepare(
+    `INSERT INTO point_parcels (key, lat, lng, status, pnu, addr, error, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, status = excluded.status, pnu = excluded.pnu,
+       addr = excluded.addr, error = excluded.error, checked_at = excluded.checked_at`,
+  ).run(key, point.lat, point.lng, p.status, p.pnu, p.addr, p.error, p.checkedAt);
 }
 
 /** 단지 세대수를 넣거나 고친다. households가 null이면 지운다. */
