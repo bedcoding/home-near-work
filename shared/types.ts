@@ -846,3 +846,88 @@ export interface AppState {
    */
   zoneCheck: { key: boolean; last: { at: string; ok: boolean; text: string } | null };
 }
+
+// ---------- 시세 통계 탭 ----------
+
+/** 시세 통계 그래프의 선 하나: 지역 하나의 값(MarketChart.dates와 같은 순서, 없는 날은 null) */
+export interface MarketLine {
+  /** KB 지역코드 */
+  code: string;
+  name: string;
+  /** nation 전국, seoul 서울, region 그 밖의 시도와 권역, gu 서울 구 */
+  kind: 'nation' | 'seoul' | 'region' | 'gu';
+  /** 켜 둔 지역 근처 구 */
+  near: boolean;
+  values: (number | null)[];
+}
+
+/** 날짜(월간 YYYY-MM, 주간 YYYY-MM-DD)와 지역별 선 */
+export interface MarketChart {
+  dates: string[];
+  lines: MarketLine[];
+}
+
+/** 서울 아파트 지금 흐름 요약. 변동률은 %, 모르면 null. */
+export interface MarketNow {
+  /** KB 주간 매매가격지수 마지막 기준일(YYYY-MM-DD) */
+  week: string | null;
+  /** 서울 주간 지수의 1주, 4주, 13주, 52주 변동률 */
+  w1: number | null;
+  w4: number | null;
+  w13: number | null;
+  w52: number | null;
+  /** 4주 변동률로 본 방향: +0.1% 넘으면 up, -0.1% 밑이면 down, 그 사이 flat */
+  trend: 'up' | 'down' | 'flat' | null;
+  /** KB 월간 지수 마지막 달(YYYY-MM)과 그 달까지 12개월 변동률(서울, 전국) */
+  month: string | null;
+  yearSeoul: number | null;
+  yearNation: number | null;
+  /** KB 주간 매수우위지수 마지막 기준일, 서울과 전국 값, 서울 최근 4주 평균 */
+  buyerWeek: string | null;
+  buyerSeoul: number | null;
+  buyerNation: number | null;
+  buyerSeoul4: number | null;
+  /** 실거래: 신고가 다 들어온 마지막 달(YYYY-MM)의 서울 건수와 1년 전 같은 달, 그 달까지 3개월 합과 1년 전 같은 3개월 합 */
+  volumeMonth: string | null;
+  volume: number | null;
+  volumeLastYear: number | null;
+  volume3: number | null;
+  volume3LastYear: number | null;
+}
+
+/** 구별 급지표 한 줄(최근 1년 해제되지 않은 아파트 매매) */
+export interface MarketTier {
+  gu: string;
+  /** 평당 중간값 순위(1이 가장 비쌈) */
+  rank: number;
+  /** 순위로 고르게 나눈 다섯 묶음(1 상급지 ~ 5 하급지) */
+  tier: number;
+  count: number;
+  /** 전용면적 평당 중간값(만원) */
+  pyeong: number;
+  /** ㎡당 중간값 × 84(만원), 전용 84㎡로 치면 대략 얼마인지 */
+  price84: number;
+  /** 거래가 중간값(만원) */
+  median: number;
+  /** KB 월간 지수로 본 이 구의 12개월 변동률(%) */
+  yoy: number | null;
+  near: boolean;
+  /** 법정동별(평당 중간값 높은 순) */
+  dongs: { dong: string; count: number; pyeong: number }[];
+}
+
+/** 시세 통계 탭 전체 */
+export interface MarketView {
+  kb: { fetchedAt: string | null; error: string | null };
+  /** 실거래: coverageFrom 거래량을 끊김 없이 받아 둔 첫날(YYYY-MM-DD), missingYears 아직 안 받은 지난 해 */
+  trades: { fetchedAt: string | null; error: string | null; missingYears: number[]; coverageFrom: string | null };
+  now: MarketNow;
+  /** KB 월간 아파트 매매가격지수 */
+  price: MarketChart;
+  /** KB 주간 매수우위지수 */
+  buyer: MarketChart;
+  /** 실거래 월별 건수(서울 합과 구별, months와 같은 순서). 끝에서 incomplete달은 신고 기한(계약 뒤 30일) 안이라 덜 들어왔다. */
+  volume: { months: string[]; incomplete: number; seoul: number[]; gus: { gu: string; near: boolean; counts: number[] }[] };
+  /** 구별 급지표(계약일 from ~ to). 실거래를 아직 안 받았으면 null. */
+  tiers: { from: string; to: string; gus: MarketTier[] } | null;
+}

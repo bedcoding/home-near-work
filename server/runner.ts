@@ -8,6 +8,8 @@ import { COLLECT_MARGIN_M } from './config.js';
 import { collectCourtResults, courtResultsDue } from './court-results.js';
 import * as store from './db.js';
 import { collectHouseTrades, HOUSE_TRADES_SOURCE, houseTradesDue } from './house-trades.js';
+import { APT_TRADES_SOURCE, aptTradesDue, collectAptTrades } from './apt-trades.js';
+import { collectKbStats, KB_SOURCE, kbStatsDue } from './kb-stats.js';
 import { fillHouseholds, REGISTRY_SOURCE, registryKey } from './building-register.js';
 import { checkZones, vworldKey, ZONE_SOURCE } from './land-zones.js';
 import { distanceM, nearestArea } from './geo.js';
@@ -414,6 +416,23 @@ async function execute(
         log(`${HOUSE_TRADES_SOURCE}: ${await collectHouseTrades(record)}`);
       } catch (e) {
         log(`${HOUSE_TRADES_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      }
+    }
+    // 시세 통계 탭 자료도 때가 됐으면 어떤 조회든 받는다: KB 지수는 3일, 서울 아파트 실거래 최근 1년은 7일에 한 번, 지난 해는 한 번에 두 해씩.
+    if (!state.stopping && kbStatsDue()) {
+      try {
+        const record = (url: string, status: number | null, note: string) => store.addRequest(runId, KB_SOURCE, 'data', url, status, note);
+        log(`${KB_SOURCE}: ${await collectKbStats(record)}`);
+      } catch (e) {
+        log(`${KB_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      }
+    }
+    if (!state.stopping && aptTradesDue()) {
+      try {
+        const record = (url: string, status: number | null, note: string) => store.addRequest(runId, APT_TRADES_SOURCE, 'data', url, status, note);
+        log(`${APT_TRADES_SOURCE}: ${await collectAptTrades(record, { maxYears: 2 })}`);
+      } catch (e) {
+        log(`${APT_TRADES_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
     // 법원경매나 온비드를 돈 조회는 공공데이터포털 키가 있으면 아파트 단지 세대수를 건축물대장에서 채운다(아직 안 본 단지만).

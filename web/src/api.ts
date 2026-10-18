@@ -1,4 +1,4 @@
-import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, RunDetail, RunInfo, SourceId, Station, Verdict } from '../../shared/types';
+import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, RunDetail, RunInfo, SourceId, Station, Verdict } from '../../shared/types';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -47,6 +47,10 @@ export const api = {
   houseTrades: (age: number) => request<HouseTradeSummary>('GET', `/api/house-trades?age=${age}`),
   /** 국토부 실거래를 지금 받고 요약을 돌려준다 */
   fetchHouseTrades: (age: number) => request<HouseTradeSummary>('POST', '/api/house-trades/fetch', { age }),
+  /** 시세 통계 탭 자료(KB 지수, 서울 아파트 거래량, 구별 급지표) */
+  market: () => request<MarketView>('GET', '/api/market'),
+  /** 시세 통계 자료를 지금 받고 탭 자료를 돌려준다(처음에는 몇 분 걸릴 수 있다) */
+  fetchMarket: () => request<MarketView>('POST', '/api/market/fetch'),
   /** 서울 아파트 탭에서 고른 구를 통째로 바꾼다. 바뀐 목록을 돌려준다. */
   setAptGus: (gus: string[]) => request<{ aptGus: string[] }>('PUT', '/api/apt-gus', { gus }),
   /** 경매·공매 아파트 단지 세대수를 건축물대장에서 지금 채운다. 결과 한 줄을 돌려준다. */

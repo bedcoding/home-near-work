@@ -373,6 +373,37 @@ CREATE TABLE IF NOT EXISTS land_zones (
 );
 `);
 
+// 시세 통계 탭. apt_trades는 국토부 실거래가 서울 아파트 매매(거래 하나에 한 줄, key는 구, 동, 번지, 단지명, 전용면적, 계약일, 금액, 층을 잇고
+// 뒤에 같은 줄의 순번 '#1'), contract_date YYYY-MM-DD, price 만원, area_m2 전용면적 ㎡, canceled_at 해제사유발생일.
+// market_series는 KB 통계 시계열(series는 kb-stats의 SERIES id, region_code는 KB 지역코드, date는 월간 YYYY-MM, 주간 YYYY-MM-DD,
+// detail은 매수우위지수의 응답 비율 JSON). 시계열은 받을 때마다 통째로 바꾼다.
+db.exec(`
+CREATE TABLE IF NOT EXISTS apt_trades (
+  key TEXT PRIMARY KEY,
+  gu TEXT NOT NULL,
+  dong TEXT NOT NULL,
+  jibun TEXT,
+  complex TEXT NOT NULL,
+  area_m2 REAL NOT NULL,
+  contract_date TEXT NOT NULL,
+  price INTEGER NOT NULL,
+  floor INTEGER,
+  built_year INTEGER,
+  canceled_at TEXT,
+  deal_type TEXT
+);
+CREATE INDEX IF NOT EXISTS apt_trades_date ON apt_trades (contract_date);
+CREATE TABLE IF NOT EXISTS market_series (
+  series TEXT NOT NULL,
+  region_code TEXT NOT NULL,
+  region_name TEXT NOT NULL,
+  date TEXT NOT NULL,
+  value REAL NOT NULL,
+  detail TEXT,
+  PRIMARY KEY (series, region_code, date)
+);
+`);
+
 export function getSetting(key: string): string | null {
   return (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
 }
@@ -1198,6 +1229,80 @@ export function houseTradeRows(from: string): HouseTradeRow[] {
        FROM house_trades WHERE contract_date >= ? AND canceled_at IS NULL AND house_type = '단독'`,
     )
     .all(from) as HouseTradeRow[];
+}
+
+// ---------- 시세 통계: 국토부 실거래가 아파트 매매, KB 통계 시계열 ----------
+
+/** 아파트 실거래 한 건(저장용). 금액은 만원, 전용면적은 ㎡, 날짜는 YYYY-MM-DD. */
+export interface AptTradeInput {
+  key: string;
+  gu: string;
+  dong: string;
+  jibun: string | null;
+  complex: string;
+  areaM2: number;
+  contractDate: string;
+  price: number;
+  floor: number | null;
+  builtYear: number | null;
+  canceledAt: string | null;
+  dealType: string | null;
+}
+
+/** 계약일 from ~ to(YYYY-MM-DD) 범위의 아파트 실거래를 rows로 통째로 바꾼다(범위 밖은 그대로). 같은 key가 여러 줄이면 '#순번'으로 따로 둔다. */
+export function replaceAptTrades(from: string, to: string, rows: AptTradeInput[]) {
+  const insert = db.prepare(
+    `INSERT INTO apt_trades (key, gu, dong, jibun, complex, area_m2, contract_date, price, floor, built_year, canceled_at, deal_type)
+     VALUES (@key, @gu, @dong, @jibun, @complex, @areaM2, @contractDate, @price, @floor, @builtYear, @canceledAt, @dealType)`,
+  );
+  db.transaction(() => {
+    db.prepare('DELETE FROM apt_trades WHERE contract_date BETWEEN ? AND ?').run(from, to);
+    const seen = new Map<string, number>();
+    for (const r of rows) {
+      const n = (seen.get(r.key) ?? 0) + 1;
+      seen.set(r.key, n);
+      insert.run({ ...r, key: `${r.key}#${n}` });
+    }
+  })();
+}
+
+export interface AptTradeRow { gu: string; dong: string; area_m2: number; price: number }
+
+/** 계약일 from ~ to(YYYY-MM-DD)이고 해제되지 않은 아파트 매매(구별 평당가용) */
+export function aptTradeRows(from: string, to: string): AptTradeRow[] {
+  return db
+    .prepare('SELECT gu, dong, area_m2, price FROM apt_trades WHERE contract_date BETWEEN ? AND ? AND canceled_at IS NULL AND area_m2 > 0')
+    .all(from, to) as AptTradeRow[];
+}
+
+/** 해제되지 않은 아파트 매매의 구별, 계약 달(YYYY-MM)별 건수 */
+export function aptTradeMonthCounts(): { gu: string; ym: string; count: number }[] {
+  return db
+    .prepare('SELECT gu, substr(contract_date, 1, 7) AS ym, COUNT(*) AS count FROM apt_trades WHERE canceled_at IS NULL GROUP BY gu, ym ORDER BY ym')
+    .all() as { gu: string; ym: string; count: number }[];
+}
+
+/** KB 통계 시계열 한 점 */
+export interface MarketPoint { regionCode: string; regionName: string; date: string; value: number; detail: string | null }
+
+/** 시계열 series를 points로 통째로 바꾼다. */
+export function replaceMarketSeries(series: string, points: MarketPoint[]) {
+  const insert = db.prepare(
+    'INSERT OR REPLACE INTO market_series (series, region_code, region_name, date, value, detail) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  db.transaction(() => {
+    db.prepare('DELETE FROM market_series WHERE series = ?').run(series);
+    for (const p of points) insert.run(series, p.regionCode, p.regionName, p.date, p.value, p.detail);
+  })();
+}
+
+/** 시계열 series의 점들(지역코드, 날짜 순) */
+export function marketSeries(series: string): MarketPoint[] {
+  return (
+    db
+      .prepare('SELECT region_code, region_name, date, value, detail FROM market_series WHERE series = ? ORDER BY region_code, date')
+      .all(series) as { region_code: string; region_name: string; date: string; value: number; detail: string | null }[]
+  ).map((r) => ({ regionCode: r.region_code, regionName: r.region_name, date: r.date, value: r.value, detail: r.detail }));
 }
 
 // 설정 court_region_stats(구마다 가장 최근 통계 한 벌)에 있던 값을 표로 옮긴다.

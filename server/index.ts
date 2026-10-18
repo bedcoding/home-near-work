@@ -10,6 +10,9 @@ import { DASHBOARD_URL, HOST, PORT, RUNS_DIR, WEB_DIST } from './config.js';
 import * as store from './db.js';
 import { openCourtItem } from './court-viewer.js';
 import { buildHouseTradeSummary, collectHouseTrades } from './house-trades.js';
+import { collectAptTrades } from './apt-trades.js';
+import { collectKbStats } from './kb-stats.js';
+import { buildMarketView } from './market.js';
 import { fillHouseholds, householdsFillState } from './building-register.js';
 import { checkZones, zoneCheckState } from './land-zones.js';
 import {
@@ -180,6 +183,25 @@ app.post<{ Body: { age?: unknown } | null }>('/api/house-trades/fetch', async (r
     reply.code(502);
     return { error: e instanceof Error ? e.message : String(e) };
   }
+});
+
+/** 시세 통계 탭: KB 지수 그래프, 지금 흐름 요약, 서울 아파트 월별 거래량, 구별 급지표(켜진 지역 근처 구 표시). */
+app.get('/api/market', async () => buildMarketView(gusFor(store.enabledAreas())));
+
+/**
+ * 시세 통계 자료를 지금 받고 탭 자료를 돌려준다: KB 지수 모두, 서울 아파트 실거래 최근 1년과 안 받은 지난 해 모두(몇 분 걸릴 수 있다).
+ * 한쪽만 실패하면 그 오류는 탭 자료의 kb.error나 trades.error에 남고, 둘 다 실패하면 502.
+ */
+app.post('/api/market/fetch', async (_req, reply) => {
+  const errors: string[] = [];
+  const fail = (e: unknown) => errors.push(e instanceof Error ? e.message : String(e));
+  await collectKbStats().catch(fail);
+  await collectAptTrades(undefined, { recent: true }).catch(fail);
+  if (errors.length === 2) {
+    reply.code(502);
+    return { error: errors.join(' / ') };
+  }
+  return buildMarketView(gusFor(store.enabledAreas()));
 });
 
 /** 새 공고 표시를 지운다(ids가 없으면 전부). */
