@@ -4,6 +4,7 @@ import { DEAL_LABEL, SOURCE_LABEL, type Area, type ListingView, type Verdict } f
 import { distanceText, floorText, manwon, nearest, priceAmount, pyeong } from '../format';
 import { KIND_LABEL, kindOf } from '../kinds';
 import { roomRange } from '../rooms';
+import ZoneBanner from './ZoneBanner.vue';
 
 const props = defineProps<{ listing: ListingView | null; areas: Area[] }>();
 const emit = defineEmits<{ open: []; verdict: [Verdict | null]; source: []; raw: [] }>();
@@ -36,6 +37,7 @@ const heading = computed(() => {
         </template>
       </div>
       <p class="detail-address">{{ listing.address || '주소 정보 없음' }}</p>
+      <ZoneBanner v-if="listing.zone" part="banner" :listing="listing" :key-set="false" />
       <dl class="detail-facts">
         <div v-if="listing.buildingType || kind !== 'unknown'"><dt>유형</dt><dd>{{ listing.buildingType || KIND_LABEL[kind] }}</dd></div>
         <div v-if="listing.roomLabel"><dt>방 구조</dt><dd>{{ listing.roomLabel }}</dd></div>

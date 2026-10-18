@@ -23,7 +23,7 @@ export const SERIES = [
   { id: 'price-month', kind: 'price', path: 'priceIndex', params: { 월간주간구분코드: '01', ...APT_SALE }, label: '월간 아파트 매매가격지수' },
   { id: 'price-month-seoul', kind: 'price', path: 'priceIndex', params: { 월간주간구분코드: '01', ...APT_SALE, 지역코드: '11' }, label: '월간 아파트 매매가격지수(서울 구)' },
   { id: 'price-week-seoul', kind: 'price', path: 'priceIndex', params: { 월간주간구분코드: '02', ...APT_SALE, 지역코드: '11', 기간: '3' }, label: '주간 아파트 매매가격지수(서울 구)' },
-  { id: 'buyer-week', kind: 'buyer', path: 'maktTrnd', params: { 메뉴코드: '01', 월간주간구분코드: '02', 기간: '5' }, label: '주간 매수우위지수' },
+  { id: 'buyer-week', kind: 'buyer', path: 'maktTrnd', params: { 메뉴코드: '01', 월간주간구분코드: '02' }, label: '주간 매수우위지수' },
 ] as const;
 export type SeriesId = (typeof SERIES)[number]['id'];
 

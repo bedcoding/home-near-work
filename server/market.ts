@@ -3,7 +3,7 @@ import * as store from './db.js';
 import { kbStatsState, type SeriesId } from './kb-stats.js';
 import { guCode } from './lots.js';
 import { yearRange, ymd } from './rt-csv.js';
-import { SEOUL_GUS, type MarketChart, type MarketLine, type MarketNow, type MarketTier, type MarketView } from '../shared/types.js';
+import { SEOUL_GUS, type MarketChanges, type MarketChart, type MarketLine, type MarketNow, type MarketTier, type MarketView } from '../shared/types.js';
 
 // 시세 통계 탭: KB 통계 시계열(kb-stats)과 국토부 아파트 실거래(apt-trades)로 그래프 자료, 지금 흐름 요약, 구별 급지표를 만든다.
 // 급지는 공식 분류가 아니다. 최근 1년 실거래의 전용면적 평당 중간값 순위로 구를 다섯 묶음으로 고르게 나눈 것이다.
@@ -68,14 +68,18 @@ function changeAt(values: (number | null)[], i: number, back: number): number | 
   return now != null && before != null && before !== 0 ? round1((now / before - 1) * 100) : null;
 }
 
-/** 월간 선의 마지막 달과 12개월 변동률 */
-function yearChange(chart: MarketChart, line: MarketLine | undefined): { month: string | null; change: number | null } {
-  if (!line) return { month: null, change: null };
+/** 월간 선의 마지막 달과 그 달까지 1년, 5년, 10년 변동률 */
+function longChanges(chart: MarketChart, line: MarketLine | undefined): { month: string | null; change: MarketChanges } {
+  const none = { month: null, change: { y1: null, y5: null, y10: null } };
+  if (!line) return none;
   const i = lastAt(line.values);
-  if (i < 0) return { month: null, change: null };
+  if (i < 0) return none;
   const month = chart.dates[i];
-  const back = chart.dates.indexOf(`${Number(month.slice(0, 4)) - 1}${month.slice(4)}`);
-  return { month, change: back < 0 ? null : changeAt(line.values, i, i - back) };
+  const over = (years: number) => {
+    const back = chart.dates.indexOf(`${Number(month.slice(0, 4)) - years}${month.slice(4)}`);
+    return back < 0 ? null : changeAt(line.values, i, i - back);
+  };
+  return { month, change: { y1: over(1), y5: over(5), y10: over(10) } };
 }
 
 /** 'YYYY-MM' 다음 달 */
@@ -121,7 +125,7 @@ function tiersOf(gus: string[], price: MarketChart): MarketView['tiers'] {
   const { from, to } = yearRange();
   const rows = store.aptTradeRows(ymd(from), ymd(to));
   if (!rows.length) return null;
-  const yoyOf = new Map(price.lines.filter((l) => l.kind === 'gu').map((l) => [l.name, yearChange(price, l).change]));
+  const changeOf = new Map(price.lines.filter((l) => l.kind === 'gu').map((l) => [l.name, longChanges(price, l).change]));
   const perPy = (list: store.AptTradeRow[]) => Math.round(median(list.map((r) => r.price / r.area_m2))! * PYEONG_M2);
   const groups = SEOUL_GUS.map((gu) => ({ gu, list: rows.filter((r) => r.gu === gu) })).filter((g) => g.list.length);
   const list = groups
@@ -134,7 +138,7 @@ function tiersOf(gus: string[], price: MarketChart): MarketView['tiers'] {
         pyeong: perPy(list),
         price84: Math.round(median(list.map((r) => r.price / r.area_m2))! * 84),
         median: Math.round(median(list.map((r) => r.price))!),
-        yoy: yoyOf.get(gu) ?? null,
+        change: changeOf.get(gu) ?? { y1: null, y5: null, y10: null },
         near: gus.includes(gu),
         dongs: [...dongs].map(([dong, l]) => ({ dong, count: l.length, pyeong: perPy(l) })).sort((a, b) => b.pyeong - a.pyeong),
       };
@@ -150,8 +154,8 @@ function nowOf(price: MarketChart, weekly: MarketChart, buyer: MarketChart, volu
   const wi = seoulWeek ? lastAt(seoulWeek.values) : -1;
   const w = (back: number) => (seoulWeek && wi >= 0 ? changeAt(seoulWeek.values, wi, back) : null);
   const w4 = w(4);
-  const seoulYear = yearChange(price, price.lines.find((l) => l.kind === 'seoul'));
-  const nationYear = yearChange(price, price.lines.find((l) => l.kind === 'nation'));
+  const seoulLong = longChanges(price, price.lines.find((l) => l.kind === 'seoul'));
+  const nationLong = longChanges(price, price.lines.find((l) => l.kind === 'nation'));
   const buyerSeoul = buyer.lines.find((l) => l.kind === 'seoul');
   const buyerNation = buyer.lines.find((l) => l.kind === 'nation');
   const bi = buyerSeoul ? lastAt(buyerSeoul.values) : -1;
@@ -165,9 +169,9 @@ function nowOf(price: MarketChart, weekly: MarketChart, buyer: MarketChart, volu
     w13: w(13),
     w52: w(52),
     trend: w4 == null ? null : w4 > FLAT_BAND ? 'up' : w4 < -FLAT_BAND ? 'down' : 'flat',
-    month: seoulYear.month,
-    yearSeoul: seoulYear.change,
-    yearNation: nationYear.change,
+    month: seoulLong.month,
+    seoulChange: seoulLong.change,
+    nationChange: nationLong.change,
     buyerWeek: bi >= 0 ? buyer.dates[bi] : null,
     buyerSeoul: bi >= 0 ? buyerSeoul!.values[bi] : null,
     buyerNation: bi >= 0 && buyerNation ? buyerNation.values[bi] : null,

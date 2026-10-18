@@ -12,6 +12,7 @@ import CountTooltip from './CountTooltip.vue';
 import HouseholdsChip from './HouseholdsChip.vue';
 import ListingCard from './ListingCard.vue';
 import OverviewMap from './OverviewMap.vue';
+import ZoneBanner from './ZoneBanner.vue';
 
 // 서울 아파트 탭: 회사와 멀어도 고른 서울 구의 아파트를 경매(법원경매), 공매(온비드), 매매(네이버)로 나눠 본다.
 // 맨 위에 모을 구 고르기와 살 때 붙는 조건(실거주·대출·양도세), 그 아래 이 탭만의 필터(종류, 구, 세대수, 가격)와 목록(왼쪽), 지도(오른쪽).
@@ -35,6 +36,8 @@ const props = defineProps<{
   fill: AppState['householdsFill'];
   filling: boolean;
   fillError: string | null;
+  /** 재개발 구역 확인 상태(브이월드 키, 마지막 결과, 확인 중, 오류) */
+  zone: AppState['zoneCheck'] & { checking: boolean; error: string | null };
 }>();
 const emit = defineEmits<{
   select: [ListingView];
@@ -53,6 +56,8 @@ const emit = defineEmits<{
   households: [key: string, name: string, households: number | null];
   /** 건축물대장에서 세대수 채우기 */
   fill: [];
+  /** 재개발 구역 확인(브이월드) */
+  zoneCheck: [];
   /** 지금 보이는 목록(화면 순서, 키보드 이동에 씀) */
   visible: [ListingView[]];
 }>();
@@ -198,8 +203,10 @@ function onRulesToggle(e: Event) {
 }
 const dot = (date: string) => date.replace(/-/g, '.');
 
-/** 세대수 채운 때('10월 18일 21:05') */
+/** 세대수 채운 때, 구역 확인한 때('10월 18일 21:05') */
 const fillDay = (iso: string) => new Date(iso).toLocaleString('ko-KR', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+/** 보이는 아파트 중 재개발 쪽 구역 안(접함은 뺌)인 것 */
+const zoneInside = computed(() => shown.value.filter((l) => l.zone?.check?.zones.some((z) => z.overlap !== '접함' && z.kind !== 'limit')).length);
 
 /** 지도를 다시 맞추는 기준(필터가 바뀔 때만) */
 const fitKey = computed(() => [f.kind, f.gu, f.minHouseholds, f.maxHouseholds, f.unknown, f.priceMax].join('|'));
@@ -334,6 +341,19 @@ const none: ListingView[] = [];
           <span v-else-if="!fill.key" class="fill-msg muted">공공데이터포털 키가 없어 못 채웁니다(README 참고)</span>
           <span v-else-if="fill.last" class="fill-msg" :class="fill.last.ok ? 'muted' : 'err'">{{ fillDay(fill.last.at) }} {{ fill.last.text }}</span>
         </div>
+        <div class="fill-row">
+          <button
+            type="button" class="btn btn-sm" :disabled="!zone.key || zone.checking || running"
+            :title="zone.key
+              ? '경매·공매 아파트는 주소의 지번으로, 네이버 매매는 단지 좌표로 필지를 찾아 브이월드 토지이용계획에 정비구역, 재개발·재정비촉진, 모아타운이 걸렸는지 봅니다. 경매 조회 때도 알아서 봅니다.'
+              : '브이월드 인증키가 있어야 합니다. config/local.json에 vworldKey를 넣어 주세요(README의 집터 탭).'"
+            @click="emit('zoneCheck')"
+          >{{ zone.checking ? '확인 중…' : '재개발 구역 확인' }}</button>
+          <span v-if="zoneInside" class="chip chip-new" title="보이는 아파트 중 토지이용계획에 정비구역, 재개발·재정비촉진, 모아타운이 걸린 것">구역 안 {{ zoneInside }}건</span>
+          <span v-if="zone.error" class="fill-msg err" role="alert">{{ zone.error }}</span>
+          <span v-else-if="!zone.key" class="fill-msg muted">브이월드 키가 없어 재개발·재건축 구역을 못 봅니다(README 참고)</span>
+          <span v-else-if="zone.last" class="fill-msg" :class="zone.last.ok ? 'muted' : 'err'">{{ fillDay(zone.last.at) }} {{ zone.last.text }}</span>
+        </div>
 
         <section v-if="auctions.length" class="group">
           <h3 class="group-head">
@@ -346,6 +366,7 @@ const none: ListingView[] = [];
               :expect="expectedPrices(l, regionStats)"
               @select="emit('select', l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)" @source="emit('source', l)" @raw="emit('raw', l)"
             >
+              <template v-if="l.zone" #banner><ZoneBanner part="banner" :listing="l" :key-set="zone.key" /></template>
               <template #tags>
                 <HouseholdsChip :listing="l" @save="(k, n, h) => emit('households', k, n, h)" />
                 <span v-if="chips.get(l.id)" class="chip" :class="TONE[chips.get(l.id)!.tone]" :title="chips.get(l.id)!.title">{{ chips.get(l.id)!.text }}</span>
@@ -363,6 +384,7 @@ const none: ListingView[] = [];
               v-for="l in sales" :key="l.id" :listing="l" :areas="areas" :selected="l.id === selectedId"
               @select="emit('select', l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)" @source="emit('source', l)" @raw="emit('raw', l)"
             >
+              <template v-if="l.zone" #banner><ZoneBanner part="banner" :listing="l" :key-set="zone.key" /></template>
               <template #tags>
                 <HouseholdsChip :listing="l" @save="(k, n, h) => emit('households', k, n, h)" />
                 <span v-if="chips.get(l.id)" class="chip" :class="TONE[chips.get(l.id)!.tone]" :title="chips.get(l.id)!.title">{{ chips.get(l.id)!.text }}</span>

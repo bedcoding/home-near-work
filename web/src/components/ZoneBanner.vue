@@ -3,8 +3,9 @@ import { computed, ref } from 'vue';
 import type { ListingView } from '../../../shared/types';
 import { ZONE_CHECKED, ZONE_LINKS, zoneView } from '../zones';
 
-// 집터 카드의 재개발 구역 표시: 구역 안이면 카드 이름표 줄 맨 위의 경고 띠(part banner, 펼치면 현금청산 조건과 근거),
+// 카드와 상세 칸의 재개발 구역 표시: 구역 안이면 카드 이름표 줄 맨 위의 경고 띠(part banner, 펼치면 현금청산 조건과 근거),
 // 아니면 다른 이름표 뒤의 작은 표시(part chip: 구역 없음, 확인 전 등). 카드 한 장에 두 자리를 따로 넣고, 맞는 쪽만 보인다.
+// 작은 표시는 집터 탭에만 넣고, 다른 탭(경매, 서울 아파트, 관심, 숨김함, 상세 칸)은 경고 띠만 넣는다.
 
 const props = defineProps<{
   listing: ListingView;
@@ -49,7 +50,7 @@ const day = (iso: string) => new Date(iso).toLocaleDateString('ko-KR', { month: 
       </p>
       <p class="zone-basis">
         브이월드 토지이용계획{{ view.checkedAt ? ` ${day(view.checkedAt)} 조회` : '' }} 기준(법적 효력은 없음), 법령은 {{ dot(ZONE_CHECKED) }}에 원문을 확인했습니다.
-        사업 단계와 권리산정기준일은 이 표시에 없습니다.
+        사업 단계와 권리산정기준일은 이 표시에 없습니다.{{ view.basis ? ` ${view.basis}` : '' }}
       </p>
     </div>
   </div>
