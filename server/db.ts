@@ -4,6 +4,7 @@ import { DATA_DIR, DB_PATH, RUNS_DIR } from './config.js';
 import { DEFAULT_AREAS, findStation } from './stations.js';
 import { CAPTURE_SOURCES, SEOUL_GUS } from '../shared/types.js';
 import type {
+  AptRegistry,
   Area,
   AuctionResultKind,
   CourtRegionStat,
@@ -335,12 +336,25 @@ CREATE INDEX IF NOT EXISTS house_trades_date ON house_trades (contract_date);
 `);
 
 // 서울 아파트 탭에서 직접 넣은 단지 세대수. key는 AptInfo.complexKey('lot:강남구 대치동 316', 'nv:1234'), name은 넣을 때 보인 단지 이름이나 주소.
+// apt_registry는 건축물대장에서 읽은 단지 정보(경매·공매 지번 키 'lot:…'마다, 칸은 shared/types AptRegistry와 같음).
 db.exec(`
 CREATE TABLE IF NOT EXISTS apt_complexes (
   key TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   households INTEGER NOT NULL,
   updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS apt_registry (
+  key TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  households INTEGER,
+  buildings INTEGER,
+  floors INTEGER,
+  name TEXT,
+  purpose TEXT,
+  basis TEXT,
+  error TEXT,
+  checked_at TEXT NOT NULL
 );
 `);
 
@@ -386,6 +400,29 @@ export function setAptGus(list: string[]): string[] {
 export function complexHouseholds(): Map<string, number> {
   const rows = db.prepare('SELECT key, households FROM apt_complexes').all() as { key: string; households: number }[];
   return new Map(rows.map((r) => [r.key, r.households]));
+}
+
+/** 건축물대장에서 읽은 단지 정보(단지 키 → AptRegistry) */
+export function registryRows(): Map<string, AptRegistry> {
+  const rows = db.prepare('SELECT * FROM apt_registry').all() as {
+    key: string; status: AptRegistry['status']; households: number | null; buildings: number | null; floors: number | null;
+    name: string | null; purpose: string | null; basis: AptRegistry['basis']; error: string | null; checked_at: string;
+  }[];
+  return new Map(
+    rows.map((r) => [
+      r.key,
+      { status: r.status, households: r.households, buildings: r.buildings, floors: r.floors, name: r.name, purpose: r.purpose, basis: r.basis, checkedAt: r.checked_at, error: r.error },
+    ]),
+  );
+}
+
+/** 건축물대장에서 읽은 단지 정보를 저장한다(같은 키는 바꾼다). */
+export function saveRegistry(key: string, r: AptRegistry) {
+  db.prepare(
+    `INSERT INTO apt_registry (key, status, households, buildings, floors, name, purpose, basis, error, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET status = excluded.status, households = excluded.households, buildings = excluded.buildings, floors = excluded.floors,
+       name = excluded.name, purpose = excluded.purpose, basis = excluded.basis, error = excluded.error, checked_at = excluded.checked_at`,
+  ).run(key, r.status, r.households, r.buildings, r.floors, r.name, r.purpose, r.basis, r.error, r.checkedAt);
 }
 
 /** 단지 세대수를 넣거나 고친다. households가 null이면 지운다. */

@@ -533,16 +533,37 @@ export function seoulGuOf(address: string | null | undefined): string | null {
 }
 
 /**
+ * 건축물대장에서 읽은 단지 정보(경매·공매 물건의 지번으로 조회, 공공데이터포털 키가 있을 때).
+ * status: ok 세대수를 읽음, none 그 지번에 세대수가 있는 대장이 없음, error 조회 실패(다음에 다시 봄).
+ * buildings 세대가 있는 동 수, floors 그중 가장 높은 지상층수, name 건물명, purpose 주용도(기타용도).
+ * basis: recap 총괄표제부 세대수, title 동마다 표제부 세대수 합, ho 세대수가 비어 호수 합으로 셈.
+ */
+export interface AptRegistry {
+  status: 'ok' | 'none' | 'error';
+  households: number | null;
+  buildings: number | null;
+  floors: number | null;
+  name: string | null;
+  purpose: string | null;
+  basis: 'recap' | 'title' | 'ho' | null;
+  checkedAt: string;
+  error: string | null;
+}
+
+/**
  * 서울 아파트 탭에 보이는 아파트 정보(법원경매·온비드·매매 매물 중 건물 용도가 아파트이고 서울 구를 아는 것).
  * complexKey: 세대수를 같이 쓰는 단지 키(법원경매·온비드는 구·법정동·지번 'lot:강남구 대치동 316', 네이버는 단지 번호 'nv:1234',
  * 지번을 못 찾으면 매물 하나 'id:courtauction:…'). complexName: 세대수 칸과 찾기에 쓰는 단지 이름이나 주소.
- * households: 직접 넣은 세대수(모르면 null). property: 온비드 재산 종류('압류재산', '수탁재산' 등, 그 밖에는 null).
+ * households: 세대수(직접 넣은 값, 없으면 건축물대장 값, 둘 다 없으면 null), householdsFrom: 그 값이 어디서 왔는지.
+ * registry: 건축물대장 조회 결과(조회한 적 없으면 null). property: 온비드 재산 종류('압류재산', '수탁재산' 등, 그 밖에는 null).
  */
 export interface AptInfo {
   gu: string;
   complexKey: string;
   complexName: string;
   households: number | null;
+  householdsFrom: 'manual' | 'registry' | null;
+  registry: AptRegistry | null;
   property: string | null;
 }
 
@@ -776,4 +797,9 @@ export interface AppState {
   nearNames: string[];
   /** 서울 아파트 탭에서 고른 구: 법원경매와 온비드가 회사와 멀어도 이 구의 아파트를 모은다(SEOUL_GUS 순서) */
   aptGus: string[];
+  /**
+   * 건축물대장 세대수 채우기: key 공공데이터포털 키를 넣어 두었는지(config/local.json의 dataGoKrKey),
+   * last 마지막으로 채운 결과(at 시각, ok 성공, text '세대수 채움 3곳, 대장에서 못 찾음 1곳' 또는 오류).
+   */
+  householdsFill: { key: boolean; last: { at: string; ok: boolean; text: string } | null };
 }

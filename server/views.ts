@@ -3,7 +3,7 @@ import { toNumber } from './collectors/types.js';
 import { looksSimilar } from './identity.js';
 import { manwon } from '../shared/format.js';
 import {
-  isApartmentType, isDetachedHouseType, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seoulGuOf, type AptInfo, type AuctionResultSummary, type AuctionResultView,
+  isApartmentType, isDetachedHouseType, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seoulGuOf, type AptInfo, type AptRegistry, type AuctionResultSummary, type AuctionResultView,
   type AuctionSummaryKind, type ListingView, type NormalizedListing, type NoticeFacts, type NoticeView, type PriceChangeType, type PriceOption, type RatioStats,
   type TrustDocRound, type TrustDocView,
 } from '../shared/types.js';
@@ -98,10 +98,13 @@ function complexNameOf(address: string): string {
 }
 
 /**
- * 서울 아파트면 구, 단지 키와 이름, 직접 넣은 세대수, 온비드 재산 종류(AptInfo). 아파트가 아니거나 서울 구를 모르면 null.
+ * 서울 아파트면 구, 단지 키와 이름, 세대수(직접 넣은 값, 없으면 건축물대장 값), 대장 조회 결과, 온비드 재산 종류(AptInfo).
+ * 아파트가 아니거나 서울 구를 모르면 null.
  * 단지 키: 법원경매·온비드는 구, 법정동, 주소의 지번('lot:강남구 대치동 316'), 네이버는 단지 번호('nv:1234'), 못 정하면 매물 하나('id:…').
  */
-function aptRef(id: string, source: string, l: NormalizedListing, raw: unknown, households: Map<string, number>): AptInfo | null {
+function aptRef(
+  id: string, source: string, l: NormalizedListing, raw: unknown, households: Map<string, number>, registry: Map<string, AptRegistry>,
+): AptInfo | null {
   if (!isApartmentType(l.buildingType)) return null;
   const address = l.address ?? '';
   let gu: string | null = null;
@@ -130,7 +133,18 @@ function aptRef(id: string, source: string, l: NormalizedListing, raw: unknown, 
     if (jibun) complexKey = `lot:${gu} ${l.dong} ${jibun}`;
   }
   complexKey ??= `id:${id}`;
-  return { gu, complexKey, complexName: complexName.slice(0, 80), households: households.get(complexKey) ?? null, property };
+  const manual = households.get(complexKey) ?? null;
+  const reg = registry.get(complexKey) ?? null;
+  const fromRegistry = reg?.status === 'ok' ? reg.households : null;
+  return {
+    gu,
+    complexKey,
+    complexName: complexName.slice(0, 80),
+    households: manual ?? fromRegistry,
+    householdsFrom: manual != null ? 'manual' : fromRegistry != null ? 'registry' : null,
+    registry: reg,
+    property,
+  };
 }
 
 const FULL_OPTION = /풀\s*옵션|풀옵/;
@@ -170,6 +184,7 @@ export function buildListingViews(): ListingView[] {
   /** 옵션을 읽는 원본(집토스 옵션 목록, 피터팬 풀옵션 표시, 네이버 소개 글과 단지 번호) */
   const optionRaw = new Map([...store.rawBySource('ziptoss'), ...store.rawBySource('peterpanz'), ...store.rawBySource('naver')]);
   const households = store.complexHouseholds();
+  const registry = store.registryRows();
   const verdicts = new Map(store.allVerdicts().map((v) => [v.listing_id, v]));
   const events = store.unackedEvents();
   const newIds = new Set(events.filter((e) => e.type === 'new').map((e) => e.listing_id));
@@ -204,7 +219,10 @@ export function buildListingViews(): ListingView[] {
       seenRef: row.seen_ref ? JSON.parse(row.seen_ref) : null,
       auction: row.source === 'courtauction' ? auctionRef(courtRaw.get(row.id)) : row.source === 'onbid' ? onbidRef(onbidRaw.get(row.id)) : null,
       options: optionsRef(row.source, optionRaw.get(row.id), data.title ?? ''),
-      apt: aptRef(row.id, row.source, data, row.source === 'courtauction' ? courtRaw.get(row.id) : row.source === 'onbid' ? onbidRaw.get(row.id) : optionRaw.get(row.id), households),
+      apt: aptRef(
+        row.id, row.source, data, row.source === 'courtauction' ? courtRaw.get(row.id) : row.source === 'onbid' ? onbidRaw.get(row.id) : optionRaw.get(row.id),
+        households, registry,
+      ),
     };
   });
 }
