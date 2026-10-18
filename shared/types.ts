@@ -461,6 +461,8 @@ export interface ListingView extends NormalizedListing {
   options: { list: string[] | null; full: boolean } | null;
   /** 서울 아파트면 구, 단지, 세대수(AptInfo). 아니면 null. */
   apt: AptInfo | null;
+  /** 집터 탭 경매·공매(단독, 토지)면 재개발 구역 확인 정보(PlotZone). 아니면 null. */
+  zone: PlotZone | null;
 }
 
 /** 경매 탭 칸(주거, 상가, 토지)에 맞춘 매각 결과 종류. other는 산업용, 용도복합용 등 세 칸에 들지 않는 것. */
@@ -565,6 +567,42 @@ export interface AptInfo {
   householdsFrom: 'manual' | 'registry' | null;
   registry: AptRegistry | null;
   property: string | null;
+}
+
+/**
+ * 토지이용계획에 걸린 재개발 쪽 구역 하나(브이월드 토지이용계획 한 줄).
+ * kind: redev 정비구역·재개발구역·재정비촉진지구 같은 정비사업 구역, small 소규모주택정비 관리지역(모아타운), limit 건축허가·착공 제한.
+ * name: 토지이용계획의 구역 이름 그대로('정비구역'), overlap: 필지가 구역에 '포함'(안), '저촉'(일부 걸침), '접함'(경계에 붙음).
+ * notice: 관리번호에서 읽은 고시·공고 번호('2024-448'), org: 그 번호를 낸 기관(관리번호 앞자리로 아는 것만, 모르면 null).
+ */
+export interface LandZone {
+  kind: 'redev' | 'small' | 'limit';
+  name: string;
+  overlap: string;
+  notice: string | null;
+  org: string | null;
+}
+
+/**
+ * 필지 하나의 재개발 구역 확인 결과(지번으로 브이월드 토지이용계획을 읽음).
+ * status: ok 읽음(zones가 비면 걸린 구역이 없음), empty 응답이 비어 있음(구역이 없다는 뜻은 아님), error 조회 실패(다음에 다시 봄).
+ */
+export interface LandZoneCheck {
+  status: 'ok' | 'empty' | 'error';
+  zones: LandZone[];
+  checkedAt: string;
+  error: string | null;
+}
+
+/**
+ * 집터 탭 경매·공매(단독, 토지)의 재개발 구역 정보. lot: 조회에 쓰는 지번 키('lot:강남구 대치동 316'),
+ * pnu: 필지 번호 19자리, 둘 다 못 정하면 null이고 why가 그 까닭. check: 조회 결과(아직 안 봤으면 null).
+ */
+export interface PlotZone {
+  lot: string | null;
+  pnu: string | null;
+  why: string | null;
+  check: LandZoneCheck | null;
 }
 
 /** 비율(%) 여러 개의 요약: count 센 수, median 중간값, mean 평균, min 가장 낮은 값, max 가장 높은 값 */
@@ -802,4 +840,9 @@ export interface AppState {
    * last 마지막으로 채운 결과(at 시각, ok 성공, text '세대수 채움 3곳, 대장에서 못 찾음 1곳' 또는 오류).
    */
   householdsFill: { key: boolean; last: { at: string; ok: boolean; text: string } | null };
+  /**
+   * 집터 재개발 구역 확인: key 브이월드 인증키를 넣어 두었는지(config/local.json의 vworldKey),
+   * last 마지막으로 확인한 결과(at 시각, ok 성공, text '구역 확인 12곳: 정비구역 등 안 2곳, 없음 9곳, 응답 없음 1곳' 또는 오류).
+   */
+  zoneCheck: { key: boolean; last: { at: string; ok: boolean; text: string } | null };
 }

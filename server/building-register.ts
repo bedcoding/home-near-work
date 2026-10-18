@@ -1,18 +1,18 @@
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { LOCAL_CONFIG_PATH } from './config.js';
 import * as store from './db.js';
 import { toNumber } from './collectors/types.js';
+import { legalDongCode, parseLot, type Lot } from './lots.js';
 import { buildListingViews } from './views.js';
 import type { AppState, AptRegistry } from '../shared/types.js';
+
+export { parseLot };
 
 // 서울 아파트 탭의 세대수를 국토교통부 건축HUB 건축물대장정보 서비스(공공데이터포털 15134735)로 채운다.
 // 경매·공매 물건 주소에서 뽑은 구·법정동·지번(AptInfo.complexKey 'lot:강남구 대치동 316')으로 표제부(getBrTitleInfo, 동마다 한 줄)를 읽어
 // 세대수(hhldCnt) 합, 세대가 있는 동 수, 가장 높은 지상층수(grndFlrCnt)를 남기고, 동이 여럿이면 총괄표제부(getBrRecapTitleInfo)의 세대수를 쓴다.
 // 인증키는 config/local.json의 dataGoKrKey(일반 인증키, 인코딩된 것도 디코딩된 것도 됨). 키는 요청 기록이나 오류 글자에 남기지 않는다.
-// 법정동 코드는 seoul-bjdong.json: 행정안전부 법정동코드 전체자료 중 서울의 '존재' 행(구 25곳, 법정동 467곳)을
-// building-register-mcp 저장소(Apache-2.0)의 사본에서 뽑았다(2026-10-18).
+// 지번 키와 법정동 코드는 lots.ts.
 // 이 프로그램을 만든 작업 환경에서는 공공데이터포털에 닿지 않아 실제 응답으로 확인하지 못했다. 주소, 입력값, 응답 칸 이름은 이 API를 쓰는 공개 코드로 확인했다.
 
 /** 요청 주소 앞부분. HNW_REGISTER_BASE로 바꿀 수 있다(시험용 가짜 서버). */
@@ -28,11 +28,6 @@ const MAX_LOTS = 200;
 const PAUSE_MS = 150;
 /** 마지막으로 채운 결과(설정) */
 const LAST_KEY = 'households_fill_last';
-
-const BJDONG = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'seoul-bjdong.json'), 'utf8')) as Record<
-  string,
-  { code: string; dongs: Record<string, string> }
->;
 
 /** 요청 하나를 기록하는 함수(키를 뺀 주소, HTTP 상태, 설명) */
 type RecordRequest = (url: string, status: number | null, note: string) => void;
@@ -58,12 +53,6 @@ export function householdsFillState(): AppState['householdsFill'] {
     /* 못 읽으면 없는 것으로 */
   }
   return { key: !!registryKey(), last };
-}
-
-/** 'lot:강남구 대치동 316', 'lot:송파구 가락동 산12-3' → 구, 법정동, 산 여부, 본번, 부번(없으면 '0'). 모양이 다르면 null. */
-export function parseLot(key: string): { gu: string; dong: string; san: boolean; bun: string; ji: string } | null {
-  const m = /^lot:(\S+) (\S+) (산)?(\d+)(?:-(\d+))?$/.exec(key);
-  return m ? { gu: m[1], dong: m[2], san: !!m[3], bun: m[4], ji: m[5] ?? '0' } : null;
 }
 
 /** 조회 오류. fatal이면 키나 서비스 문제라 남은 단지도 안 되므로 멈춘다. */
@@ -151,13 +140,12 @@ const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null
  * 세대가 있는 동(세대수가 있거나, 주용도가 주택이고 호수가 있는 동)만 센다. 세대수는 동마다 합(모두 비었으면 호수 합),
  * 동이 여럿이면 총괄표제부 세대수가 있으면 그것을 쓴다.
  */
-export async function lookupLot(lot: NonNullable<ReturnType<typeof parseLot>>, key: string, record: RecordRequest = () => {}): Promise<AptRegistry> {
+export async function lookupLot(lot: Lot, key: string, record: RecordRequest = () => {}): Promise<AptRegistry> {
   const checkedAt = new Date().toISOString();
   const empty = { households: null, buildings: null, floors: null, name: null, purpose: null, basis: null, checkedAt };
-  const gu = BJDONG[lot.gu];
-  const dongCode = gu?.dongs[lot.dong];
-  if (!gu || !dongCode) return { status: 'none', ...empty, error: `법정동 코드를 모름(${lot.gu} ${lot.dong})` };
-  const params = { sigunguCd: gu.code, bjdongCd: dongCode, platGbCd: lot.san ? '1' : '0', bun: lot.bun.padStart(4, '0'), ji: lot.ji.padStart(4, '0') };
+  const code = legalDongCode(lot.gu, lot.dong);
+  if (!code) return { status: 'none', ...empty, error: `법정동 코드를 모름(${lot.gu} ${lot.dong})` };
+  const params = { sigunguCd: code.sigungu, bjdongCd: code.bjdong, platGbCd: lot.san ? '1' : '0', bun: lot.bun.padStart(4, '0'), ji: lot.ji.padStart(4, '0') };
   const title = await rows('getBrTitleInfo', params, key, record);
   const homes = title.filter((r) => num(r.hhldCnt) > 0 || (num(r.hoCnt) > 0 && /주택/.test(String(r.mainPurpsCdNm ?? ''))));
   if (!homes.length) {

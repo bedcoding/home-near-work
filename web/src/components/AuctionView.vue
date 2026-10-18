@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import {
-  noticeSourcesOf, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type HouseTradeSummary, type ListingView, type NoticeSourceId,
-  type NoticeSourceStatus, type NoticeView, type Verdict,
+  noticeSourcesOf, type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type HouseTradeSummary, type ListingView,
+  type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type Verdict,
 } from '../../../shared/types';
 import type { CatalogStation } from '../areaActions';
 import { expectedPrices, saleDateOf, saleDay, type AuctionKind } from '../auction';
@@ -13,6 +13,7 @@ import HouseTrades from './HouseTrades.vue';
 import ListingCard from './ListingCard.vue';
 import NoticeList from './NoticeList.vue';
 import OverviewMap from './OverviewMap.vue';
+import ZoneBanner from './ZoneBanner.vue';
 
 // 경매 탭(주거, 상가)과 집터 탭(단독, 토지)이 같이 쓴다: 목록 위의 보조정보(단독주택 실거래, 매각 결과, 상가와 토지 칸의 LH 공고,
 // 신탁 공매 공고), 그 아래 매각기일별 목록과 매매 매물(왼쪽), 지도(오른쪽).
@@ -61,6 +62,8 @@ const props = defineProps<{
   houseAge: number;
   houseFetching: boolean;
   houseError: string | null;
+  /** 집터 탭: 재개발 구역 확인 상태(키, 마지막 결과)와 지금 확인하는 중, 난 오류. 있으면 제목 줄에 '재개발 구역 확인'과 매매 매물의 구역 표시가 보인다. */
+  zone?: AppState['zoneCheck'] & { checking: boolean; error: string | null };
 }>();
 const emit = defineEmits<{
   select: [ListingView];
@@ -82,6 +85,8 @@ const emit = defineEmits<{
   houseAge: [number];
   /** 국토부 실거래를 지금 받기 */
   houseFetch: [];
+  /** 집터 경매·공매의 재개발 구역을 지금 확인 */
+  zoneCheck: [];
 }>();
 
 const KIND_NAMES: { id: AuctionKind; name: string; title: string }[] = [
@@ -134,6 +139,11 @@ const lhCurrent = computed(() => props.lhNotices.filter((n) => n.current).length
 const lhFailed = computed(() => failedNoticeSources(props.kind === 'land' ? ['lhland', 'lhfirst'] : ['lhshop', 'lhfirst'], props.noticeStatus));
 const lh = foldState('hnw-lh-notices-open', () => lhNew.value > 0);
 
+/** 재개발 구역 확인 결과를 보인 시각 */
+const zoneDay = (iso: string) => new Date(iso).toLocaleString('ko-KR', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+/** 경매 목록 중 재개발 쪽 구역 안(경계에 붙은 것 빼고)인 물건 수 */
+const zoneInside = computed(() => props.listings.filter((l) => l.zone?.check?.zones.some((z) => z.overlap !== '접함')).length);
+
 /** 이어지는 같은 매각기일끼리 묶는다. */
 const days = computed(() => {
   const out: { key: string; day: string; when: string; past: boolean; items: ListingView[] }[] = [];
@@ -157,6 +167,19 @@ const days = computed(() => {
         <a v-for="x in links" :key="x.url" :href="x.url" target="_blank" rel="noopener" :title="x.title">{{ x.label }} ↗</a>
       </nav>
       <div class="auction-actions">
+        <div v-if="zone" class="zone-row">
+          <span v-if="zone.error" class="zone-msg err" role="alert">{{ zone.error }}</span>
+          <span v-else-if="!zone.key" class="zone-msg muted">브이월드 키가 없어 재개발 구역을 못 봅니다(README 참고)</span>
+          <span v-else-if="zone.last" class="zone-msg" :class="zone.last.ok ? 'muted' : 'err'">{{ zoneDay(zone.last.at) }} {{ zone.last.text }}</span>
+          <span v-if="zoneInside" class="chip chip-new" title="이 칸 경매·공매 중 토지이용계획에 정비구역, 재개발·재정비촉진, 모아타운, 건축허가 제한이 걸린 물건">구역 안 {{ zoneInside }}건</span>
+          <button
+            type="button" class="btn run" :disabled="!zone.key || zone.checking || running"
+            :title="zone.key
+              ? '이 탭 경매·공매(단독, 토지)의 지번으로 브이월드 토지이용계획을 읽어 정비구역, 재개발·재정비촉진, 모아타운, 건축허가 제한이 걸렸는지 봅니다. 경매 조회 때도 알아서 봅니다.'
+              : '브이월드 인증키가 있어야 합니다. config/local.json에 vworldKey를 넣어 주세요(README의 집터 탭).'"
+            @click="emit('zoneCheck')"
+          >{{ zone.checking ? '확인 중…' : '재개발 구역 확인' }}</button>
+        </div>
         <button class="btn run" :disabled="running" title="법원경매와 온비드, 신탁 공매 공고만 조회합니다(매매와 전월세 사이트, 임대 공고는 건너뜀)" @click="emit('run')">
           {{ running ? '조회 중…' : '경매 조회하기' }}
         </button>
@@ -229,7 +252,10 @@ const days = computed(() => {
               :expect="expectedPrices(l, regionStats)"
               @select="emit('select', l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
               @source="emit('source', l)" @raw="emit('raw', l)"
-            />
+            >
+              <template v-if="l.zone" #banner><ZoneBanner part="banner" :listing="l" :key-set="zone?.key ?? false" /></template>
+              <template v-if="l.zone && zone" #tags><ZoneBanner part="chip" :listing="l" :key-set="zone.key" /></template>
+            </ListingCard>
           </div>
         </section>
         <section v-if="sales.length" class="day sales">
@@ -242,7 +268,9 @@ const days = computed(() => {
               v-for="l in sales" :key="l.id" :listing="l" :areas="areas" :selected="l.id === selectedId"
               @select="emit('select', l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
               @source="emit('source', l)" @raw="emit('raw', l)"
-            />
+            >
+              <template v-if="zone" #tags><ZoneBanner part="chip" :listing="l" :key-set="zone.key" sale /></template>
+            </ListingCard>
           </div>
         </section>
         <p v-if="!all.length" class="empty muted">{{ EMPTY_TEXT[kind] }}</p>
@@ -280,6 +308,9 @@ const days = computed(() => {
 .links a { color: var(--ink-2); text-decoration: none; white-space: nowrap; }
 .links a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .auction-actions .run { min-height: 34px; padding: 0 12px; font-size: 13px; }
+.zone-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 10px; min-width: 0; }
+.zone-msg { font-size: 12px; }
+.zone-msg.err { color: var(--new); font-weight: 600; }
 .outside { font-size: 13px; font-weight: 600; color: var(--muted); }
 
 /* 목록(왼쪽)과 지도(오른쪽, 따라 내려옴). 좁으면 지도가 위로 간다. 매물 탭과 같은 배치. */

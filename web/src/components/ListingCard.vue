@@ -167,6 +167,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       </div>
 
       <div class="tags">
+        <slot name="banner" />
         <span v-if="selected" class="selection-label">✓ 선택됨</span>
         <span v-if="l.isNew" class="chip chip-new">신규</span>
         <template v-if="changeText">
