@@ -113,6 +113,7 @@ export const ziptoss: Collector = {
     );
 
     for (const [i, station] of stations.entries()) {
+      if (i > 0) await session.rest();
       const url = `https://ziptoss.com/map/${encodeURIComponent(station.name)}`;
       ctx.progress(`집토스, ${station.name} 주변 (${i + 1}/${stations.length})`);
       const response = await session.goto('ziptoss', url);

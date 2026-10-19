@@ -333,6 +333,7 @@ export const courtauction: Collector = {
     };
 
     for (const [i, { gu, searches, onlyApt }] of plan.entries()) {
+      if (i > 0) await session.rest();
       const rows = new Map<string, any>();
       /** 목록 행 번호(docid) → 그 행을 읽은 화면 주소와 스크린샷 */
       const seenOn = new Map<string, { url: string; shot: string | null }>();

@@ -1,4 +1,4 @@
-import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, RedevZonesView, RunDetail, RunInfo, RunScope, SourceId, Station, Verdict } from '../../shared/types';
+import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, LineViewSetting, RedevZonesView, RunDetail, RunInfo, RunScope, SourceId, Station, Verdict } from '../../shared/types';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -27,15 +27,18 @@ export const api = {
   setAutoCheck: (body: { time?: string | null; day?: number | null; visible?: boolean; noticeTime?: string | null }) => request<AutoCheckState>('PUT', '/api/auto-check', body),
   /** 조회가 끝나면 띄울 알림 설정을 바꾼다(준 값만). 바뀐 전체 설정을 돌려준다. */
   setAlerts: (body: Partial<AlertSettings>) => request<AlertSettings>('PUT', '/api/alerts', body),
+  /** 노선 탭 '이 노선 조회하기': 노선 역(반경 radiusM)만 매물 사이트로 조회한다. */
+  startLineRun: (visible: boolean, line: string, radiusM: number) => request<{ runId: number }>('POST', '/api/runs/line', { visible, line, radiusM }),
+  /** 노선 탭에서 고른 노선과 역 반경(line null이면 고르지 않음) */
+  setLineView: (line: string | null, radiusM: number) => request<{ lineView: LineViewSetting | null }>('PUT', '/api/line-view', { line, radiusM }),
+  /** 조회할 때 역·지역·구 사이에 쉬는 시간(초) */
+  setRestSeconds: (seconds: number) => request<{ restSeconds: number }>('PUT', '/api/rest-seconds', { seconds }),
   stopRun: () => request('POST', '/api/runs/stop'),  runs: () => request<RunInfo[]>('GET', '/api/runs'),
   run: (id: number) => request<RunDetail>('GET', `/api/runs/${id}`),
   createArea: (area: Omit<Area, 'id'>) => request<Area>('POST', '/api/areas', area),
   updateArea: (id: number, patch: Partial<Omit<Area, 'id'>>) => request<Area>('PUT', `/api/areas/${id}`, patch),
   deleteArea: (id: number) => request('DELETE', `/api/areas/${id}`),
-  /** 노선 역을 켜고 끈다(mode: only 그 노선만, add 더하기, off 끄기). 없는 역은 radiusM으로 만든다. */
-  areaLine: (line: string, mode: 'only' | 'add' | 'off', radiusM: number) =>
-    request<{ areas: Area[]; text: string }>('POST', '/api/areas/line', { line, mode, radiusM }),
-  /** 노선으로 바꾸기 전에 켜 둔 지역으로 되돌린다. */
+  /** 예전 '이 노선만 켜기' 전에 켜 둔 지역으로 되돌린다. */
   restoreAreas: () => request<{ areas: Area[]; text: string }>('POST', '/api/areas/restore'),
   /** 고를 수 있는 역 전체(수도권 전철역, 좌표, 노선, 시도, 구 포함). */
   stationCatalog: () =>

@@ -191,7 +191,8 @@ export const peterpanz: Collector = {
 
     page.on('response', onResponse);
     try {
-      for (const area of ctx.areas) {
+      for (const [ai, area] of ctx.areas.entries()) {
+        if (ai > 0) await session.rest();
         // 반경이 크면 한 단계 넓게 본다(피터팬 줌 15에서 보이는 지도는 남북 약 2.8km).
         const zoom = area.radiusM > 1300 ? 14 : 15;
         for (const cat of CATEGORIES) {

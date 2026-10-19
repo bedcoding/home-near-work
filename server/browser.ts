@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium, type BrowserContext, type Locator, type Page, type Response } from 'playwright';
 import { BROWSER_PROFILE_DIR, RUNS_DIR } from './config.js';
-import { addRequest, addScreenshot } from './db.js';
+import { addRequest, addScreenshot, getSetting } from './db.js';
+import { REST_CHOICES, REST_DEFAULT } from '../shared/types.js';
 
 /** 조회 중 사이트 카드에 붙이는 배지. seen은 이 프로그램이 전에 모은 매물('기존')이다. */
 export type BadgeTone = 'new' | 'seen' | 'discard' | 'star';
@@ -48,6 +49,12 @@ const INIT_SCRIPT = `
 })();
 `;
 
+/** 조회할 때 역·지역·구 사이에 쉬는 시간(초, 설정 rest_seconds, 처음 3초) */
+export function restSeconds(): number {
+  const v = Number(getSetting('rest_seconds') ?? REST_DEFAULT);
+  return REST_CHOICES.includes(v) ? v : REST_DEFAULT;
+}
+
 /** 조회용 브라우저 창. 평소 쓰는 크롬과 별개의 프로필로 띄운다. */
 export class BrowserSession {
   private shotCount = 0;
@@ -80,6 +87,12 @@ export class BrowserSession {
     const page = context.pages()[0] ?? (await context.newPage());
     await page.evaluate(INIT_SCRIPT).catch(() => {});
     return new BrowserSession(context, page, visible, runId);
+  }
+
+  /** 역·지역·구 하나를 다 보고 다음으로 넘어가기 전에 쉰다(restSeconds초, 창 없이 돌 때도 줄이지 않음). */
+  async rest() {
+    const s = restSeconds();
+    if (s > 0) await this.page.waitForTimeout(s * 1000);
   }
 
   /** ms만큼 쉰다. 창 없이 돌 때는 최대 0.8초. */

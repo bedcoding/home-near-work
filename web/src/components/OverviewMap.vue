@@ -39,8 +39,10 @@ const props = withDefaults(
      * 같은 값에서 매물만 바뀌면(10초마다 상태를 받을 때, 버림, 필터) 사용자가 보던 확대와 위치를 그대로 둔다.
      */
     fitKey?: string;
+    /** '위치 찍어 추가'(새 지역 만들기)를 둔다. 노선 탭처럼 켜진 지역과 상관없는 지도는 끈다. */
+    pickable?: boolean;
   }>(),
-  { listMode: true, fitKey: '', visible: true },
+  { listMode: true, fitKey: '', visible: true, pickable: true },
 );
 const emit = defineEmits<{ select: [ListingView]; reveal: [ListingView[]]; open: [ListingView]; pick: [Point]; area: [Area]; station: [CatalogStation] }>();
 
@@ -520,7 +522,7 @@ onBeforeUnmount(() => {
       </template>
     </div>
     <div class="bar">
-      <button class="btn btn-sm" :class="{ on: picking }" title="누른 뒤 지도에서 한 곳을 누르면 그 자리를 가운데로 1km 지역이 생깁니다" @click="picking = !picking">
+      <button v-if="pickable" class="btn btn-sm" :class="{ on: picking }" title="누른 뒤 지도에서 한 곳을 누르면 그 자리를 가운데로 1km 지역이 생깁니다" @click="picking = !picking">
         {{ picking ? '취소' : '위치 찍어 추가' }}
       </button>
       <label class="zone-toggle" title="재개발·재건축, 모아타운, 재정비촉진, 공공주택 복합사업 구역을 칠합니다(서울시 서울플랜+ 파일을 넣어야 보임)">

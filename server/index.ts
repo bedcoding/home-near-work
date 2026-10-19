@@ -21,12 +21,13 @@ import {
 import { learnFromStoredCaptures, withLinkHints } from './link-hints.js';
 import { acceptNoticeFiles, noticeFileViews } from './notice-files.js';
 import { importRedevZones, redevZones } from './redev-zones.js';
-import { applyLine, areaRestoreState, restoreAreas, type LineMode } from './line-areas.js';
+import { areaRestoreState, LINE_RADII, lineView, restoreAreas, setLineView } from './line-areas.js';
+import { restSeconds } from './browser.js';
 import { updateZonesNow, zoneFileCheckState } from './redev-zones-update.js';
-import { getProgress, startRun, stopRun } from './runner.js';
+import { getProgress, startLineRun, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
 import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, withTrustFacts } from './views.js';
-import { CAPTURE_SOURCES, RUN_SCOPES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type SourceId, type Verdict } from '../shared/types.js';
+import { CAPTURE_SOURCES, REST_CHOICES, RUN_SCOPES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type SourceId, type Verdict } from '../shared/types.js';
 
 // 처리하지 못한 비동기 오류가 나도 대시보드 서버가 꺼지지 않게 기록만 남긴다.
 process.on('unhandledRejection', (e) => console.error('처리하지 못한 오류:', e instanceof Error ? e.message : e));
@@ -48,7 +49,8 @@ const isNaverOnly = (r: { summary: { sources: { source: string }[] } | null }) =
 function lastBySource(runs: RunInfo[]): AppState['lastBySource'] {
   const out: AppState['lastBySource'] = {};
   for (const r of runs) {
-    if (r.status === 'running' || !r.summary) continue;
+    // 노선 탭 조회는 회사 근처 지역이 아니라 사이트 탭의 마지막 결과로 치지 않는다.
+    if (r.status === 'running' || !r.summary || r.line) continue;
     for (const s of r.summary.sources) {
       if (!out[s.source]) out[s.source] = { at: r.finishedAt ?? r.startedAt, status: s.status, kept: s.kept, error: s.error ?? null };
     }
@@ -63,7 +65,7 @@ app.get('/api/state', async (): Promise<AppState> => {
     areas: store.listAreas(),
     stations: withLinkHints(knownStations()),
     running: getProgress(),
-    lastRun: runs.find((r) => r.status !== 'running' && !isNaverOnly(r) && !r.noticesOnly) ?? null,
+    lastRun: runs.find((r) => r.status !== 'running' && !isNaverOnly(r) && !r.noticesOnly && !r.line) ?? null,
     lastBySource: lastBySource(runs),
   unackedCount: store.unackedCount(),
     naverCapture: naverCaptureState(),
@@ -78,7 +80,36 @@ app.get('/api/state', async (): Promise<AppState> => {
     householdsFill: householdsFillState(),
     zoneCheck: zoneCheckState(),
     areaRestore: areaRestoreState(),
+    lineView: lineView(),
+    restSeconds: restSeconds(),
   };
+});
+
+/** 노선 탭에서 고른 노선과 역 반경을 바꾼다(line이 null이면 고르지 않음). 고른 노선 역 반경은 크롬 확장 화면 데이터를 저장할 때도 지역으로 친다. */
+app.put<{ Body: { line?: unknown; radiusM?: unknown } | null }>('/api/line-view', async (req, reply) => {
+  const line = req.body?.line;
+  const radiusM = Number(req.body?.radiusM ?? 500);
+  if ((line !== null && typeof line !== 'string') || !LINE_RADII.includes(radiusM)) {
+    reply.code(400);
+    return { error: `노선 이름과 반경(${LINE_RADII.join(', ')}m)이 필요합니다.` };
+  }
+  try {
+    return { lineView: setLineView(line, radiusM) };
+  } catch (e) {
+    reply.code(400);
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+/** 조회할 때 역·지역·구 사이에 쉬는 시간(초)을 바꾼다. */
+app.put<{ Body: { seconds?: unknown } | null }>('/api/rest-seconds', async (req, reply) => {
+  const seconds = Number(req.body?.seconds);
+  if (!REST_CHOICES.includes(seconds)) {
+    reply.code(400);
+    return { error: `쉬는 시간은 ${REST_CHOICES.join(', ')}초 중 하나여야 합니다.` };
+  }
+  store.setSetting('rest_seconds', String(seconds));
+  return { restSeconds: restSeconds() };
 });
 
 /** 서울 아파트 탭에서 고른 구를 통째로 바꾼다(gus: 서울 구 이름 배열). 바뀐 목록을 돌려준다. */
@@ -288,26 +319,6 @@ app.post<{ Body: Omit<Area, 'id'> }>('/api/areas', async (req, reply) => {
   return store.createArea({ name, lat, lng, radiusM, enabled: enabled ?? true });
 });
 
-/**
- * 지역 탭 '노선으로 보기': 노선(line, 예 '2호선') 역을 mode(only 그 노선만, add 더하기, off 끄기)로 켜고 끈다.
- * 없는 역은 radiusM(300~2500m, 처음 500m)으로 만든다. 바뀐 지역 목록과 결과 한 줄을 돌려준다.
- */
-app.post<{ Body: { line?: unknown; mode?: unknown; radiusM?: unknown } | null }>('/api/areas/line', async (req, reply) => {
-  const line = typeof req.body?.line === 'string' ? req.body.line : '';
-  const mode = req.body?.mode;
-  const radiusM = Number(req.body?.radiusM ?? 500);
-  if (!line || (mode !== 'only' && mode !== 'add' && mode !== 'off') || !(radiusM >= 300 && radiusM <= 2500)) {
-    reply.code(400);
-    return { error: '노선, 켜는 방법(only, add, off), 반경(300~2500m)이 필요합니다.' };
-  }
-  try {
-    return applyLine(line, mode as LineMode, Math.round(radiusM));
-  } catch (e) {
-    reply.code(400);
-    return { error: e instanceof Error ? e.message : String(e) };
-  }
-});
-
 /** 노선으로 바꾸기 전에 켜 둔 지역으로 되돌린다. */
 app.post('/api/areas/restore', async (_req, reply) => {
   try {
@@ -396,6 +407,18 @@ app.post<{ Body: { visible?: boolean; scope?: unknown; sources?: unknown } }>('/
     ?? (Array.isArray(req.body?.sources) && req.body!.sources.some((s) => s === 'courtauction' || s === 'onbid') ? 'auction' : undefined);
   try {
     return { runId: startRun(req.body?.visible !== false, scope) };
+  } catch (e) {
+    reply.code(409);
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+/** 노선 탭 '이 노선 조회하기': 노선(line) 역(반경 radiusM)만 매물 사이트로 조회한다. */
+app.post<{ Body: { visible?: boolean; line?: unknown; radiusM?: unknown } | null }>('/api/runs/line', async (req, reply) => {
+  const line = typeof req.body?.line === 'string' ? req.body.line : '';
+  const radiusM = Number(req.body?.radiusM ?? 500);
+  try {
+    return { runId: startLineRun(req.body?.visible !== false, line, radiusM) };
   } catch (e) {
     reply.code(409);
     return { error: e instanceof Error ? e.message : String(e) };

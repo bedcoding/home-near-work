@@ -1,5 +1,5 @@
 import { alertSettings, buildAlerts, coveredRows, type NewsItem } from './alerts.js';
-import { BrowserSession, type BadgeTone } from './browser.js';
+import { BrowserSession, restSeconds, type BadgeTone } from './browser.js';
 import { gusFor, nearNamesFor } from './collectors/gus.js';
 import { COLLECTORS } from './collectors/index.js';
 import { NOTICE_COLLECTORS, type NoticeCollector } from './collectors/notices.js';
@@ -13,6 +13,7 @@ import { collectKbStats, KB_SOURCE, kbStatsDue } from './kb-stats.js';
 import { fillHouseholds, REGISTRY_SOURCE, registryKey } from './building-register.js';
 import { checkZones, vworldKey, ZONE_SOURCE } from './land-zones.js';
 import { updateZonesWith, ZONES_SOURCE, zoneUpdateDue } from './redev-zones-update.js';
+import { lineAreas, setLineView } from './line-areas.js';
 import { distanceM, nearestArea } from './geo.js';
 import { comparePrices, identityKey, priceSignature } from './identity.js';
 import { notify } from './notify.js';
@@ -56,6 +57,25 @@ export function startRun(visible: boolean, scope?: RunScope, options: { auto?: b
   return runId;
 }
 
+/** 노선 탭 '이 노선 조회하기'가 도는 매물 사이트(역 위치로 찾는 곳) */
+export const LINE_SOURCES: SourceId[] = ['ziptoss', 'peterpanz'];
+
+/**
+ * 노선 탭 '이 노선 조회하기': 그 노선 역(반경 radiusM)만 매물 사이트(집토스, 피터팬)로 돈다. 노선 탭에서 고른 노선도 이것으로 바꾼다.
+ * 켜진 지역(회사 근처), 공고, 실거래·시세 자료는 건드리지 않고, 신규로 치지 않으며(역마다 처음 본 것도 기준만) 알림도 띄우지 않는다.
+ */
+export function startLineRun(visible: boolean, line: string, radiusM: number): number {
+  if (current) throw new Error('이미 조회 중입니다.');
+  setLineView(line, radiusM);
+  const areas = lineAreas(line, radiusM);
+  const collectors = COLLECTORS.filter((c) => LINE_SOURCES.includes(c.id));
+  if (!collectors.length) throw new Error('조회할 사이트가 없습니다.');
+  const runId = store.createRun(visible, false, false, null, line);
+  current = { runId, message: '조회용 브라우저를 여는 중', log: [], stopping: false, session: null };
+  void execute(runId, visible, areas, { collectors, notices: [], scope: null, line }, { auto: false, quiet: true, noticesOnly: false });
+  return runId;
+}
+
 /** 공고만 확인에서 바로 알리지 않고 미뤄 둔 새 공고(설정 deferred_notice_news, 많아야 300개). */
 const DEFERRED_KEY = 'deferred_notice_news';
 function deferNotices(items: NewsItem[]) {
@@ -81,7 +101,7 @@ export function stopRun() {
 }
 
 /** 지역 반경(+여유) 안에 있는 가장 가까운 지역. 밖이면 null. */
-function coveringArea(areas: Area[], lat: number | null, lng: number | null): Area | null {
+export function coveringArea(areas: Area[], lat: number | null, lng: number | null): Area | null {
   if (lat == null || lng == null) return null;
   let best: { area: Area; ratio: number } | null = null;
   for (const area of areas) {
@@ -299,12 +319,12 @@ async function collectNotices(
   }
 }
 
-/** plan: 돌 매물 사이트와 공고 곳. scope가 있으면 탭 하나만 도는 조회(RUN_SCOPES의 한 줄). */
+/** plan: 돌 매물 사이트와 공고 곳. scope가 있으면 탭 하나만 도는 조회(RUN_SCOPES의 한 줄), line이 있으면 노선 탭의 노선 역만 도는 조회. */
 async function execute(
   runId: number,
   visible: boolean,
   areas: Area[],
-  plan: { collectors: Collector[]; notices: NoticeCollector[]; scope: (typeof RUN_SCOPES)[number] | null },
+  plan: { collectors: Collector[]; notices: NoticeCollector[]; scope: (typeof RUN_SCOPES)[number] | null; line?: string },
   mode: { auto: boolean; quiet: boolean; noticesOnly: boolean },
 ) {
   const { auto, quiet, noticesOnly } = mode;
@@ -334,7 +354,10 @@ async function execute(
 
   try {
     const only = noticesOnly ? '공고만, ' : plan.scope ? `${plan.scope.label} 탭만(${[...collectors, ...plan.notices].map((c) => c.label).join(', ')}), ` : '';
-    log(`조회 시작, ${auto ? '자동 확인, ' : ''}${only}지역: ${areas.map((a) => `${a.name} ${a.radiusM}m`).join(', ')}, ${visible ? '보면서 조회' : '조용히 조회'}`);
+    const where = plan.line
+      ? `${plan.line} 노선 역 ${areas.length}곳(반경 ${areas[0]?.radiusM ?? 0}m, ${collectors.map((c) => c.label).join(', ')})`
+      : `지역: ${areas.map((a) => `${a.name} ${a.radiusM}m`).join(', ')}`;
+    log(`조회 시작, ${auto ? '자동 확인, ' : ''}${only}${where}, ${visible ? '보면서 조회' : '조용히 조회'}, 역·지역·구 사이 ${restSeconds()}초 쉼`);
     session = await BrowserSession.open(runId, visible);
     state.session = session;
     // 브라우저를 여는 사이에 멈춤을 눌렀으면 바로 닫는다.
@@ -351,7 +374,8 @@ async function execute(
         state.message = message;
         void session!.banner(message);
       },
-      aptGus: store.aptGus(),
+      // 노선 조회는 서울 아파트 탭의 고른 구를 모으지 않는다.
+      aptGus: plan.line ? [] : store.aptGus(),
       partial: (reason: string) => {
         missed.push(reason);
       },
@@ -390,7 +414,9 @@ async function execute(
         log(state.stopping ? `${collector.label}: 중단함` : `${collector.label} ${e instanceof BlockedError ? '차단' : '오류'}: ${error}`);
       }
       const summary = applyResults(runId, collector.id, items, areas, complete, error, {
-        goneOutsideRadius: collector.wholeDistrict,
+        goneOutsideRadius: !plan.line && collector.wholeDistrict,
+        // 노선 조회는 역마다 처음 본 것만이 아니라 모두 기준으로 둔다(회사 근처 신규 알림과 섞이지 않게).
+        isBaseline: plan.line ? () => true : undefined,
         news,
         // 일부만 못 본 것은 실패로 치지 않는다(받은 것은 그대로 쓰고, 기록에 까닭이 남음).
         status: complete || partOnly ? 'ok' : 'error',
@@ -411,7 +437,7 @@ async function execute(
     }
     // 아래 실거래와 KB 통계는 때가 됐으면 받는다. 탭 하나만 도는 조회는 그 탭이 쓰는 것만 받는다(경매 범위는 단독 실거래와
     // 아파트 실거래 최근 1년, 다른 범위는 받지 않음). 국토부 단독/다가구 실거래(서울, 최근 1년)는 받은 지 7일이 지났으면 받는다.
-    const fullData = !plan.scope;
+    const fullData = !plan.scope && !plan.line;
     const auctionData = fullData || plan.scope?.id === 'auction';
     if (!state.stopping && auctionData && houseTradesDue()) {
       try {
@@ -470,6 +496,12 @@ async function execute(
     if (state.stopping) {
       finish('stopped', null);
       log('조회 중단');
+      return;
+    }
+    if (plan.line) {
+      // 노선 조회는 알림을 띄우지 않는다(미뤄 둔 공고도 꺼내지 않음).
+      finish('done', null);
+      log('조회 끝');
       return;
     }
     let shown = news;

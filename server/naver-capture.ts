@@ -12,7 +12,8 @@ import { learnLinkHints, zigbangStationName } from './link-hints.js';
 import { parseZigbangItems, parseZigbangStationIds } from './zigbang-parse.js';
 import { parseNaverList } from './naver-parse.js';
 import { notify } from './notify.js';
-import { applyResults } from './runner.js';
+import { applyResults, coveringArea } from './runner.js';
+import { activeLineAreas } from './line-areas.js';
 import type { CollectedItem } from './collectors/types.js';
 import { isApartmentType, seoulGuOf, type NormalizedListing, type RunSourceSummary } from '../shared/types.js';
 
@@ -237,7 +238,10 @@ export function finishCaptureSession(): { title: string; message: string; url: s
 
   const dabang = processPendingDabangCaptures();
   if (dabang.fetched) {
-    const matched = dabang.news.flatMap((n) => (n.type === 'listing' && !n.changed && matchesAlert(n.listing, settings, areas) ? [n.listing] : []));
+    // 알림은 켜진 지역(회사 근처) 안의 방만 센다(노선 탭 역 반경에만 든 방은 빼고).
+    const matched = dabang.news.flatMap((n) =>
+      n.type === 'listing' && !n.changed && coveringArea(areas, n.listing.lat, n.listing.lng) && matchesAlert(n.listing, settings, areas) ? [n.listing] : [],
+    );
     const text = dabang.baseline ? '처음이라 기준만' : dabang.newCount ? `새 방 ${dabang.newCount}${matched.length !== dabang.newCount ? `(알림 조건 ${matched.length})` : ''}` : '새 방 없음';
     saveCaptureNews('dabang', { at, text, hot: dabang.newCount > 0 });
     if (matched.length) {
@@ -305,7 +309,8 @@ export function finishCaptureSession(): { title: string; message: string; url: s
  */
 export function processPendingDabangCaptures(): { fetched: number; newCount: number; baseline: boolean; news: NewsItem[] } {
   const pending = store.pendingNaverCaptures('dabang');
-  const areas = store.enabledAreas();
+  // 켜진 지역에 노선 탭에서 고른 노선 역 반경을 더한다(노선 탭에서 역 사이트를 열어 본 방도 남게).
+  const areas = [...store.enabledAreas(), ...activeLineAreas()];
   const lists = pending.filter((r) => r.url.includes('/room-list/')).map((r) => ({ row: r, parsed: parseDabangRoomList(r.body) }));
   const byId = new Map<string, CollectedItem>();
   for (const { row, parsed } of lists) {
@@ -351,7 +356,8 @@ function naverAptGu(listing: NormalizedListing, aptGus: string[]): string | unde
 export function processPendingNaverCaptures() {
   const pending = store.pendingNaverCaptures();
   if (!pending.length) return;
-  const areas = store.enabledAreas();
+  // 켜진 지역에 노선 탭에서 고른 노선 역 반경을 더한다(노선 탭에서 역 사이트를 열어 본 매물도 남게).
+  const areas = [...store.enabledAreas(), ...activeLineAreas()];
   const aptGus = store.aptGus();
   const marks = readMarks();
   const views = readViews();

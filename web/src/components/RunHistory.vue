@@ -37,7 +37,7 @@ const kindText: Record<'page' | 'data' | 'action', string> = { page: '페이지'
           <td class="num tight">#{{ run.id }}</td>
           <td class="num tight">{{ dateTime(run.startedAt) }}</td>
           <td class="words">{{ statusText[run.status] }}<span v-if="run.error" class="muted">, {{ run.error }}</span></td>
-          <td class="tight">{{ run.auto ? '자동, ' : '' }}{{ run.noticesOnly ? '공고만, ' : '' }}{{ run.scope ? `${scopeLabel(run.scope)}만, ` : '' }}{{ run.visible ? '보면서' : '조용히' }}</td>
+          <td class="tight">{{ run.auto ? '자동, ' : '' }}{{ run.noticesOnly ? '공고만, ' : '' }}{{ run.scope ? `${scopeLabel(run.scope)}만, ` : '' }}{{ run.line ? `${run.line} 노선, ` : '' }}{{ run.visible ? '보면서' : '조용히' }}</td>
           <td class="words">
             <div v-for="s in run.summary?.sources ?? []" :key="s.source" class="src">
               <strong>{{ SOURCE_LABEL[s.source] }}</strong>

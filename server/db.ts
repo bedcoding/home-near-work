@@ -97,6 +97,11 @@ CREATE TABLE IF NOT EXISTS events (
   acked INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS events_listing ON events(listing_id, acked);
+CREATE TABLE IF NOT EXISTS line_stations (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS baselines (
   source TEXT NOT NULL,
   area_id INTEGER NOT NULL,
@@ -442,6 +447,14 @@ export function aptGus(): string[] {
 
 /** 지역 밖에서 모은 고른 구 아파트의 기준점 자리 번호(구마다 음수라 켜진 지역 번호와 겹치지 않는다). 기준점 키는 '<소스>:apt'. */
 export const aptSpot = (gu: string) => -(SEOUL_GUS.indexOf(gu) + 1);
+
+/** 노선 탭 역의 자리 번호 시작(켜진 지역 번호, 아파트 구 자리(음수)와 겹치지 않게) */
+export const LINE_SPOT_BASE = 1_000_000;
+/** 노선 탭 역 이름의 자리 번호(기준점과 조회 범위에 씀). 처음 보는 역이면 만든다. */
+export function lineStationSpot(name: string): number {
+  db.prepare('INSERT OR IGNORE INTO line_stations (name, created_at) VALUES (?, ?)').run(name, nowIso());
+  return LINE_SPOT_BASE + (db.prepare('SELECT id FROM line_stations WHERE name = ?').get(name) as { id: number }).id;
+}
 
 /**
  * 서울 아파트 탭에서 고른 구를 통째로 바꾼다(서울 구가 아닌 이름은 버린다). 바뀐 목록을 돌려준다.
@@ -887,16 +900,19 @@ const toRun = (r: RunRow): RunInfo => ({
   auto: !!r.auto,
   noticesOnly: r.kind === 'notices',
   scope: r.kind?.startsWith('scope:') ? (r.kind.slice(6) as RunScope) : null,
+  line: r.kind?.startsWith('line:') ? r.kind.slice(5) : null,
   summary: r.summary ? (JSON.parse(r.summary) as RunSummary) : null,
   error: r.error,
 });
 
-/** auto: 자동 확인으로 시작한 조회, noticesOnly: 공고만 확인하는 조회, scope: 탭 하나만 도는 조회(kind에 'scope:auction'처럼 남김) */
-export function createRun(visible: boolean, auto = false, noticesOnly = false, scope: RunScope | null = null): number {
+/**
+ * auto: 자동 확인으로 시작한 조회, noticesOnly: 공고만 확인하는 조회, scope: 탭 하나만 도는 조회(kind에 'scope:auction'처럼 남김),
+ * line: 노선 탭에서 노선 역만 도는 조회(kind에 'line:2호선'처럼 남김).
+ */
+export function createRun(visible: boolean, auto = false, noticesOnly = false, scope: RunScope | null = null, line: string | null = null): number {
+  const kind = noticesOnly ? 'notices' : scope ? `scope:${scope}` : line ? `line:${line}` : null;
   return Number(
-    db
-      .prepare("INSERT INTO runs (started_at, status, visible, auto, kind) VALUES (?, 'running', ?, ?, ?)")
-      .run(nowIso(), visible ? 1 : 0, auto ? 1 : 0, noticesOnly ? 'notices' : scope ? `scope:${scope}` : null).lastInsertRowid,
+    db.prepare("INSERT INTO runs (started_at, status, visible, auto, kind) VALUES (?, 'running', ?, ?, ?)").run(nowIso(), visible ? 1 : 0, auto ? 1 : 0, kind).lastInsertRowid,
   );
 }
 
