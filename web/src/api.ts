@@ -1,4 +1,4 @@
-import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, RunDetail, RunInfo, RunScope, SourceId, Station, Verdict } from '../../shared/types';
+import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, RedevZonesView, RunDetail, RunInfo, RunScope, SourceId, Station, Verdict } from '../../shared/types';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -51,6 +51,15 @@ export const api = {
   market: () => request<MarketView>('GET', '/api/market'),
   /** 시세 통계 자료를 지금 받고 탭 자료를 돌려준다(처음에는 몇 분 걸릴 수 있다) */
   fetchMarket: () => request<MarketView>('POST', '/api/market/fetch'),
+  /** 지도에 칠하는 정비사업 구역(넣어 둔 서울플랜+ 파일) */
+  redevZones: () => request<RedevZonesView>('GET', '/api/redev-zones'),
+  /** 서울플랜+ ZIP을 넣는다(본문 그대로) */
+  uploadRedevZones: async (file: File) => {
+    const res = await fetch(`/api/redev-zones?name=${enc(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data as { error?: string }).error ?? `파일을 넣지 못했습니다 (${res.status})`);
+    return data as RedevZonesView;
+  },
   /** 서울 아파트 탭에서 고른 구를 통째로 바꾼다. 바뀐 목록을 돌려준다. */
   setAptGus: (gus: string[]) => request<{ aptGus: string[] }>('PUT', '/api/apt-gus', { gus }),
   /** 경매·공매 아파트 단지 세대수를 건축물대장에서 지금 채운다. 결과 한 줄을 돌려준다. */
