@@ -15,6 +15,7 @@ import AuctionView from './components/AuctionView.vue';
 import FilterPanel from './components/FilterPanel.vue';
 import ListingCard from './components/ListingCard.vue';
 import ListingDetail from './components/ListingDetail.vue';
+import LineView from './components/LineView.vue';
 import MarketView from './components/MarketView.vue';
 import NoticesView from './components/NoticesView.vue';
 import Overview from './components/Overview.vue';
@@ -33,8 +34,8 @@ import { isPastNotice } from './notices';
 import { isRoomStay, sortRooms } from './rooms';
 import { siteLinks } from './siteLinks';
 
-type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'apt' | 'market' | 'subs' | 'rooms' | 'notices' | 'support' | 'sites' | 'runs' | 'areas' | 'alerts';
-const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'apt', 'market', 'subs', 'rooms', 'notices', 'support', 'sites', 'runs', 'areas', 'alerts'];
+type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'apt' | 'line' | 'market' | 'subs' | 'rooms' | 'notices' | 'support' | 'sites' | 'runs' | 'areas' | 'alerts';
+const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'apt', 'line', 'market', 'subs', 'rooms', 'notices', 'support', 'sites', 'runs', 'areas', 'alerts'];
 
 /** 머리 줄 높이(px). 필터 칸이 그 아래에 붙어 따라 내려온다(--app-header-height). */
 const headerEl = ref<HTMLElement | null>(null);
@@ -146,6 +147,8 @@ const nearCurrent = computed(() => current.value.filter((l) => !farApt(l)));
 type Section = 'home' | 'auction' | 'room';
 const sectionOf = (l: ListingView): Section => (isAuction(l) ? 'auction' : isRoomStay(l) ? 'room' : 'home');
 const homes = computed(() => nearCurrent.value.filter((l) => sectionOf(l) === 'home'));
+/** 노선 탭이 역마다 세는 매물: 매매와 전월세 전체(켜진 지역 밖 포함) */
+const lineListings = computed(() => current.value.filter((l) => sectionOf(l) === 'home'));
 /** 필터 거래 유형 칸: 단기는 단기 매물이 있을 때(지역 반경 밖 포함, 거래 유형 필터는 빼고)나 골라 둔 때만 보인다. */
 const dealChoices = computed<DealType[]>(() => {
   const loose = { ...filters.value, deals: [], insideAreas: false };
@@ -510,6 +513,30 @@ async function poll() {
   schedule();
 }
 
+/** 노선 탭에서 고른 노선과 역 반경을 바꾼다(line null이면 고르지 않음). */
+async function setLineView(line: string | null, radiusM: number) {
+  error.value = null;
+  try {
+    await api.setLineView(line, radiusM);
+    await refreshState();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** 노선 탭 '이 노선 조회하기' */
+async function startLineRun(line: string, radiusM: number) {
+  error.value = null;
+  try {
+    await api.startLineRun(visibleMode.value, line, radiusM);
+    await refreshState();
+    showLog.value = false;
+    schedule();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
 /** scope를 주면 그 탭에 보이는 사이트와 공고만 조회한다(조회하기 옆 ▾ 메뉴, 경매 탭의 '경매 조회하기'). */
 async function startRun(scope?: RunScope) {
   error.value = null;
@@ -658,14 +685,15 @@ function onExtMessage(e: MessageEvent) {
   }
 }
 
-function openAll(e?: MouseEvent) {
+/** 크롬 확장으로 사이트를 한 번에 연다. area를 주면 그 자리(노선 탭의 역), 아니면 '열 지역'에서 고른 지역 가운데로 연다. */
+function openAll(e?: MouseEvent, area?: Area) {
   // 누른 뒤 Enter로 매물을 열 때 이 버튼이 다시 눌리지 않게
   (e?.currentTarget as HTMLElement | undefined)?.blur();
   if (!ext.value) {
     showOpenNote('크롬 확장과 연결되지 않아 한 번에 열 수 없습니다. 확장(0.7.0 이상)이 깔린 크롬에서 이 페이지를 새로고침해 주세요.', false);
     return;
   }
-  const a = linkArea.value;
+  const a = area ?? linkArea.value;
   window.postMessage({ source: 'hnw-dashboard', type: 'open-sites', area: a ? { name: a.name, lat: a.lat, lng: a.lng, radiusM: a.radiusM } : null }, location.origin);
   window.clearTimeout(openWait);
   openWait = window.setTimeout(() => showOpenNote('크롬 확장이 답하지 않습니다. 이 페이지를 새로고침한 뒤 다시 눌러 주세요.', false), 4000);
@@ -822,6 +850,7 @@ const tabs = computed<{ id: Tab; label: string; count: number | null; news?: num
     id: 'apt', label: '서울 아파트', count: aptAll.value.length, news: aptAll.value.filter(hasNews).length,
     title: '고른 서울 구의 아파트 경매, 공매, 매매(회사와 멀어도). 세대수와 살 때 붙는 조건(실거주, 대출, 양도세)', main: true,
   },
+  { id: 'line', label: '노선', count: null, title: '지하철 노선을 따라 역마다 매매·전월세 매물 수와 중간값(켜진 지역은 그대로)', main: true },
   {
     id: 'market', label: '시세 통계', count: null, title: '오르는 때와 내리는 때(KB 지수, 매수우위지수, 실거래 거래량), 구별 급지와 평당가', main: true,
   },
@@ -875,6 +904,8 @@ const filterUse = computed<string[] | 'all'>(() => {
       return ['deal', 'kind'];
     case 'notices':
       return ['deal', 'kind', 'price', 'home', 'text'];
+    case 'line':
+      return ['area'];
     default:
       return [];
   }
@@ -1094,6 +1125,11 @@ const emptyText: Partial<Record<Tab, string>> = {
         @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @pick="addPickedArea" @area="turnOffArea"
         @run="startRun('auction')" @gus="setAptGus" @households="setHouseholds" @fill="fillHouseholds" @zone-check="checkZones"
       />
+      <LineView
+        v-else-if="tab === 'line' && state" :listings="lineListings" :filters="filters" :line-view="state.lineView" :running="!!running"
+        :rest-seconds="state.restSeconds" @line-view="setLineView" @run="startLineRun" @open-sites="(a) => openAll(undefined, a)"
+        @open="openOriginal" @verdict="setVerdict" @source="(l) => (sourceOf = l)" @raw="showRaw"
+      />
       <MarketView v-else-if="tab === 'market'" :view="market" :fetching="marketFetching" :error="marketError" :running="!!running" @fetch="fetchMarket" />
       <template v-else-if="tab === 'rooms'">
         <RoomsView
@@ -1116,7 +1152,7 @@ const emptyText: Partial<Record<Tab, string>> = {
       <AreaSettings v-else-if="tab === 'areas' && state" :areas="state.areas" :restore="state.areaRestore" @changed="refreshState" />
       <AlertsTab
         v-else-if="tab === 'alerts' && state" :settings="state.alerts" :visible="visibleMode" :auto-time="state.autoCheck.time" :auto-day="state.autoCheck.day" :notice-time="state.autoCheck.noticeTime"
-        :auto-times="autoTimes" :running="!!running" @changed="refreshState" @visible="(v) => (visibleMode = v)"
+        :auto-times="autoTimes" :running="!!running" :rest-seconds="state.restSeconds" @changed="refreshState" @visible="(v) => (visibleMode = v)"
         @auto-time="(time) => setAutoCheck({ time })" @auto-day="(day) => setAutoCheck({ day })" @notice-time="(noticeTime) => setAutoCheck({ noticeTime })"
       />
     </main>

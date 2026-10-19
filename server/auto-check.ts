@@ -80,6 +80,7 @@ function siteRunSince(since: number): boolean {
       (r) =>
         Date.parse(r.startedAt) >= since &&
         !r.scope &&
+        !r.line &&
         (r.summary?.sources ?? []).some((s) => s.source !== 'courtauction' && s.source !== 'onbid' && !CAPTURE_SOURCES.includes(s.source)),
     );
 }

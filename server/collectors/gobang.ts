@@ -215,7 +215,8 @@ export const gobang: Collector = {
         await session.pause(1200);
         await settle();
 
-        for (const gu of gus) {
+        for (const [gi, gu] of gus.entries()) {
+          if (gi > 0) await session.rest();
           const sigungu = sigungus.find((s) => s.sigunguName === gu);
           if (!sigungu) {
             ctx.log(`고방: ${cat.label} ${gu} 칸이 없습니다(0곳)`);

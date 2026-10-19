@@ -246,8 +246,13 @@ export const onbid: Collector = {
         ctx.log(`온비드: ${gu} ${onlyApt ? `아파트 ${kept}건(그 구 ${rows.length}건 중)` : `${rows.length}건`} (응답 ${data.cltrClgVOList.length}건)`);
         await session.pause(800);
       };
-      for (const gu of near) await searchGu(gu, false);
+      let searched = 0;
+      for (const gu of near) {
+        if (searched++) await session.rest();
+        await searchGu(gu, false);
+      }
       for (const gu of aptOnly) {
+        if (searched++) await session.rest();
         try {
           await searchGu(gu, true);
         } catch (e) {

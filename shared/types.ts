@@ -772,6 +772,8 @@ export interface RunInfo {
   noticesOnly: boolean;
   /** 탭 하나만 돈 조회의 범위(RUN_SCOPES), 전부 돈 조회면 null */
   scope: RunScope | null;
+  /** 노선 탭에서 노선 역만 돈 조회면 그 노선('2호선'), 아니면 null */
+  line: string | null;
   summary: RunSummary | null;
   error: string | null;
 }
@@ -862,8 +864,12 @@ export interface AppState {
   /** 확인하지 않은 새 공고 수 */
   newNotices: number;
   areas: Area[];
-  /** 지역 탭 '노선으로 보기'로 바꾸기 전 지역으로 되돌릴 수 있으면 마지막으로 고른 노선과 전에 켜 둔 지역 수 */
+  /** 예전 지역 탭 '이 노선만 켜기'로 바꾸기 전 지역으로 되돌릴 수 있으면 마지막으로 고른 노선과 전에 켜 둔 지역 수 */
   areaRestore: { line: string; count: number } | null;
+  /** 노선 탭에서 고른 노선과 역 반경(고르지 않았으면 null) */
+  lineView: LineViewSetting | null;
+  /** 조회할 때 역·지역·구 사이에 쉬는 시간(초) */
+  restSeconds: number;
   stations: Station[];
   running: RunProgress | null;
   lastRun: RunInfo | null;
@@ -1028,3 +1034,13 @@ export interface RedevZonesCheck {
   ok: boolean;
   text: string;
 }
+
+/** 노선 탭에서 고른 노선과 역 반경(m) */
+export interface LineViewSetting {
+  line: string;
+  radiusM: number;
+}
+
+/** 조회할 때 역·지역·구 사이에 쉬는 시간으로 고를 수 있는 값(초)과 처음 값. 사이트와 이 컴퓨터에 요청이 한꺼번에 몰리지 않게 한다. */
+export const REST_CHOICES = [0, 2, 3, 5, 10];
+export const REST_DEFAULT = 3;
