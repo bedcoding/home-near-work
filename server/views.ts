@@ -57,14 +57,19 @@ function auctionRef(raw: unknown): ListingView['auction'] {
     failed: toNumber(row.yuchalCnt) ?? 0,
     lots: rows.length,
     mgmt: mgmtNote(row.mulBigo),
-    // 땅만 파는 물건(목록이 모두 토지) 중 목록 글자에 지분('N분의 M')이 있는 것
-    share: rows.every((r) => String(r?.convAddr ?? '').startsWith('[토지')) && rows.some((r) => String(r?.convAddr ?? '').includes('분의')),
+    // 지분 매각: 집합건물이 아닌 목록(토지, 건물) 글자에 지분('공유자 지분 112분의 3')이 있거나, 비고에 '지분 매각'이나
+    // '공유자 우선매수'(지분 경매에만 있는 권리)가 있는 것. 공유물 분할 경매처럼 전체를 파는 것은 목록에 지분이 없어 빠진다.
+    share:
+      rows.some((r) => {
+        const text = String(r?.convAddr ?? '');
+        return !text.startsWith('[집합건물') && /분의|지분/.test(text);
+      }) || /지분\s*매각|공유자\s*우선\s*매수/.test(String(row.mulBigo ?? '')),
     gu: typeof row.hjguSigu === 'string' && row.hjguSigu ? row.hjguSigu : null,
     dong: typeof row.hjguDong === 'string' && row.hjguDong ? row.hjguDong : null,
   };
 }
 
-type OnbidRow = { scrnIndctCltrMngNo?: unknown; cltrApslEvlAvgAmt?: unknown; uscbdCnt?: unknown } | null | undefined;
+type OnbidRow = { scrnIndctCltrMngNo?: unknown; cltrApslEvlAvgAmt?: unknown; uscbdCnt?: unknown; onbidCltrNm?: unknown } | null | undefined;
 
 /** 온비드 원본(검색 응답 한 건)에서 물건관리번호·감정가·유찰 횟수를 읽는다. court는 '온비드'. */
 function onbidRef(raw: unknown): ListingView['auction'] {
@@ -79,7 +84,8 @@ function onbidRef(raw: unknown): ListingView['auction'] {
     failed: toNumber(row.uscbdCnt) ?? 0,
     lots: 1,
     mgmt: null,
-    share: false,
+    // 물건명에 '지분'이 있으면 지분 매각(다른 공유자가 있음)
+    share: /지분/.test(String(row.onbidCltrNm ?? '')),
     gu: null,
     dong: null,
   };
