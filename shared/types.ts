@@ -944,8 +944,10 @@ export interface MarketTier {
   count: number;
   /** 전용면적 평당 중간값(만원) */
   pyeong: number;
-  /** ㎡당 중간값 × 84(만원), 전용 84㎡로 치면 대략 얼마인지 */
-  price84: number;
+  /** 전용 84㎡대(84㎡ 이상 85㎡ 미만) 거래만의 거래가 중간값(만원), 그런 거래가 없으면 null */
+  median84: number | null;
+  /** 전용 84㎡대 거래 수 */
+  count84: number;
   /** 거래가 중간값(만원) */
   median: number;
   /** KB 월간 지수로 본 이 구의 1년, 5년, 10년 변동률 */
