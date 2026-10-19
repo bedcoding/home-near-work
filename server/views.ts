@@ -2,7 +2,7 @@ import * as store from './db.js';
 import { toNumber } from './collectors/types.js';
 import { looksSimilar } from './identity.js';
 import { parseLot, pnuOf } from './lots.js';
-import { compareLot } from './trade-compare.js';
+import { compareTrades, type TradeMatch } from './trade-compare.js';
 import { manwon } from '../shared/format.js';
 import {
   isApartmentType, isDetachedHouseType, listingSection, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seoulGuOf, type AptInfo, type AptRegistry, type AuctionResultSummary,
@@ -193,17 +193,45 @@ function zoneRef(
   return { ...base, lot, pnu, why: null, check: zones.get(lot) ?? null };
 }
 
+/** 경매·공매 주소의 단지 이름(지번 뒤 글자, '노원구 상계동 1234, 상계주공아파트 제601동' → '상계주공아파트'). 지번 뒤에 이름이 없으면 null. */
+function auctionComplexName(address: string): string | null {
+  const m = /^.*?\d+(?:-\d+)?[,\s]+(.+)$/.exec(complexNameOf(address));
+  return m && /[가-힣A-Za-z]/.test(m[1]) ? m[1] : null;
+}
+
+/** 필지 주소('서울특별시 노원구 상계동 700')가 그 구·법정동이면 번지('700'), 아니면 null. */
+function parcelJibun(addr: string | null, gu: string, dong: string): string | null {
+  const m = /\s(\S+)\s(\S+)\s(산?\d+(?:-\d+)?)$/.exec(addr ?? '');
+  return m && m[1] === gu && m[2] === dong ? m[3] : null;
+}
+
 /**
- * 서울 아파트 경매·공매의 최저가를 같은 지번·같은 전용면적의 국토부 실거래와 비교한다(trade-compare). 지번은 주소에서 읽은 지번 키
- * ('lot:노원구 상계동 1234')를 그대로 쓴다. 네이버 매매는 지번이 없어 비교하지 않는다(null).
+ * 서울 아파트 매물 값을 같은 단지·같은 전용면적의 국토부 실거래와 비교한다(trade-compare).
+ * 경매·공매 최저가는 주소 지번('lot:노원구 상계동 1234')이 같은 실거래, 없으면 주소의 단지 이름으로,
+ * 네이버 매매가는 단지 이름으로, 없으면 단지 좌표로 찾은 필지(points)의 번지로 단지를 맞춘다.
  */
-function tradeRef(source: string, l: NormalizedListing, raw: unknown): TradeRef | null {
-  if ((source !== 'courtauction' && source !== 'onbid') || !isApartmentType(l.buildingType)) return null;
-  const price = l.prices.find((p) => p.deal === 'auction')?.price ?? null;
-  const lot = parseLot(auctionLot(source, l, raw).lot ?? '');
-  if (!price || !lot) return null;
-  const jibun = `${lot.san ? '산' : ''}${lot.bun}${lot.ji !== '0' ? `-${lot.ji}` : ''}`;
-  return compareLot({ gu: lot.gu, dong: lot.dong, jibun, areaM2: l.areaM2, price });
+function tradeRef(source: string, l: NormalizedListing, raw: unknown, points: Map<string, store.PointParcel>): TradeRef | null {
+  if (!isApartmentType(l.buildingType)) return null;
+  if (source === 'courtauction' || source === 'onbid') {
+    const price = l.prices.find((p) => p.deal === 'auction')?.price ?? null;
+    const lot = parseLot(auctionLot(source, l, raw).lot ?? '');
+    if (!price || !lot) return null;
+    const ways: TradeMatch[] = [{ basis: 'jibun', gu: lot.gu, dong: lot.dong, value: `${lot.san ? '산' : ''}${lot.bun}${lot.ji !== '0' ? `-${lot.ji}` : ''}` }];
+    const name = l.address ? auctionComplexName(l.address) : null;
+    if (name) ways.push({ basis: 'name', gu: lot.gu, dong: lot.dong, value: name });
+    return compareTrades(ways, l.areaM2, price);
+  }
+  if (source !== 'naver') return null;
+  const sale = l.prices.find((p) => p.deal === 'sale')?.price ?? null;
+  const gu = seoulGuOf(l.address ?? '');
+  if (!sale || !gu || !l.dong) return null;
+  const rep = (raw as { representativeArticleInfo?: { complexNumber?: unknown; complexName?: unknown } } | null)?.representativeArticleInfo;
+  const ways: TradeMatch[] = [];
+  if (typeof rep?.complexName === 'string' && rep.complexName.trim()) ways.push({ basis: 'name', gu, dong: l.dong, value: rep.complexName.trim() });
+  const parcel = rep?.complexNumber != null && String(rep.complexNumber) ? points.get(`nv:${rep.complexNumber}`) : undefined;
+  const jibun = parcel?.status === 'ok' ? parcelJibun(parcel.addr, gu, l.dong) : null;
+  if (jibun) ways.push({ basis: 'parcel', gu, dong: l.dong, value: jibun });
+  return compareTrades(ways, l.areaM2, sale);
 }
 
 /** 네이버 서울 아파트 매매의 구역 정보: 단지 번호와 좌표가 있어야 본다(매물 주소에는 지번이 없다). */
@@ -297,7 +325,7 @@ export function buildListingViews(): ListingView[] {
       options: optionsRef(row.source, optionRaw.get(row.id), data.title ?? ''),
       apt: aptRef(row.id, row.source, data, raw, households, registry),
       zone: zoneRef(row.source, data, raw, zones, points),
-      trade: tradeRef(row.source, data, raw),
+      trade: tradeRef(row.source, data, raw, points),
     };
   });
 }
