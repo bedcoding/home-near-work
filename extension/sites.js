@@ -1,8 +1,8 @@
-// 확장이 켜고 끌 수 있는 부동산 사이트 목록. 백그라운드·팝업·사이트 안 스크립트가 같이 쓴다.
+// 확장이 켜고 끌 수 있는 부동산 사이트 목록. 백그라운드, 팝업, 사이트 안 스크립트가 같이 쓴다.
 // ready: 지도 동그라미 '봤음' 표시가 되는 곳.
 // 나머지는 켜 두면 그 사이트 화면이 받은 데이터와 화면 구조를 대시보드로 보낸다.
-// 다방·직방·KB부동산·호갱노노·당근부동산은 기본으로 켜 둔다.
-// 피터팬·집토스는 '조회하기'가 따로 모으므로 기본으로 끈다.
+// 다방, 직방, KB부동산, 호갱노노, 당근부동산은 기본으로 켜 둔다.
+// 피터팬, 집토스는 '조회하기'가 따로 모으므로 기본으로 끈다.
 // base: 그 사이트가 데이터를 받아 오는 주소(이 도메인과 그 하위 주소의 응답만 읽는다).
 const HNW_SITES = [
   { id: 'naver', name: '네이버 부동산', matches: ['https://fin.land.naver.com/*', 'https://new.land.naver.com/*'], base: 'land.naver.com', ready: true, defaultOn: true },
@@ -34,7 +34,7 @@ function hnwEnabled(toggles, site) {
 
 // ---------- 바로 가기 ----------
 // 지도 주소에 위치를 넘길 수 있는 곳(네이버, 피터팬, 다방, KB부동산)은 고른 지역 가운데로, 집토스와 당근부동산은 가까운 역 페이지로,
-// 직방은 가까운 역의 직방 역 번호로, 호갱노노는 가까운 역 옆 단지 화면으로 연다(역 번호·단지 번호는 대시보드가 역 목록에 붙여 줌).
+// 직방은 가까운 역의 직방 역 번호로, 호갱노노는 가까운 역 옆 단지 화면으로 연다(역 번호, 단지 번호는 대시보드가 역 목록에 붙여 줌).
 // 그 값을 모르면 첫 화면을 연다. 대시보드의 web/src/siteLinks.ts와 같게 유지한다.
 
 const HNW_BASE62 = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -49,7 +49,7 @@ function hnwBase62(n) {
 }
 
 /**
- * 네이버 새 지도(fin.land) 주소의 center 값. 경도·위도를 각각 ×10^7 + 2×10^9 한 정수를 62진수(0-9a-zA-Z)로 적고 '-'로 잇는다.
+ * 네이버 새 지도(fin.land) 주소의 center 값. 경도, 위도를 각각 ×10^7 + 2×10^9 한 정수를 62진수(0-9a-zA-Z)로 적고 '-'로 잇는다.
  */
 function hnwNaverCenter(lat, lng) {
   return `${hnwBase62(Math.round(lng * 1e7) + 2e9)}-${hnwBase62(Math.round(lat * 1e7) + 2e9)}`;
@@ -87,7 +87,7 @@ function hnwSiteLinks(area, stations) {
       url: area
         ? `https://www.peterpanz.com/villa?zoomLevel=${zoom}&center=${center}&dong=&gungu=&filter=${encodeURIComponent('buildingType;["빌라/주택"]')}&filter_version=5.1`
         : 'https://www.peterpanz.com/',
-      where: area ? `${area.name} 가운데로 피터팬 빌라·주택 지도를 엽니다` : '피터팬 첫 화면을 엽니다',
+      where: area ? `${area.name} 가운데로 피터팬 빌라와 주택 지도를 엽니다` : '피터팬 첫 화면을 엽니다',
     },
     {
       id: 'ziptoss',
@@ -134,7 +134,7 @@ const HNW_NAVER_DEFAULT_URL = 'https://fin.land.naver.com/map?center=3zhAz4-2ALX
 
 // ---------- 한 번에 열기 ----------
 // 확장에서 켜 둔 사이트의 바로 가기만 새 창 하나에 연다(네이버가 첫 탭).
-// 확장 목록에 없는 법원경매와 꺼 둔 사이트는 뺀다. 피터팬·집토스는 '조회하기'가 모으므로 기본으로 꺼져 있다.
+// 확장 목록에 없는 법원경매와 꺼 둔 사이트는 뺀다. 피터팬, 집토스는 '조회하기'가 모으므로 기본으로 꺼져 있다.
 
 /** 대시보드 '조회하기'가 스스로 모으는 곳(열지 않아도 됨). */
 const HNW_AUTO_SITES = ['peterpanz', 'ziptoss', 'courtauction'];

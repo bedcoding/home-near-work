@@ -6,13 +6,16 @@ import {
 } from '../../../shared/types';
 import type { CatalogStation } from '../areaActions';
 import { expectedPrices, saleDateOf, saleDay, type AuctionKind } from '../auction';
+import { APT_CHECKED, PLOT_RULES, PLOT_SUMMARY } from '../apt';
 import { failedNoticeSources } from '../notices';
+import { ZONE_CHECKED, ZONE_LINKS, ZONE_RULES } from '../zones';
 import AuctionResults from './AuctionResults.vue';
 import CountTooltip from './CountTooltip.vue';
 import HouseTrades from './HouseTrades.vue';
 import ListingCard from './ListingCard.vue';
 import NoticeList from './NoticeList.vue';
 import OverviewMap from './OverviewMap.vue';
+import RuleFold from './RuleFold.vue';
 import ZoneBanner from './ZoneBanner.vue';
 
 // 경매 탭(주거, 상가)과 집터 탭(단독, 토지)이 같이 쓴다: 목록 위의 보조정보(단독주택 실거래, 매각 결과, 상가와 토지 칸의 LH 공고,
@@ -87,7 +90,7 @@ const emit = defineEmits<{
   houseAge: [number];
   /** 국토부 실거래를 지금 받기 */
   houseFetch: [];
-  /** 집터 경매·공매의 재개발 구역을 지금 확인 */
+  /** 집터 경매와 공매의 재개발 구역을 지금 확인 */
   zoneCheck: [];
 }>();
 
@@ -106,6 +109,9 @@ const EMPTY_TEXT: Record<AuctionKind, string> = {
 };
 
 const kindNames = computed(() => KIND_NAMES.filter((k) => props.kindIds.includes(k.id)));
+/** 집터 탭(단독, 토지)이면 살 때 붙는 조건과 물딱지 정리 칸을 보인다 */
+const isPlot = computed(() => props.kindIds.includes('house') || props.kindIds.includes('land'));
+const dot = (date: string) => date.replace(/-/g, '.');
 /** 지도에 진하게 보일 펼친 목록(이 탭들은 없음). 같은 배열을 써서 다시 그릴 일을 줄인다. */
 const none: ListingView[] = [];
 const sales = computed(() => props.sales ?? []);
@@ -171,13 +177,13 @@ const days = computed(() => {
       <div class="auction-actions">
         <div v-if="zone" class="zone-row">
           <span v-if="zone.error" class="zone-msg err" role="alert">{{ zone.error }}</span>
-          <span v-else-if="!zone.key" class="zone-msg muted">브이월드 키가 없어 재개발 구역을 못 봅니다(README 참고)</span>
+          <span v-else-if="!zone.key" class="zone-msg muted" title="config/local.json에 vworldKey를 넣으면 재개발 구역을 봅니다(README의 집터 탭)">키 없음</span>
           <span v-else-if="zone.last" class="zone-msg" :class="zone.last.ok ? 'muted' : 'err'">{{ zoneDay(zone.last.at) }} {{ zone.last.text }}</span>
-          <span v-if="zoneInside" class="chip chip-new" title="이 칸 경매·공매 중 토지이용계획에 정비구역, 재개발·재정비촉진, 모아타운, 건축허가 제한이 걸린 물건">구역 안 {{ zoneInside }}건</span>
+          <span v-if="zoneInside" class="chip chip-new" title="이 칸 경매와 공매 중 토지이용계획에 정비구역, 재개발, 재정비촉진, 모아타운, 건축허가 제한이 걸린 물건">구역 안 {{ zoneInside }}건</span>
           <button
             type="button" class="btn run" :disabled="!zone.key || zone.checking || running"
             :title="zone.key
-              ? '이 탭 경매·공매(단독, 토지)의 지번으로 브이월드 토지이용계획을 읽어 정비구역, 재개발·재정비촉진, 모아타운, 건축허가 제한이 걸렸는지 봅니다. 경매 조회 때도 알아서 봅니다.'
+              ? '이 탭 경매와 공매(단독, 토지)의 지번으로 브이월드 토지이용계획을 읽어 정비구역, 재개발, 재정비촉진, 모아타운, 건축허가 제한이 걸렸는지 봅니다. 경매 조회 때도 알아서 봅니다.'
               : '브이월드 인증키가 있어야 합니다. config/local.json에 vworldKey를 넣어 주세요(README의 집터 탭).'"
             @click="emit('zoneCheck')"
           >{{ zone.checking ? '확인 중…' : '재개발 구역 확인' }}</button>
@@ -220,6 +226,16 @@ const days = computed(() => {
               @age="(a) => emit('houseAge', a)" @fetch="emit('houseFetch')"
             />
             <AuctionResults :results="results" :stats="regionStats" :compare="compare" :kind="kind" :gus="gus" />
+            <RuleFold
+              v-if="isPlot" name="살 때 붙는 조건" :count="`토지거래허가, 대출, 양도세, ${dot(APT_CHECKED)} 조사`" :summary="PLOT_SUMMARY" :items="PLOT_RULES"
+              title="단독주택과 땅을 살 때 붙는 토지거래허가, 대출 전입, 양도세 조건. 조사한 날 기준이라 계약이나 입찰 전에는 구청, 은행, 세무서에 확인하세요."
+              storage-key="hnw-plot-rules-open"
+            />
+            <RuleFold
+              v-if="isPlot" name="물딱지와 현금청산" :count="`${ZONE_RULES.length}가지, ${dot(ZONE_CHECKED)} 법령 확인`" :items="ZONE_RULES" :links="ZONE_LINKS"
+              title="재건축, 재개발, 모아타운 구역 안 집이나 땅을 살 때 조합원이 못 되거나 현금으로 보상받는 경우입니다. 카드의 물딱지 표시는 서울플랜+ 정비구역 파일의 사업 단계로 붙입니다."
+              storage-key="hnw-zone-rules-open"
+            />
             <details v-if="(kind === 'shop' || kind === 'land') && (lhNotices.length || lhOutside || lhFailed.length)" class="fold" :open="lh.open.value" @toggle="lh.onToggle">
               <summary :title="kind === 'land' ? 'LH 토지 공고와 선착순 토지(서울)' : 'LH 상가 공고와 선착순 상가, 임대상가(서울)'">
                 <span class="fold-name">{{ kind === 'land' ? 'LH 토지' : 'LH 상가' }}</span>

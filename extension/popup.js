@@ -161,7 +161,7 @@ async function renderLinks() {
   goArea = area;
 
   const { open, rest } = hnwOpenLinks(area, got['hnw-stations'], got.sites);
-  const names = (list) => list.map((l) => hnwShortName(l.name)).join('·');
+  const names = (list) => list.map((l) => hnwShortName(l.name)).join(', ');
   const auto = rest.filter((l) => HNW_AUTO_SITES.includes(l.id));
   const off = rest.filter((l) => !HNW_AUTO_SITES.includes(l.id));
   const openAll = document.getElementById('open-all');

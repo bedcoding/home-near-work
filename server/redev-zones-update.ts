@@ -7,9 +7,7 @@ import type { RedevZonesCheck, RedevZonesView } from '../shared/types.js';
 // 정비구역 지도 파일(서울 열린데이터광장 OA-22712 '서울시 도시계획사업 현황(서울플랜+) 공간정보')의 새 판을 받아 바꾼다.
 // - 데이터셋 화면을 브라우저로 열고, 화면이 따로 불러오는 파일 목록의 downloadFile('N') 중 N이 가장 큰 것(최신판)을 받는다.
 //   지금 넣어 둔 파일이 그 번호면 받지 않는다(사용자가 직접 넣은 파일은 번호를 몰라 한 번 받는다).
-// - 브라우저로 받는 것은 다른 공개 프로젝트(billtamjung)의 2026-09 내려받기 코드와 기록을 따랐다: 같은 꼴의 공간정보 파일을
-//   프로그램이 직접 요청하면 '잘못된 접근입니다'만 오고, 화면을 열어 downloadFile('N')을 부르면 받아진다. 최신판은 N이 가장 크다.
-//   이 기능을 만든 곳에서는 서울 열린데이터광장에 닿지 않아 실제 화면으로는 확인하지 못했다.
+// - 파일 주소를 직접 요청하면 '잘못된 접근입니다'만 와서, 화면을 열어 downloadFile('N')을 불러 받는다.
 // - 조회할 때(전부 도는 조회, 공고 확인, 경매 범위) 마지막 확인에서 7일이 지났으면 조회용 브라우저로 보고(실패했으면 하루 뒤),
 //   지도 아래 '새 파일 확인'은 따로 창 없는 크롬을 띄워 바로 본다.
 
@@ -124,7 +122,7 @@ let running: Promise<{ text: string; view: RedevZonesView }> | null = null;
 export function updateZonesNow(): Promise<{ text: string; view: RedevZonesView }> {
   running ??= (async () => {
     let browser: Browser;
-    const exe = process.env.HNW_CHROMIUM_PATH; // 개발·시험용(설치된 크롬 대신 쓸 실행 파일)
+    const exe = process.env.HNW_CHROMIUM_PATH; // 개발과 시험용(설치된 크롬 대신 쓸 실행 파일)
     try {
       browser = await chromium.launch(exe ? { executablePath: exe, headless: true } : { channel: 'chrome', headless: true, chromiumSandbox: true });
     } catch {

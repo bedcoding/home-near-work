@@ -9,7 +9,7 @@ export interface CollectContext {
   log(message: string): void;
   /** 지금 하는 일을 사이트 위 진행 띠와 대시보드에 보여 준다. */
   progress(message: string): void;
-  /** 사이트 화면에 붙일 배지 종류(신규·기존·버림·관심)를 정한다. */
+  /** 사이트 화면에 붙일 배지 종류(신규, 기존, 버림, 관심)를 정한다. */
   classify(listings: NormalizedListing[]): Map<string, BadgeTone>;
   /** 서울 아파트 탭에서 고른 구(회사와 멀어도 이 구의 아파트를 모은다) */
   aptGus: string[];

@@ -4,16 +4,15 @@ import { unzipSync } from 'fflate';
 import proj4 from 'proj4';
 import { DATA_DIR } from './config.js';
 import { guOfCode } from './lots.js';
-import type { RedevZoneFeature, RedevZoneGroup, RedevZonesView } from '../shared/types.js';
+import type { RedevHit, RedevZoneFeature, RedevZoneGroup, RedevZonesView } from '../shared/types.js';
 
 // 지도에 칠하는 정비사업 구역. 서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보'(OA-22712) ZIP을 사용자가 받아 넣으면
 // 안의 shp(UPIS_C_UQ120)를 읽어 위경도로 바꿔 data 폴더(redev-zones.json)에 둔다. 파일은 저장소에 넣지 않는다.
-// - 좌표계는 .prj를 읽어 정한다(가로 메르카토르, Bessel 1841 또는 GRS 1980 타원체만). 2026-09 파일은 Bessel(EPSG:5174와 같은 값)이다.
+// - 좌표계는 .prj를 읽어 정한다(가로 메르카토르, Bessel 1841 또는 GRS 1980 타원체만).
 //   Bessel에서 세계측지계로는 PROJ가 고르는 EPSG:5191 'Korean 1985 to WGS 84 (1)'(몰로덴스키-바데카스, 기준점 회전)을 proj4가 쓰는
-//   원점 회전 7변수(위치 벡터)로 바꾼 값을 쓴다. 서울 여섯 곳에서 PROJ 9.8.1(pyproj 3.8.0) 결과와 0.1cm 안으로 같았다.
-//   EPSG:5191 값을 원점 회전으로 그대로 넣으면 약 16m 어긋난다.
-// - 사업 종류와 추진 단계 이름은 같은 ZIP에 든 '서울플랜+코드정의표(대민용).xlsx'(2026-09 판)를 옮겨 적었다. 표에 없는 코드는 코드 그대로 보인다.
-// - 정비사업, 소규모 정비사업, 재정비촉진사업, 국토부사업(공공주택지구, 도심 공공주택 복합사업)만 남기고, 준공·입주중·후보지철회는 뺀다.
+//   원점 회전 7변수(위치 벡터)로 바꾼 값을 쓴다. EPSG:5191 값을 원점 회전으로 그대로 넣으면 약 16m 어긋난다.
+// - 사업 종류와 추진 단계 이름은 같은 ZIP에 든 '서울플랜+코드정의표(대민용).xlsx'를 따른다. 표에 없는 코드는 코드 그대로 보인다.
+// - 정비사업, 소규모 정비사업, 재정비촉진사업, 국토부사업(공공주택지구, 도심 공공주택 복합사업)만 남기고, 준공, 입주중, 후보지철회는 뺀다.
 //   역세권사업(장기전세, 청년안심주택 등)과 기타사업(도시개발, 리모델링, 시장정비, 도시재생, 사전협상)은 넣지 않는다.
 
 const FILE = path.join(DATA_DIR, 'redev-zones.json');
@@ -304,4 +303,72 @@ export function redevZones(): RedevZonesView {
   } catch {
     return { importedAt: null, fileDate: null, fileName: null, seq: null, listedAt: null, count: 0, skipped: { done: 0, other: 0 }, features: [] };
   }
+}
+
+/** 구역 경계에서 이만큼(m) 안이면 경계 근처로 본다(좌표가 조금만 달라도 안팎이 바뀜). */
+const EDGE_M = 25;
+
+interface ZoneEntry {
+  props: RedevZoneFeature['properties'];
+  /** 경도 최소, 위도 최소, 경도 최대, 위도 최대 */
+  box: [number, number, number, number];
+  /** 다각형마다 [바깥 고리, 구멍…] */
+  polys: Ring[][];
+}
+let index: { mtime: number; fileDate: string | null; entries: ZoneEntry[] } | null = null;
+
+/** 저장해 둔 구역의 상자 목록(파일이 바뀌면 다시 만든다). 파일이 없으면 null. */
+function zoneIndex() {
+  let mtime: number;
+  try {
+    mtime = fs.statSync(FILE).mtimeMs;
+  } catch {
+    return null;
+  }
+  if (index?.mtime === mtime) return index;
+  const view = redevZones();
+  const entries = view.features.map((f): ZoneEntry => {
+    const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+    const box: ZoneEntry['box'] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const poly of polys) {
+      for (const [x, y] of poly[0]) {
+        box[0] = Math.min(box[0], x);
+        box[1] = Math.min(box[1], y);
+        box[2] = Math.max(box[2], x);
+        box[3] = Math.max(box[3], y);
+      }
+    }
+    return { props: f.properties, box, polys };
+  });
+  index = { mtime, fileDate: view.fileDate, entries };
+  return index;
+}
+
+/** 위경도 점에서 고리까지 가장 가까운 거리(m). 점 둘레를 평면으로 펴서 잰다. */
+function ringDistM(lat: number, lng: number, ring: Ring) {
+  const kx = 111320 * Math.cos((lat * Math.PI) / 180);
+  const ky = 110574;
+  let best = Infinity;
+  for (let i = 1; i < ring.length; i++) {
+    const a: [number, number] = [(ring[i - 1][0] - lng) * kx, (ring[i - 1][1] - lat) * ky];
+    const b: [number, number] = [(ring[i][0] - lng) * kx, (ring[i][1] - lat) * ky];
+    best = Math.min(best, segDist([0, 0], a, b));
+  }
+  return best;
+}
+
+/** 점(위도, 경도)이 든 정비사업 구역과 파일의 작성일. 구역 파일을 넣은 적이 없으면 null. */
+export function zonesAt(lat: number, lng: number): { hits: RedevHit[]; fileDate: string | null } | null {
+  const idx = zoneIndex();
+  if (!idx) return null;
+  const p: [number, number] = [lng, lat];
+  const hits: RedevHit[] = [];
+  for (const e of idx.entries) {
+    if (lng < e.box[0] || lng > e.box[2] || lat < e.box[1] || lat > e.box[3]) continue;
+    const poly = e.polys.find((rings) => inside(p, rings[0]) && !rings.slice(1).some((hole) => inside(p, hole)));
+    if (!poly) continue;
+    const { name, type, group, outline, stage, date } = e.props;
+    hits.push({ name, type, group, outline, stage, date, edge: poly.some((ring) => ringDistM(lat, lng, ring) < EDGE_M) });
+  }
+  return { hits, fileDate: idx.fileDate };
 }

@@ -2,6 +2,7 @@ import * as store from './db.js';
 import { toNumber } from './collectors/types.js';
 import { looksSimilar } from './identity.js';
 import { parseLot, pnuOf } from './lots.js';
+import { zonesAt } from './redev-zones.js';
 import { compareTrades, type TradeMatch } from './trade-compare.js';
 import { manwon } from '../shared/format.js';
 import {
@@ -71,7 +72,7 @@ function auctionRef(raw: unknown): ListingView['auction'] {
 
 type OnbidRow = { scrnIndctCltrMngNo?: unknown; cltrApslEvlAvgAmt?: unknown; uscbdCnt?: unknown; onbidCltrNm?: unknown } | null | undefined;
 
-/** 온비드 원본(검색 응답 한 건)에서 물건관리번호·감정가·유찰 횟수를 읽는다. court는 '온비드'. */
+/** 온비드 원본(검색 응답 한 건)에서 물건관리번호, 감정가, 유찰 횟수를 읽는다. court는 '온비드'. */
 function onbidRef(raw: unknown): ListingView['auction'] {
   const row = raw as OnbidRow;
   if (!row || typeof row.scrnIndctCltrMngNo !== 'string') return null;
@@ -98,7 +99,7 @@ function jibunAfter(address: string, dong: string): string | null {
   return m ? `${m[1] ? '산' : ''}${m[2]}` : null;
 }
 
-/** 단지 이름 자리: 주소에서 '서울특별시'를 빼고 건물 동·층·호 앞까지('강남구 대치동 316 은마아파트 제12동 제3층' → '강남구 대치동 316 은마아파트') */
+/** 단지 이름 자리: 주소에서 '서울특별시'를 빼고 건물 동, 층, 호 앞까지('강남구 대치동 316 은마아파트 제12동 제3층' → '강남구 대치동 316 은마아파트') */
 function complexNameOf(address: string): string {
   const plain = address.replace(/^서울(특별)?시\s*/, '').replace(/\s+/g, ' ').trim();
   const cut = plain.search(/\s(제\s*)?[0-9A-Za-z가-힣]*\d+\s*동(?=[\s,]|$)|\s(제\s*)?(지하\s*)?\d+\s*층|\s(제\s*)?\d+\s*호/);
@@ -106,7 +107,7 @@ function complexNameOf(address: string): string {
 }
 
 /**
- * 경매·공매 물건의 서울 구와 지번 키('lot:강남구 대치동 316'). 구는 법원경매면 소재지 구(hjguSigu), 온비드면 시도·시군구·읍면동 글자,
+ * 경매와 공매 물건의 서울 구와 지번 키('lot:강남구 대치동 316'). 구는 법원경매면 소재지 구(hjguSigu), 온비드면 시도, 시군구, 읍면동 글자,
  * 없으면 주소 글자에서 찾는다. 구를 모르면(서울 밖) gu가 null, 주소에서 법정동 뒤 지번을 못 찾으면 lot이 null.
  */
 function auctionLot(source: 'courtauction' | 'onbid', l: NormalizedListing, raw: unknown): { gu: string | null; lot: string | null } {
@@ -126,7 +127,7 @@ function auctionLot(source: 'courtauction' | 'onbid', l: NormalizedListing, raw:
 /**
  * 서울 아파트면 구, 단지 키와 이름, 세대수(직접 넣은 값, 없으면 건축물대장 값), 대장 조회 결과, 온비드 재산 종류(AptInfo).
  * 아파트가 아니거나 서울 구를 모르면 null.
- * 단지 키: 법원경매·온비드는 구, 법정동, 주소의 지번('lot:강남구 대치동 316'), 네이버는 단지 번호('nv:1234'), 못 정하면 매물 하나('id:…').
+ * 단지 키: 법원경매, 온비드는 구, 법정동, 주소의 지번('lot:강남구 대치동 316'), 네이버는 단지 번호('nv:1234'), 못 정하면 매물 하나('id:…').
  */
 function aptRef(
   id: string, source: string, l: NormalizedListing, raw: unknown, households: Map<string, number>, registry: Map<string, AptRegistry>,
@@ -165,11 +166,11 @@ function aptRef(
   };
 }
 
-/** 다세대·연립 같은 빌라(아파트, 오피스텔, 단독주택 갈래는 뺀다) */
+/** 다세대, 연립 같은 빌라(아파트, 오피스텔, 단독주택 갈래는 뺀다) */
 const isVillaType = (t: string | null | undefined) => /다세대|연립|빌라|도시형생활주택/.test(t ?? '') && !isApartmentType(t) && !isDetachedHouseType(t) && !/오피스텔/.test(t ?? '');
 
 /**
- * 재개발 구역 정보(PlotZone). 경매·공매는 단독주택 갈래 주거, 땅만 파는 토지, 아파트, 빌라를 주소의 지번으로 보고,
+ * 재개발 구역 정보(PlotZone). 경매와 공매는 단독주택 갈래 주거, 땅만 파는 토지, 아파트, 빌라를 주소의 지번으로 보고,
  * 네이버 서울 아파트 매매는 단지 키('nv:1234')로 묶어 단지 좌표로 찾은 필지(points)로 본다. 다른 물건은 null.
  * 지번 키와 필지 번호를 못 정하면 why에 까닭(서울 밖, 지번 없음, 법정동 코드 모름, 좌표에 필지 없음)을 둔다.
  */
@@ -193,21 +194,21 @@ function zoneRef(
   return { ...base, lot, pnu, why: null, check: zones.get(lot) ?? null };
 }
 
-/** 경매·공매 주소의 단지 이름(지번 뒤 글자, '노원구 상계동 1234, 상계주공아파트 제601동' → '상계주공아파트'). 지번 뒤에 이름이 없으면 null. */
+/** 경매와 공매 주소의 단지 이름(지번 뒤 글자, '노원구 상계동 1234, 상계주공아파트 제601동' → '상계주공아파트'). 지번 뒤에 이름이 없으면 null. */
 function auctionComplexName(address: string): string | null {
   const m = /^.*?\d+(?:-\d+)?[,\s]+(.+)$/.exec(complexNameOf(address));
   return m && /[가-힣A-Za-z]/.test(m[1]) ? m[1] : null;
 }
 
-/** 필지 주소('서울특별시 노원구 상계동 700')가 그 구·법정동이면 번지('700'), 아니면 null. */
+/** 필지 주소('서울특별시 노원구 상계동 700')가 그 구, 법정동이면 번지('700'), 아니면 null. */
 function parcelJibun(addr: string | null, gu: string, dong: string): string | null {
   const m = /\s(\S+)\s(\S+)\s(산?\d+(?:-\d+)?)$/.exec(addr ?? '');
   return m && m[1] === gu && m[2] === dong ? m[3] : null;
 }
 
 /**
- * 서울 아파트 매물 값을 같은 단지·같은 전용면적의 국토부 실거래와 비교한다(trade-compare).
- * 경매·공매 최저가는 주소 지번('lot:노원구 상계동 1234')이 같은 실거래, 없으면 주소의 단지 이름으로,
+ * 서울 아파트 매물 값을 같은 단지, 같은 전용면적의 국토부 실거래와 비교한다(trade-compare).
+ * 경매와 공매 최저가는 주소 지번('lot:노원구 상계동 1234')이 같은 실거래, 없으면 주소의 단지 이름으로,
  * 네이버 매매가는 단지 이름으로, 없으면 단지 좌표로 찾은 필지(points)의 번지로 단지를 맞춘다.
  */
 function tradeRef(source: string, l: NormalizedListing, raw: unknown, points: Map<string, store.PointParcel>): TradeRef | null {
@@ -278,6 +279,14 @@ export function optionsRef(source: string, raw: unknown, title: string): Listing
 }
 
 /** 매물 + 판정 + 확인하지 않은 변화를 화면용으로 합친다. */
+/** 사는 매물(매매, 경매, 공매)이면 좌표가 든 정비사업 구역. 구역 밖이거나 좌표가 없거나 전월세만 있는 매물이면 null. */
+function redevRef(source: string, l: NormalizedListing): ListingView['redev'] {
+  if (l.lat == null || l.lng == null) return null;
+  if (source !== 'courtauction' && source !== 'onbid' && !l.prices.some((p) => p.deal === 'sale' || p.deal === 'auction')) return null;
+  const at = zonesAt(l.lat, l.lng);
+  return at?.hits.length ? at : null;
+}
+
 export function buildListingViews(): ListingView[] {
   const rows = store.allListings();
   const courtRaw = store.rawBySource('courtauction');
@@ -326,6 +335,7 @@ export function buildListingViews(): ListingView[] {
       apt: aptRef(row.id, row.source, data, raw, households, registry),
       zone: zoneRef(row.source, data, raw, zones, points),
       trade: tradeRef(row.source, data, raw, points),
+      redev: redevRef(row.source, data),
     };
   });
 }

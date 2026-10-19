@@ -10,6 +10,8 @@ import * as store from './db.js';
 import { collectHouseTrades, HOUSE_TRADES_SOURCE, houseTradesDue } from './house-trades.js';
 import { APT_TRADES_SOURCE, aptRecentDue, aptTradesDue, collectAptTrades } from './apt-trades.js';
 import { collectKbStats, KB_SOURCE, kbStatsDue } from './kb-stats.js';
+import { collectPeakSources, PEAK_SOURCE, peakSourcesDue } from './peak-sources.js';
+import { collectRegionVolume, REGION_VOLUME_SOURCE, regionVolumeDue } from './region-volume.js';
 import { fillHouseholds, REGISTRY_SOURCE, registryKey } from './building-register.js';
 import { checkZones, vworldKey, ZONE_SOURCE } from './land-zones.js';
 import { updateZonesWith, ZONES_SOURCE, zoneUpdateDue } from './redev-zones-update.js';
@@ -62,7 +64,7 @@ export const LINE_SOURCES: SourceId[] = ['ziptoss', 'peterpanz'];
 
 /**
  * 노선 탭 '이 노선 조회하기': 그 노선 역(반경 radiusM)만 매물 사이트(집토스, 피터팬)로 돈다. 노선 탭에서 고른 노선도 이것으로 바꾼다.
- * 켜진 지역(회사 근처), 공고, 실거래·시세 자료는 건드리지 않고, 신규로 치지 않으며(역마다 처음 본 것도 기준만) 알림도 띄우지 않는다.
+ * 켜진 지역(회사 근처), 공고, 실거래, 시세 자료는 건드리지 않고, 신규로 치지 않으며(역마다 처음 본 것도 기준만) 알림도 띄우지 않는다.
  */
 export function startLineRun(visible: boolean, line: string, radiusM: number): number {
   if (current) throw new Error('이미 조회 중입니다.');
@@ -92,7 +94,7 @@ function takeDeferredNotices(): NewsItem[] {
 
 export const isRunning = () => current !== null;
 
-/** 조회를 멈춘다. 조회용 브라우저를 닫아 하던 사이트를 끊고 남은 사이트·공고는 건너뛴다. 이미 다 모은 사이트 결과는 그대로 둔다. */
+/** 조회를 멈춘다. 조회용 브라우저를 닫아 하던 사이트를 끊고 남은 사이트, 공고는 건너뛴다. 이미 다 모은 사이트 결과는 그대로 둔다. */
 export function stopRun() {
   if (!current) throw new Error('조회 중이 아닙니다.');
   current.stopping = true;
@@ -136,7 +138,7 @@ export interface ApplyOptions {
   isBaseline?: (listing: NormalizedListing) => boolean;
   /**
    * '같은 집 키'가 버린 매물과 같을 때 재등록으로 보고 숨길지. false를 준 매물은 숨기지 않는다(비슷함 배지만 붙는다).
-   * 네이버는 층이 '고·중·저'로만 나오는 경우가 많아, 층을 모르면 다른 집을 같은 집으로 볼 수 있다.
+   * 네이버는 층이 '고, 중, 저'로만 나오는 경우가 많아, 층을 모르면 다른 집을 같은 집으로 볼 수 있다.
    */
   allowRelistHide?: (listing: NormalizedListing) => boolean;
   status?: RunSourceSummary['status'];
@@ -144,12 +146,12 @@ export interface ApplyOptions {
   goneOutsideRadius?: boolean;
   /** 매물을 실제로 본 시각. 네이버는 확장이 응답을 받은 시각을 준다(대시보드가 꺼져 있다가 나중에 받아도 본 시각이 맞게). */
   seenAt?: string;
-  /** 주면 신규·가격 변동 매물을 여기에 더한다(버린 매물의 가격 변동은 빼고). */
+  /** 주면 신규, 가격 변동 매물을 여기에 더한다(버린 매물의 가격 변동은 빼고). */
   news?: NewsItem[];
 }
 
 /**
- * 받은 매물을 저장하고 신규·가격 변동·재등록을 판정한다. 모든 소스가 이 함수 하나를 거친다.
+ * 받은 매물을 저장하고 신규, 가격 변동, 재등록을 판정한다. 모든 소스가 이 함수 하나를 거친다.
  * 켜진 지역 반경(+여유) 밖 매물은 저장하지 않는다. 다만 서울 아파트 탭에서 고른 구의 아파트(aptGu)는 저장한다.
  */
 export function applyResults(
@@ -357,7 +359,7 @@ async function execute(
     const where = plan.line
       ? `${plan.line} 노선 역 ${areas.length}곳(반경 ${areas[0]?.radiusM ?? 0}m, ${collectors.map((c) => c.label).join(', ')})`
       : `지역: ${areas.map((a) => `${a.name} ${a.radiusM}m`).join(', ')}`;
-    log(`조회 시작, ${auto ? '자동 확인, ' : ''}${only}${where}, ${visible ? '보면서 조회' : '조용히 조회'}, 역·지역·구 사이 ${restSeconds()}초 쉼`);
+    log(`조회 시작, ${auto ? '자동 확인, ' : ''}${only}${where}, ${visible ? '보면서 조회' : '조용히 조회'}, 역, 지역, 구 사이 ${restSeconds()}초 쉼`);
     session = await BrowserSession.open(runId, visible);
     state.session = session;
     // 브라우저를 여는 사이에 멈춤을 눌렀으면 바로 닫는다.
@@ -447,7 +449,8 @@ async function execute(
         log(`${HOUSE_TRADES_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
-    // 시세 통계 탭 자료: KB 지수는 3일, 서울 아파트 실거래 최근 1년은 7일에 한 번, 지난 해는 한 번에 두 해씩(전부 도는 조회만).
+    // 시세 통계 탭 자료: KB 지수는 3일, 서울 아파트 실거래 최근 1년과 지역별 거래 건수는 7일에 한 번, 지난 해는 한 번에 두 해씩,
+    // 지역별 건수의 빈 달은 한 번에 36달씩(전부 도는 조회만).
     // 경매 범위 조회는 카드의 실거래 비교에 쓰는 아파트 실거래 최근 1년만 받는다.
     if (!state.stopping && fullData && kbStatsDue()) {
       try {
@@ -455,6 +458,22 @@ async function execute(
         log(`${KB_SOURCE}: ${await collectKbStats(record)}`);
       } catch (e) {
         log(`${KB_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      }
+    }
+    if (!state.stopping && fullData && peakSourcesDue()) {
+      try {
+        const record = (url: string, status: number | null, note: string) => store.addRequest(runId, PEAK_SOURCE, 'data', url, status, note);
+        log(`${PEAK_SOURCE}: ${await collectPeakSources(record)}`);
+      } catch (e) {
+        log(`${PEAK_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      }
+    }
+    if (!state.stopping && fullData && regionVolumeDue()) {
+      try {
+        const record = (url: string, status: number | null, note: string) => store.addRequest(runId, REGION_VOLUME_SOURCE, 'data', url, status, note);
+        log(`${REGION_VOLUME_SOURCE}: ${await collectRegionVolume(record)}`);
+      } catch (e) {
+        log(`${REGION_VOLUME_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
     if (!state.stopping && (fullData ? aptTradesDue() : auctionData && aptRecentDue())) {
@@ -483,7 +502,7 @@ async function execute(
         log(`${REGISTRY_SOURCE} 세대수 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
-    // 법원경매나 온비드를 돈 조회는 브이월드 키가 있으면 집터 경매·공매(단독, 토지)가 재개발 쪽 구역 안인지 토지이용계획으로 본다(아직 안 본 필지만).
+    // 법원경매나 온비드를 돈 조회는 브이월드 키가 있으면 집터 경매와 공매(단독, 토지)가 재개발 쪽 구역 안인지 토지이용계획으로 본다(아직 안 본 필지만).
     if (!state.stopping && vworldKey() && collectors.some((c) => c.id === 'courtauction' || c.id === 'onbid')) {
       try {
         const record = (url: string, status: number | null, note: string) => store.addRequest(runId, ZONE_SOURCE, 'data', url, status, note);

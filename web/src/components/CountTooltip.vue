@@ -9,7 +9,8 @@ import { nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 // 숫자에 마우스를 올리거나 키보드로 초점을 옮기면 자세한 수를 띄우는 설명 상자.
 // 마우스로 누르면 닫히고(누른 뒤 남은 초점으로는 다시 뜨지 않음), 창을 떠나도 닫힌다.
 defineOptions({ inheritAttrs: false });
-const props = withDefaults(defineProps<{ text: string; focusable?: boolean }>(), { focusable: true });
+/** maxWidth: 긴 설명을 이 너비(px)에서 줄 바꿈한다(없으면 화면 너비까지). */
+const props = withDefaults(defineProps<{ text: string; focusable?: boolean; maxWidth?: number }>(), { focusable: true });
 const id = useId();
 const anchor = ref<HTMLElement>();
 const popup = ref<HTMLElement>();
@@ -182,7 +183,7 @@ onBeforeUnmount(() => {
     @keydown="stopActivation"
   ><slot /></span>
   <Teleport to="body">
-    <span v-if="open" :id="id" ref="popup" class="count-tooltip-popup" :class="{ above }" :style="position" role="tooltip" @pointerenter="enter" @pointerleave="leave">
+    <span v-if="open" :id="id" ref="popup" class="count-tooltip-popup" :class="{ above }" :style="[position, maxWidth ? { maxWidth: `min(${maxWidth}px, calc(100vw - 16px))` } : {}]" role="tooltip" @pointerenter="enter" @pointerleave="leave">
       <span class="count-tooltip-text">{{ text }}</span>
     </span>
   </Teleport>

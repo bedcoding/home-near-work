@@ -612,6 +612,11 @@ html[data-design='workspace'] .card.selected .chip-muted {
   color: #e5edf8;
 }
 
+html[data-design='workspace'] .card.selected .chip-danger {
+  background: #e03131;
+  color: #fff;
+}
+
 html[data-design='workspace'] .card.selected .chip-warn {
   background: #5a4a2d;
   color: #ffe3a3;

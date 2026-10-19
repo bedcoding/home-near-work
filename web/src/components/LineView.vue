@@ -8,9 +8,9 @@ import ListingCard from './ListingCard.vue';
 import OverviewMap from './OverviewMap.vue';
 
 // 노선 탭: 노선을 고르면 그 노선 역마다 반경 안 매물(매매와 전월세)을 세어 역끼리 견준다. 켜진 지역(회사 근처)은 건드리지 않는다.
-// - 역 칸: 월세·전세·매매 건수와 중간값(월세는 월세, 전세는 전세금, 매매는 매매가). 왼쪽 필터의 거래 유형·가격·면적·유형 조건을 따르고 지역 조건은 뺀다.
+// - 역 칸: 월세, 전세, 매매 건수와 중간값(월세는 월세, 전세는 전세금, 매매는 매매가). 왼쪽 필터의 거래 유형, 가격, 면적, 유형 조건을 따르고 지역 조건은 뺀다.
 // - 역을 누르면 그 역 매물 카드가 아래에, 지도에는 노선 역 반경과 그 역 매물이 진하게 보인다. 지도에서 역을 눌러도 고른다.
-// - '이 노선 조회하기'는 그 노선 역만 집토스·피터팬으로 조회하고, '이 역 사이트 열기'는 크롬 확장으로 네이버 등을 그 역 가운데로 연다.
+// - '이 노선 조회하기'는 그 노선 역만 집토스, 피터팬으로 조회하고, '이 역 사이트 열기'는 크롬 확장으로 네이버 등을 그 역 가운데로 연다.
 const props = defineProps<{
   /** 매매와 전월세 매물 전체(켜진 지역 밖 포함, 버린 것 빼고) */
   listings: ListingView[];
@@ -72,7 +72,7 @@ function median(values: number[]): number | null {
   return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
 }
 
-/** 역마다 반경 안 매물과 거래 유형별 건수·중간값(필터의 거래 유형을 고르면 그 유형만 센다) */
+/** 역마다 반경 안 매물과 거래 유형별 건수, 중간값(필터의 거래 유형을 고르면 그 유형만 센다) */
 const rows = computed(() => {
   const located = props.listings.filter((l) => l.lat != null && l.lng != null);
   const deals = DEALS.filter((d) => !props.filters.deals.length || props.filters.deals.includes(d.id));
@@ -120,18 +120,17 @@ const pickStation = (name: string) => (stationName.value = stationName.value ===
 const allLine = computed(() => [...new Map(rows.value.flatMap((r) => r.listings.map((l) => [l.id, l]))).values()]);
 const selectedId = ref<string | null>(null);
 
-const cell = (v: { count: number; median: number | null } | null) => (v === null ? '-' : v.count ? `${v.count}건 · ${manwon(v.median!)}` : '0');
+const cell = (v: { count: number; median: number | null } | null) => (v === null ? '-' : v.count ? `${v.count}건, ${manwon(v.median!)}` : '0');
 /** 이 노선 조회가 보는 양(시간은 사이트 응답에 따라 달라 쓰지 않는다) */
 const runNote = computed(
-  () => `집토스 역 페이지 약 ${stations.value.length}곳, 피터팬 지도 ${stations.value.length}곳 × 3종류를 봅니다. 역·지역 사이 ${props.restSeconds}초씩 쉽니다.`,
+  () => `집토스 역 페이지 약 ${stations.value.length}곳, 피터팬 지도 ${stations.value.length}곳 × 3종류를 봅니다. 역, 지역 사이 ${props.restSeconds}초씩 쉽니다.`,
 );
 </script>
 
 <template>
   <section class="lineview">
     <div class="title-row">
-      <h2>노선</h2>
-      <span class="muted small">켜진 지역(회사 근처)은 그대로 두고, 노선을 따라 역마다 매물을 견줍니다.</span>
+      <h2 title="켜진 지역(회사 근처)은 그대로 두고, 노선을 따라 역마다 매물을 견줍니다">노선</h2>
     </div>
     <p v-if="catalogError" class="error">{{ catalogError }}</p>
     <div class="chips" role="group" aria-label="노선">
@@ -139,7 +138,7 @@ const runNote = computed(
         {{ name }} <span class="n">{{ n }}</span>
       </button>
     </div>
-    <p v-if="!line" class="muted small">노선을 고르면 역마다 반경 안 매매·전월세 매물 수와 중간값이 나옵니다. 처음에는 그 노선 매물이 없으니 '이 노선 조회하기'를 누르세요.</p>
+    <p v-if="!line" class="muted small" title="노선을 고르면 역마다 반경 안 매매와 전월세 매물 수와 중간값이 나옵니다. 처음에는 그 노선 매물이 없으니 '이 노선 조회하기'를 누르세요.">노선을 고르세요</p>
 
     <template v-else>
       <div class="controls">
@@ -158,7 +157,6 @@ const runNote = computed(
         <button class="btn btn-primary btn-sm" :disabled="running" :title="runNote" @click="emit('run', line, radius)">
           {{ running ? '조회 중…' : '이 노선 조회하기' }}
         </button>
-        <span class="muted small">{{ runNote }}</span>
       </div>
 
       <div class="body">
@@ -166,7 +164,7 @@ const runNote = computed(
           <div class="table-wrap">
           <table class="grid">
             <thead>
-              <tr>
+              <tr title="중간값은 월세는 월세, 전세는 전세금, 매매는 매매가이고, 왼쪽 필터의 거래 유형, 가격, 면적, 매물 유형을 따릅니다. 역 반경이 겹치면 두 역에 같이 셉니다.">
                 <th scope="col">역 <span class="muted num">{{ stations.length }}곳</span></th>
                 <th v-for="d in DEALS" :key="d.id" scope="col" class="r">{{ d.name }}</th>
               </tr>
@@ -182,9 +180,6 @@ const runNote = computed(
             </tbody>
           </table>
           </div>
-          <p class="muted small">
-            중간값은 월세는 월세, 전세는 전세금, 매매는 매매가이고, 왼쪽 필터의 거래 유형·가격·면적·매물 유형을 따릅니다. 역 반경이 겹치면 두 역에 같이 셉니다.
-          </p>
 
           <div v-if="picked" class="station">
             <div class="station-head">
@@ -201,7 +196,7 @@ const runNote = computed(
                 @select="selectedId = l.id" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)" @source="emit('source', l)" @raw="emit('raw', l)"
               />
             </div>
-            <p v-if="!picked.total" class="muted small">이 역 반경 안 매물이 아직 없습니다. '이 노선 조회하기'나 '이 역 사이트 열기'로 모으세요.</p>
+            <p v-if="!picked.total" class="muted small">이 역 반경 안 매물이 아직 없습니다</p>
           </div>
         </div>
         <aside class="map-side">

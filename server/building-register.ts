@@ -9,11 +9,10 @@ import type { AppState, AptRegistry } from '../shared/types.js';
 export { parseLot };
 
 // 서울 아파트 탭의 세대수를 국토교통부 건축HUB 건축물대장정보 서비스(공공데이터포털 15134735)로 채운다.
-// 경매·공매 물건 주소에서 뽑은 구·법정동·지번(AptInfo.complexKey 'lot:강남구 대치동 316')으로 표제부(getBrTitleInfo, 동마다 한 줄)를 읽어
+// 경매와 공매 물건 주소에서 뽑은 구, 법정동, 지번(AptInfo.complexKey 'lot:강남구 대치동 316')으로 표제부(getBrTitleInfo, 동마다 한 줄)를 읽어
 // 세대수(hhldCnt) 합, 세대가 있는 동 수, 가장 높은 지상층수(grndFlrCnt)를 남기고, 동이 여럿이면 총괄표제부(getBrRecapTitleInfo)의 세대수를 쓴다.
 // 인증키는 config/local.json의 dataGoKrKey(일반 인증키, 인코딩된 것도 디코딩된 것도 됨). 키는 요청 기록이나 오류 글자에 남기지 않는다.
 // 지번 키와 법정동 코드는 lots.ts.
-// 이 프로그램을 만든 작업 환경에서는 공공데이터포털에 닿지 않아 실제 응답으로 확인하지 못했다. 주소, 입력값, 응답 칸 이름은 이 API를 쓰는 공개 코드로 확인했다.
 
 /** 요청 주소 앞부분. HNW_REGISTER_BASE로 바꿀 수 있다(시험용 가짜 서버). */
 const BASE = process.env.HNW_REGISTER_BASE ?? 'https://apis.data.go.kr/1613000/BldRgstHubService';
@@ -62,7 +61,7 @@ class RegistryError extends Error {
   }
 }
 
-/** 공공데이터포털 공통 결과 코드: 03 데이터 없음, 10·11 요청 값 문제(그 단지만 실패). 나머지는 키·이용량·서비스 문제로 본다. */
+/** 공공데이터포털 공통 결과 코드: 03 데이터 없음, 10, 11 요청 값 문제(그 단지만 실패). 나머지는 키, 이용량, 서비스 문제로 본다. */
 const NO_DATA = '03';
 const BAD_PARAMS = ['10', '11'];
 
@@ -175,8 +174,8 @@ export async function lookupLot(lot: Lot, key: string, record: RecordRequest = (
 let running: Promise<string> | null = null;
 
 /**
- * 경매·공매 아파트 단지(지번 키) 중 세대수를 직접 넣지 않았고 아직 대장을 안 본(또는 RECHECK_DAYS가 지났거나 실패한) 곳의 건축물대장을 읽어 저장한다.
- * 한 번에 MAX_LOTS곳까지. 결과 한 줄을 돌려주고 마지막 결과로 남긴다. 키가 없거나 키·서비스 문제면 오류를 던진다. 이미 채우는 중이면 그 결과를 기다린다.
+ * 경매와 공매 아파트 단지(지번 키) 중 세대수를 직접 넣지 않았고 아직 대장을 안 본(또는 RECHECK_DAYS가 지났거나 실패한) 곳의 건축물대장을 읽어 저장한다.
+ * 한 번에 MAX_LOTS곳까지. 결과 한 줄을 돌려주고 마지막 결과로 남긴다. 키가 없거나 키, 서비스 문제면 오류를 던진다. 이미 채우는 중이면 그 결과를 기다린다.
  */
 export function fillHouseholds(record: RecordRequest = () => {}): Promise<string> {
   running ??= fill(record).finally(() => {

@@ -5,11 +5,11 @@ import { LOCAL } from './config.js';
 import type { Station } from '../shared/types.js';
 
 export interface StationInfo extends Station {
-  /** 역이 있는 자치구(서울 밖은 시·군). 법원경매 소재지 검색에 쓴다. */
+  /** 역이 있는 자치구(서울 밖은 시, 군). 법원경매 소재지 검색에 쓴다. */
   gu: string;
 }
 
-// stations-kric.json: 수도권 전철역 목록(이름·노선·좌표·시도·구).
+// stations-kric.json: 수도권 전철역 목록(이름, 노선, 좌표, 시도, 구).
 
 export interface CatalogStation {
   name: string;
@@ -17,9 +17,9 @@ export interface CatalogStation {
   lines: string[];
   lat: number;
   lng: number;
-  /** 서울·경기·인천·충남·강원 */
+  /** 서울과 경기, 인천, 충남, 강원 */
   sido: string;
-  /** 서울은 구, 그 밖은 시·군 */
+  /** 서울은 구, 그 밖은 시, 군 */
   gu: string | null;
 }
 

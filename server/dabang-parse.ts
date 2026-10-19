@@ -24,7 +24,7 @@ function prices(type: unknown, title: unknown): PriceOption[] {
 
 /**
  * 방 목록 한 줄 → 공통 형식. 고정 번호는 seq(등록 순서대로 커지는 번호)다.
- * roomDesc '2층, 33.05m², 관리비 9만'에서 층(반지층은 지하, 옥탑, 저층·중층·고층은 층 모름)·전용면적·관리비(만원, '없음'은 0)를 읽는다.
+ * roomDesc '2층, 33.05m², 관리비 9만'에서 층(반지층은 지하, 옥탑, 저층, 중층, 고층은 층 모름), 전용면적, 관리비(만원, '없음'은 0)를 읽는다.
  * 위치는 다방이 준 근처 좌표(randomLocation)라 주소는 없고, 원본 주소는 그 좌표 가운데의 다방 지도다.
  */
 function toListing(x: Record<string, unknown>): NormalizedListing | null {
@@ -40,8 +40,8 @@ function toListing(x: Record<string, unknown>): NormalizedListing | null {
   const fee = /관리비\s*(없음|[\d.]+만)/.exec(desc);
   const listingPrices = prices(x.priceTypeName, x.priceTitle);
   const explain: ExplainRow[] = [
-    { label: '가격', raw: `priceTypeName·priceTitle: ${x.priceTypeName ?? '?'} ${x.priceTitle ?? '?'}`, value: listingPrices.map(priceText).join(', ') || '못 읽음' },
-    { label: '층·면적·관리비', raw: `roomDesc: ${desc}`, value: `${floor ? `${floor[1]}층` : /반지|지하/.test(desc) ? '지하' : /옥탑/.test(desc) ? '옥탑' : '층 모름'}, ${area ? `${area[1]}㎡` : '면적 모름'}, ${fee ? fee[1] : '관리비 모름'}` },
+    { label: '가격', raw: `priceTypeName, priceTitle: ${x.priceTypeName ?? '?'} ${x.priceTitle ?? '?'}`, value: listingPrices.map(priceText).join(', ') || '못 읽음' },
+    { label: '층, 면적, 관리비', raw: `roomDesc: ${desc}`, value: `${floor ? `${floor[1]}층` : /반지|지하/.test(desc) ? '지하' : /옥탑/.test(desc) ? '옥탑' : '층 모름'}, ${area ? `${area[1]}㎡` : '면적 모름'}, ${fee ? fee[1] : '관리비 모름'}` },
     { label: '위치', raw: `randomLocation: ${lat}, ${lng}`, value: '다방이 준 근처 좌표', note: '정확한 위치가 아니다' },
   ];
   return {

@@ -4,7 +4,7 @@ import { BlockedError, toNumber, type CollectContext, type Collector, type Colle
 import { priceText } from '../../shared/format.js';
 import type { NormalizedListing, PriceOption, SourceId } from '../../shared/types.js';
 
-// 기업형 코리빙(방 하나씩 빌리는 곳). '고시원·쉐어' 탭에 보인다. 회사 사이트 전체(모든 지점)를 매번 보므로 안 보인 방은 사라짐으로 둔다.
+// 기업형 코리빙(방 하나씩 빌리는 곳). '고시원, 쉐어' 탭에 보인다. 회사 사이트 전체(모든 지점)를 매번 보므로 안 보인 방은 사라짐으로 둔다.
 // 금액은 사이트가 원 단위로 주는 것을 만원으로 바꾼다.
 
 const blocked = (status: number | null | undefined) => status === 403 || status === 429;
@@ -15,7 +15,7 @@ const manwon = (won: unknown) => {
 /** '19.75㎡'나 '9.7m² (2.93py)'에서 ㎡ 숫자 */
 const squareMeters = (text: unknown) => toNumber(/([\d.]+)\s*(㎡|m²|m2)/.exec(String(text ?? ''))?.[1]);
 
-/** 코리빙 방 하나를 공통 형식으로. buildingType은 '코리빙'('고시원·쉐어' 탭 종류 칸). */
+/** 코리빙 방 하나를 공통 형식으로. buildingType은 '코리빙'('고시원, 쉐어' 탭 종류 칸). */
 function roomListing(fields: Partial<NormalizedListing> & Pick<NormalizedListing, 'source' | 'sourceId' | 'url' | 'title' | 'prices'>): NormalizedListing {
   return {
     thumbnail: null,

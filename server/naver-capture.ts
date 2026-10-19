@@ -21,10 +21,10 @@ export const NAVER_SNAPSHOT_DIR = path.join(DATA_DIR, 'naver-snapshots');
 const EXTENSION_MANIFEST = path.join(ROOT, 'extension', 'manifest.json');
 const MAX_BODY = 2_000_000;
 const MAX_HTML = 5_000_000;
-// 확장(hook.js)과 같은 기준으로 한 번 더 거른다. 로그인·개인 정보·로그 요청은 저장하지 않는다.
+// 확장(hook.js)과 같은 기준으로 한 번 더 거른다. 로그인, 개인 정보, 로그 요청은 저장하지 않는다.
 const SKIP = /(member|login|logout|auth|token|user|\/my\b|mypage|favorite|interest|alarm|notif|nelo|\/log\b|analytics|\/si$)/i;
 
-/** 전화번호·이메일로 보이는 값을 가린다. */
+/** 전화번호, 이메일로 보이는 값을 가린다. */
 export function redact(text: string): string {
   return text
     .replace(/("[\w-]*(?:phone|tel|mobile|cell|fax|mail|representative)[\w-]*"\s*:\s*)"[^"]*"/gi, '$1"***"')
@@ -99,7 +99,7 @@ export function acceptCaptures(list: CaptureInput[]): number {
   return rows.length;
 }
 
-/** 오늘(서울 기준) 크롬 확장 조회 기록(네이버·다방 함께). 없으면 만든다. */
+/** 오늘(서울 기준) 크롬 확장 조회 기록(네이버, 다방 함께). 없으면 만든다. */
 function captureRunId(): number {
   const day = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
   const existing = store.naverRunFor(day);
@@ -138,12 +138,12 @@ function addToCaptureRun(runId: number, s: RunSourceSummary, note: string) {
 
 /** 한 번의 확인(사이트를 열어 응답이 이어서 들어오는 동안)으로 묶어 읽는 사이트 */
 const SESSION_SITES = ['dabang', 'zigbang', 'kbland', 'naver'];
-/** 직방 역·조건마다 마지막에 본 반경 안 방 번호(설정) */
+/** 직방 역, 조건마다 마지막에 본 반경 안 방 번호(설정) */
 const ZIGBANG_IDS_KEY = 'zigbang_station_ids';
 
 /**
- * 아직 읽지 않은 직방 응답을 읽는다. 역 반경 안 방 번호 전부(`items/subways/<역>/onerooms`)를 같은 역·조건으로 전에 본 번호와 비교해
- * 새 방을 세고(처음 보는 역·조건이면 기준만), 목록에 보인 방 내용(`items/list`)은 매물로 저장한다(새 방 번호면 신규).
+ * 아직 읽지 않은 직방 응답을 읽는다. 역 반경 안 방 번호 전부(`items/subways/<역>/onerooms`)를 같은 역, 조건으로 전에 본 번호와 비교해
+ * 새 방을 세고(처음 보는 역, 조건이면 기준만), 목록에 보인 방 내용(`items/list`)은 매물로 저장한다(새 방 번호면 신규).
  */
 function processZigbang(): { stations: { subwayId: string; pageUrl: string | null; total: number; fresh: number; baseline: boolean }[]; news: NewsItem[] } {
   const pending = store.pendingNaverCaptures('zigbang');
@@ -225,7 +225,7 @@ function processKbCounts(at: string): { dong: string; count: number; delta: numb
 /**
  * 이번 확인을 마무리한다: 다방 방 목록과 KB 매물 수를 읽고(네이버 동그라미는 받을 때 셈) 사이트마다 결과를 남긴 뒤,
  * 알림 설정 captureSites가 켜져 있고 새 것이 있으면 알림 하나를 띄운다.
- * 다방은 새 방 중 켜 둔 매물 알림 줄에 맞는 수, KB·네이버는 늘어난 매물 수(가격 조건으로 거르지 못함)를 센다.
+ * 다방은 새 방 중 켜 둔 매물 알림 줄에 맞는 수, KB, 네이버는 늘어난 매물 수(가격 조건으로 거르지 못함)를 센다.
  * 돌려주는 값: 새 것이 있으면 알림 내용(설정이 꺼져 있어도), 없으면 null.
  */
 export function finishCaptureSession(): { title: string; message: string; url: string } | null {
@@ -305,7 +305,7 @@ export function finishCaptureSession(): { title: string; message: string; url: s
  * 아직 읽지 않은 다방 응답 중 방 목록을 매물로 바꿔 저장한다.
  * 다방 화면은 열 때 그 지도 범위 방 목록의 첫 쪽(24개)만 받고, 순서는 등록순이 아니다.
  * 신규: 이번에 읽기 전 저장된 다방 방의 가장 큰 seq보다 seq가 큰 방(seq는 등록 순서대로 커진다). 저장된 다방 방이 없으면 전부 기준(baseline).
- * 돌려주는 값: 읽은 방 수, 신규 수, 신규·가격 변동 매물(news).
+ * 돌려주는 값: 읽은 방 수, 신규 수, 신규, 가격 변동 매물(news).
  */
 export function processPendingDabangCaptures(): { fetched: number; newCount: number; baseline: boolean; news: NewsItem[] } {
   const pending = store.pendingNaverCaptures('dabang');
@@ -394,7 +394,7 @@ export function processPendingNaverCaptures() {
       status: 'ok',
       // 전에 눌러 본 동그라미에서 새로 보인 매물만 신규로 친다.
       isBaseline: () => !seenBefore,
-      // 층 숫자를 모르면(고·중·저) 다른 집일 수 있어 재등록으로 숨기지 않는다.
+      // 층 숫자를 모르면(고, 중, 저) 다른 집일 수 있어 재등록으로 숨기지 않는다.
       allowRelistHide: (listing) => listing.floor != null,
       seenAt: row.at,
     });
@@ -409,7 +409,7 @@ export function processPendingNaverCaptures() {
   store.markNaverCapturesParsed(pending.map((r) => r.id));
 }
 
-/** 확장이 네이버 지도 위에 표시를 붙일 때 쓰는 값: 눌러 본 동그라미와 관심·버림 매물. */
+/** 확장이 네이버 지도 위에 표시를 붙일 때 쓰는 값: 눌러 본 동그라미와 관심, 버림 매물. */
 export function naverMarks() {
   const verdicts = store.allVerdicts().filter((v) => v.listing_id.startsWith('naver:'));
   return {

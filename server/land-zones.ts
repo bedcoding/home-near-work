@@ -5,17 +5,14 @@ import { toNumber } from './collectors/types.js';
 import { buildListingViews } from './views.js';
 import type { AppState, LandZone, LandZoneCheck } from '../shared/types.js';
 
-// 경매·공매(단독주택 갈래, 토지, 아파트, 빌라)와 네이버 서울 아파트 매매가 재개발 쪽 구역 안인지 브이월드 국가중점데이터 API의
-// 토지이용계획(getLandUseAttr)으로 본다. 경매·공매는 주소의 지번으로 만든 필지 번호(PNU, lots.ts)로, 네이버 아파트는 지번이 없어
+// 경매와 공매(단독주택 갈래, 토지, 아파트, 빌라)와 네이버 서울 아파트 매매가 재개발 쪽 구역 안인지 브이월드 국가중점데이터 API의
+// 토지이용계획(getLandUseAttr)으로 본다. 경매와 공매는 주소의 지번으로 만든 필지 번호(PNU, lots.ts)로, 네이버 아파트는 지번이 없어
 // 단지 좌표가 든 필지를 브이월드 2D 데이터 API의 연속지적도(LP_PA_CBND_BUBUN, geomFilter POINT)로 먼저 찾아 그 필지 번호로 부른다.
 // 토지이용계획 응답(landUses.field)의 용도지역지구명(prposAreaDstrcCodeNm) 중
-// 정비구역, 재개발구역, 재정비촉진지구, 소규모주택정비 관리지역, 건축허가·착공제한지역 같은 것만 남긴다(zoneKind).
+// 정비구역, 재개발구역, 재정비촉진지구, 소규모주택정비 관리지역, 건축허가와 착공제한지역 같은 것만 남긴다(zoneKind).
 // 인증키는 config/local.json의 vworldKey. 키를 받을 때 적은 서비스 URL(vworldDomain, 없으면 http://localhost)을 domain 값과
-// Referer 머리글로 같이 보낸다(Referer가 없으면 INCORRECT_KEY를 준다는 기록이 있다). 키는 요청 기록이나 오류 글자에 남기지 않는다.
-// 이 프로그램을 만든 작업 환경에서는 브이월드에 닿지 않아 실제 응답으로 확인하지 못했다. 주소, 입력값, 응답 칸과 구역 이름은
-// 이 API를 쓰는 공개 코드(cadastral-mcp, ToJIDAEJANG)와 seoul-redev-registry 저장소에 쌓인 2026년 9~10월 응답 기록으로 확인했다.
-// 연속지적도 요청과 응답(response.status OK·NOT_FOUND·ERROR, result.featureCollection.features[].properties.pnu·addr)은
-// 같은 두 코드(cadastral-mcp의 BOX 조회, ToJIDAEJANG의 POINT 조회)를 따랐다.
+// Referer 머리글로 같이 보낸다(Referer가 없으면 INCORRECT_KEY가 온다). 키는 요청 기록이나 오류 글자에 남기지 않는다.
+// 연속지적도 응답: response.status(OK, NOT_FOUND, ERROR), result.featureCollection.features[].properties의 pnu와 addr.
 
 /** 요청 주소 앞부분. HNW_VWORLD_BASE, HNW_VWORLD_DATA_BASE로 바꿀 수 있다(시험용 가짜 서버). */
 const BASE = process.env.HNW_VWORLD_BASE ?? 'https://api.vworld.kr/ned/data';
@@ -75,7 +72,7 @@ export function zoneCheckState(): AppState['zoneCheck'] {
 
 /**
  * 남길 구역의 갈래(이름 글자로 가른다). 응답 기록에서 본 이름: 정비구역(UDT100), 재개발구역(UDR100), 재정비촉진지구(UDA100),
- * 소규모주택정비 관리지역(UDK200), 건축허가·착공제한지역(UDX100). 시장정비구역은 전통시장 쪽이라 뺀다.
+ * 소규모주택정비 관리지역(UDK200), 건축허가와 착공제한지역(UDX100). 시장정비구역은 전통시장 쪽이라 뺀다.
  */
 export function zoneKind(name: string): LandZone['kind'] | null {
   if (/시장정비/.test(name)) return null;
@@ -88,7 +85,7 @@ export function zoneKind(name: string): LandZone['kind'] | null {
 /** 관리번호 앞 7자리 기관 코드 중 아는 것(응답 기록과 고시 원문으로 맞춰 본 것만) */
 const ORGS: Record<string, string> = { '6110000': '서울특별시', '1613000': '국토교통부' };
 
-/** 관리번호(기관 7 + 시군구 5 + 고시·공고 번호 8(YYYYNNNN) + 구역 코드 6 + 일련번호 7)에서 고시 번호('2024-448')와 기관. 모양이 다르면 null. */
+/** 관리번호(기관 7 + 시군구 5 + 고시나 공고 번호 8(YYYYNNNN) + 구역 코드 6 + 일련번호 7)에서 고시 번호('2024-448')와 기관. 모양이 다르면 null. */
 export function noticeOf(manageNo: unknown): { notice: string | null; org: string | null } {
   const m = /^(\d{7})\d{5}((?:19|20)\d{2})(\d{4})/.exec(String(manageNo ?? ''));
   return m ? { notice: `${m[2]}-${Number(m[3])}`, org: ORGS[m[1]] ?? null } : { notice: null, org: null };
@@ -113,8 +110,8 @@ const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * 오류 응답이면 코드와 설명. 브이월드는 { response: { status: 'ERROR', error: { code, text } } }나 결과 코드(resultCode)로 오류를 알린다는
- * 기록이 있어 둘 다 본다(결과 코드가 비었거나 '00', 'NORMAL_SERVICE'면 정상).
+ * 오류 응답이면 코드와 설명. { response: { status: 'ERROR', error: { code, text } } }와 결과 코드(resultCode)를 둘 다 본다
+ * (결과 코드가 비었거나 '00', 'NORMAL_SERVICE'면 정상).
  */
 function errorOf(data: unknown): { code: string; text: string } | null {
   const d = (data ?? {}) as {
@@ -184,7 +181,7 @@ async function landUseRows(pnu: string, key: string, record: RecordRequest): Pro
 
 /**
  * 좌표(WGS84)가 든 필지를 연속지적도에서 찾는다. 찾으면 status ok와 필지 번호, 주소, 그 자리에 필지가 없으면(NOT_FOUND) none.
- * 키·권한 문제(2D 데이터 API를 고르지 않은 키 등)나 연결 실패는 fatal ZoneError, 그 밖의 오류는 ZoneError.
+ * 키, 권한 문제(2D 데이터 API를 고르지 않은 키 등)나 연결 실패는 fatal ZoneError, 그 밖의 오류는 ZoneError.
  */
 export async function parcelAt(point: { lat: number; lng: number }, key: string, record: RecordRequest = () => {}): Promise<store.PointParcel> {
   const domain = vworldDomain();
@@ -240,7 +237,7 @@ export async function parcelAt(point: { lat: number; lng: number }, key: string,
   return { status: 'ok', pnu, addr, error: null, checkedAt };
 }
 
-/** 필지 번호 하나의 토지이용계획을 읽어 재개발 쪽 구역만 남긴다(구역 안·정비 구역 먼저). 응답이 비면 status empty. */
+/** 필지 번호 하나의 토지이용계획을 읽어 재개발 쪽 구역만 남긴다(구역 안, 정비 구역 먼저). 응답이 비면 status empty. */
 export async function lookupZones(pnu: string, key: string, record: RecordRequest = () => {}): Promise<LandZoneCheck> {
   const rows = await landUseRows(pnu, key, record);
   const checkedAt = new Date().toISOString();
@@ -268,7 +265,7 @@ let running: Promise<string> | null = null;
 /**
  * 아직 구역을 안 본(또는 RECHECK_DAYS가 지났거나 실패한) 필지의 토지이용계획을 읽어 저장한다. 그 전에 필지를 아직 못 찾은 네이버 아파트 단지는
  * 단지 좌표로 필지부터 찾는다(찾은 것은 다시 찾지 않고 실패한 것만 다시). 둘 다 한 번에 MAX_LOTS곳까지.
- * 결과 한 줄을 돌려주고 마지막 결과로 남긴다. 키가 없거나 토지이용계획 쪽 키·서비스 문제면 오류를 던진다
+ * 결과 한 줄을 돌려주고 마지막 결과로 남긴다. 키가 없거나 토지이용계획 쪽 키, 서비스 문제면 오류를 던진다
  * (좌표 필지 찾기만 거절되면 그 단지들은 건너뛰고 결과 줄에 까닭을 붙인다). 이미 확인하는 중이면 그 결과를 기다린다.
  */
 export function checkZones(record: RecordRequest = () => {}): Promise<string> {

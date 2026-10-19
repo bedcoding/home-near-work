@@ -446,7 +446,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
       </template>
       <select v-else class="area-pick" :class="{ on: !allAreas }" :value="pickedArea" aria-label="지역 하나만 보기" @change="pickArea">
         <option value="">지역 하나만 보기 ({{ areaChips.list.length }}곳)</option>
-        <option v-for="a in areaOptions" :key="a.id" :value="String(a.id)">{{ a.label }} · {{ a.count }}건</option>
+        <option v-for="a in areaOptions" :key="a.id" :value="String(a.id)">{{ a.label }}, {{ a.count }}건</option>
       </select>
     </div>
 

@@ -241,7 +241,7 @@ function drawZones() {
     },
     onEachFeature: (f, layer) => {
       const p = (f as unknown as RedevZoneFeature).properties;
-      const sub = [p.type, p.stage].filter(Boolean).join(' · ');
+      const sub = [p.type, p.stage].filter(Boolean).join(', ');
       const foot = [p.gu, p.date ? `${p.date.replace(/-/g, '.')} 기준` : null].filter(Boolean).join(', ');
       layer.bindTooltip(`<strong>${esc(p.name)}</strong><br>${esc(sub)}${foot ? `<br><span class="st-tip">${esc(foot)}</span>` : ''}`, { sticky: true });
     },
@@ -513,7 +513,7 @@ onBeforeUnmount(() => {
           class="zone-src"
           :title="[
             `서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보'(OA-22712)${zones.fileName ? `, 파일 ${zones.fileName}` : ''}${zones.seq ? ` (${zones.seq}번 파일)` : ''}.`,
-            `준공·입주중·후보지철회 ${zones.skipped.done}곳과 역세권·도시개발 같은 다른 사업 ${zones.skipped.other}곳은 뺐습니다. 점선 테두리는 넓은 구역(재정비촉진지구, 모아타운, 존치관리구역)입니다.`,
+            `준공, 입주중, 후보지철회 ${zones.skipped.done}곳, 역세권이나 도시개발 같은 다른 사업 ${zones.skipped.other}곳은 뺐습니다. 점선 테두리는 넓은 구역(재정비촉진지구, 모아타운, 존치관리구역)입니다.`,
             `새 파일은 조회할 때 7일마다 확인합니다${zones.check ? `(마지막 ${monthDay(zones.check.at)}: ${zones.check.text})` : ''}.`,
           ].join('\n')"
         >
@@ -525,7 +525,7 @@ onBeforeUnmount(() => {
       <button v-if="pickable" class="btn btn-sm" :class="{ on: picking }" title="누른 뒤 지도에서 한 곳을 누르면 그 자리를 가운데로 1km 지역이 생깁니다" @click="picking = !picking">
         {{ picking ? '취소' : '위치 찍어 추가' }}
       </button>
-      <label class="zone-toggle" title="재개발·재건축, 모아타운, 재정비촉진, 공공주택 복합사업 구역을 칠합니다(서울시 서울플랜+ 파일을 넣어야 보임)">
+      <label class="zone-toggle" title="재개발과 재건축, 모아타운, 재정비촉진, 공공주택 복합사업 구역을 칠합니다(서울시 서울플랜+ 파일을 넣어야 보임)">
         <input v-model="zonesOn" type="checkbox"> 정비구역 칠하기
       </label>
       <template v-if="zonesOn">

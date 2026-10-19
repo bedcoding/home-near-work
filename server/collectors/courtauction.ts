@@ -11,7 +11,7 @@ import { isApartmentType, LAND_PREFIX, SHOP_PREFIX, type ExplainRow, type Normal
 // 검색 화면에서 소재지(지번주소) → 서울특별시 → 구 → 용도(건물 > 주거용건물, 건물 > 상업용및업무용, 토지)를 차례로 고르고 검색한다.
 // 데이터는 그때 화면이 불러오는 검색 응답을 같이 읽는다.
 // 매각기일 기간은 화면마다 정해져 있다: 물건상세검색은 오늘부터 14일, 매각예정물건은 15일 뒤부터 60일 뒤까지(기본값이 그 범위).
-// 그래서 구마다 두 화면을 차례로 본다. 두 화면의 결과 화면·검색 응답은 같다.
+// 그래서 구마다 두 화면을 차례로 본다. 두 화면의 결과 화면, 검색 응답은 같다.
 // 켜진 지역 근처 구는 세 용도를 다 보고, 서울 아파트 탭에서 고른 구 중 근처가 아닌 구는 주거용 건물만 검색해 아파트만 남긴다.
 
 export const FORM_URL = 'https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ151F00.xml';
@@ -35,7 +35,7 @@ export const ID = {
   pageLink: (n: number) => `#mf_wfm_mainFrame_pgl_gdsDtlSrchPage_page_${n}`,
 };
 
-/** 소재지·용도로 찾는 검색 화면 두 곳(이 순서로 본다). */
+/** 소재지, 용도로 찾는 검색 화면 두 곳(이 순서로 본다). */
 const SCREENS = [
   {
     name: '물건상세검색',
@@ -107,7 +107,7 @@ function shareOf(row: any): number {
   return whole > 0 && part > 0 && part <= whole ? part / whole : 1;
 }
 
-/** 검색 결과 행을 물건(같은 법원·사건·물건번호)별로 묶는다. 한 물건의 목록(토지, 건물 호실 등)은 한 줄씩 온다. 묶음 안은 목록 번호 순서. */
+/** 검색 결과 행을 물건(같은 법원, 사건과 물건번호)별로 묶는다. 한 물건의 목록(토지, 건물 호실 등)은 한 줄씩 온다. 묶음 안은 목록 번호 순서. */
 export function lotsOf(rows: any[]): any[][] {
   const lots = new Map<string, any[]>();
   for (const r of rows) {
@@ -188,7 +188,7 @@ export function normalizeLot(rows: any[]): NormalizedListing {
   };
   const explain: ExplainRow[] = [
     { label: '사건', raw: `srnSaNo="${row.srnSaNo}", maemulSer=${row.maemulSer}`, value: `${row.srnSaNo} 물건 ${row.maemulSer}`, note: '법원경매정보에서 사건번호로 검색하면 상세가 나옴' },
-    { label: '법원·담당', raw: `jiwonNm="${row.jiwonNm}", jpDeptNm="${row.jpDeptNm}", tel="${row.tel ?? ''}"`, value: `${row.jiwonNm} ${row.jpDeptNm}` },
+    { label: '법원과 담당', raw: `jiwonNm="${row.jiwonNm}", jpDeptNm="${row.jpDeptNm}", tel="${row.tel ?? ''}"`, value: `${row.jiwonNm} ${row.jpDeptNm}` },
     { label: '감정가', raw: `gamevalAmt=${row.gamevalAmt}원`, value: appraisal ? `${money(Math.round(appraisal / 10000))}만` : '모름', note: '원 → 만원' },
     {
       label: '최저매각가격',
@@ -200,10 +200,10 @@ export function normalizeLot(rows: any[]): NormalizedListing {
     { label: '매각기일', raw: `maeGiil=${row.maeGiil}, maeHh1=${row.maeHh1}, maePlace="${row.maePlace ?? ''}"`, value: `${saleDate ?? '?'} ${row.maeHh1 ? `${String(row.maeHh1).slice(0, 2)}:${String(row.maeHh1).slice(2)}` : ''} ${row.maePlace ?? ''}` },
     { label: '소재지', raw: `printSt="${String(row.printSt ?? '').trim()}"`, value: listing.address ?? '모름' },
     ...(rows.length > 1
-      ? [{ label: '목록', raw: `mokmulSer ${rows.map((r) => r.mokmulSer).join(', ')}`, value: `${rows.length}개를 매물 하나로 합침`, note: '같은 사건·물건번호의 목록(토지·호실)은 함께 매각됨' }]
+      ? [{ label: '목록', raw: `mokmulSer ${rows.map((r) => r.mokmulSer).join(', ')}`, value: `${rows.length}개를 매물 하나로 합침`, note: '같은 사건과 물건번호의 목록(토지, 호실)은 함께 매각됨' }]
       : []),
     {
-      label: '용도·면적',
+      label: '용도와 면적',
       raw: `dspslUsgNm="${row.dspslUsgNm}", ${areaRows.map((r) => `"${areaText(r)}"`).join(', ').slice(0, 400)}`,
       value: `${row.dspslUsgNm}, ${listing.areaM2 ?? '?'}㎡`,
       note: [

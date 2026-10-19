@@ -31,7 +31,7 @@ export const api = {
   startLineRun: (visible: boolean, line: string, radiusM: number) => request<{ runId: number }>('POST', '/api/runs/line', { visible, line, radiusM }),
   /** 노선 탭에서 고른 노선과 역 반경(line null이면 고르지 않음) */
   setLineView: (line: string | null, radiusM: number) => request<{ lineView: LineViewSetting | null }>('PUT', '/api/line-view', { line, radiusM }),
-  /** 조회할 때 역·지역·구 사이에 쉬는 시간(초) */
+  /** 조회할 때 역, 지역, 구 사이에 쉬는 시간(초) */
   setRestSeconds: (seconds: number) => request<{ restSeconds: number }>('PUT', '/api/rest-seconds', { seconds }),
   stopRun: () => request('POST', '/api/runs/stop'),  runs: () => request<RunInfo[]>('GET', '/api/runs'),
   run: (id: number) => request<RunDetail>('GET', `/api/runs/${id}`),
@@ -72,9 +72,9 @@ export const api = {
   },
   /** 서울 아파트 탭에서 고른 구를 통째로 바꾼다. 바뀐 목록을 돌려준다. */
   setAptGus: (gus: string[]) => request<{ aptGus: string[] }>('PUT', '/api/apt-gus', { gus }),
-  /** 경매·공매 아파트 단지 세대수를 건축물대장에서 지금 채운다. 결과 한 줄을 돌려준다. */
+  /** 경매와 공매 아파트 단지 세대수를 건축물대장에서 지금 채운다. 결과 한 줄을 돌려준다. */
   fillHouseholds: () => request<{ text: string }>('POST', '/api/apt-households/fill'),
-  /** 집터 경매·공매의 재개발 구역을 토지이용계획으로 지금 확인한다. 결과 한 줄을 돌려준다. */
+  /** 집터 경매와 공매의 재개발 구역을 토지이용계획으로 지금 확인한다. 결과 한 줄을 돌려준다. */
   checkZones: () => request<{ text: string }>('POST', '/api/plot-zones/check'),
   /** 단지 세대수를 넣거나 고친다(null이면 지움) */
   setHouseholds: (key: string, name: string, households: number | null) => request('PUT', '/api/apt-complexes', { key, name, households }),

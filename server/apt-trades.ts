@@ -1,5 +1,6 @@
 import * as store from './db.js';
 import { cancelDate, cells, csvHead, downloadSeoulCsv, num, orNull, yearRange, ymd, type RecordRequest } from './rt-csv.js';
+import { refreshTradeSignals } from './trade-signals.js';
 
 // 국토부 실거래가 공개시스템 자료제공의 서울 아파트 매매를 CSV로 받아 저장한다(시세 통계 탭의 월별 거래량과 구별 평당가, 받는 방법은 rt-csv).
 // 최근 1년(자료제공 화면 기본 범위)은 받을 때마다 통째로 바꾸고(늦게 들어온 신고와 해제 반영), 그 앞은 FROM_YEAR부터 해마다 한 번 받아 둔다
@@ -14,13 +15,19 @@ const YEARS_KEY = 'apt_trades_years';
 /** 지난 해 받기에 마지막으로 실패한 시각 */
 const FAILED_KEY = 'apt_trades_backfill_failed_at';
 /** 거래량을 이 해 1월부터 모은다 */
-export const APT_FROM_YEAR = 2018;
+export const APT_FROM_YEAR = 2006;
 /** 최근 1년은 받은 지 이만큼 지나면 다시 받는다 */
 const MAX_AGE_MS = 7 * 86400000;
 /** 지난 해 받기에 실패했으면 이만큼 지나서 다시 해 본다 */
 const RETRY_MS = 20 * 3600000;
 /** 아파트 CSV 한 번을 기다리는 시간(서울 한 해치는 수만 건) */
 const CSV_TIMEOUT_MS = 300000;
+/** 지난 해를 이어 받을 때 해 사이에 쉬는 시간 */
+const YEAR_PAUSE_MS = 3000;
+/** 연결이 끊겨 실패하면 이만큼 쉬고 한 번 더 받는다 */
+const RETRY_PAUSE_MS = 10000;
+
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const REQUIRED = ['시군구', '단지명', '전용면적(㎡)', '계약년월', '계약일', '거래금액(만원)'] as const;
 const OPTIONAL = ['번지', '층', '건축년도', '해제사유발생일', '거래유형'] as const;
@@ -142,14 +149,28 @@ export function aptTradesState(): { fetchedAt: string | null; error: string | nu
   };
 }
 
-/** 계약일 from ~ to 범위를 받아 저장하고 건수를 돌려준다. CSV 줄 수가 건수 확인 값보다 적으면 오류. */
+/** 계약일 from ~ to 범위를 받아 저장하고 건수를 돌려준다. CSV 줄 수가 건수 확인 값보다 적으면 오류. 연결이 끊기면 한 번 더 받는다. */
 async function fetchRange(from: string, to: string, record: RecordRequest): Promise<number> {
-  const { text, count, url, status } = await downloadSeoulCsv('A', from, to, record, CSV_TIMEOUT_MS);
+  const download = () => downloadSeoulCsv('A', from, to, record, CSV_TIMEOUT_MS);
+  const { text, count, url, status } = await download().catch(async (e: unknown) => {
+    if (!(e instanceof TypeError)) throw e;
+    await pause(RETRY_PAUSE_MS);
+    return download();
+  });
   const { trades, lines } = parseAptCsv(text);
   record(url, status, `CSV ${trades.length}건(${from} ~ ${to})`);
   if (count != null && lines < count) throw new Error(`CSV ${lines}줄이 건수 ${count}건보다 적습니다.`);
   store.replaceAptTrades(from, to, trades);
   return trades.length;
+}
+
+/** 받아 둔 실거래로 신고가 집계를 다시 만든다. 실패해도 받기 결과에는 영향을 주지 않는다. */
+function refreshSignalsQuietly() {
+  try {
+    refreshTradeSignals();
+  } catch (e) {
+    console.error('신고가 집계 오류:', e);
+  }
 }
 
 let running: Promise<string> | null = null;
@@ -176,7 +197,8 @@ async function fetchAndSave(record: RecordRequest, recent: boolean, maxYears: nu
       store.setSetting(FETCHED_KEY, new Date().toISOString());
       parts.push(`최근 1년 ${n.toLocaleString('ko-KR')}건(계약일 ${ymd(from)} ~ ${ymd(to)})`);
     }
-    for (const y of missingAptYears().slice(0, maxYears)) {
+    for (const [i, y] of missingAptYears().slice(0, maxYears).entries()) {
+      if (i || recent) await pause(YEAR_PAUSE_MS);
       step = `${y}년`;
       const r = pastRange(y, from)!;
       const n = await fetchRange(r.from, r.to, record);
@@ -184,6 +206,7 @@ async function fetchAndSave(record: RecordRequest, recent: boolean, maxYears: nu
       parts.push(`${y}년 ${n.toLocaleString('ko-KR')}건`);
     }
     store.setSetting(STATUS_KEY, JSON.stringify({ at: new Date().toISOString(), ok: true }));
+    refreshSignalsQuietly();
     const left = missingAptYears().length;
     if (left) parts.push(`남은 해 ${left}개`);
     return `서울 아파트 매매 ${parts.length ? parts.join(', ') : '새로 받을 범위 없음'}`;
@@ -191,6 +214,7 @@ async function fetchAndSave(record: RecordRequest, recent: boolean, maxYears: nu
     const message = `${step}: ${e instanceof Error ? e.message : String(e)}`;
     store.setSetting(STATUS_KEY, JSON.stringify({ at: new Date().toISOString(), ok: false, error: message }));
     if (step !== '최근 1년') store.setSetting(FAILED_KEY, new Date().toISOString());
+    if (parts.length) refreshSignalsQuietly();
     throw new Error(parts.length ? `${message}(그 전에 받은 것: ${parts.join(', ')})` : message);
   }
 }

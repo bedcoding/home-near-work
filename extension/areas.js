@@ -1,9 +1,9 @@
-// 지역(역 반경) 목록을 확장 저장소에 쓰는 공용 함수. 백그라운드·팝업·지도 스크립트가 같이 쓴다.
+// 지역(역 반경) 목록을 확장 저장소에 쓰는 공용 함수. 백그라운드, 팝업, 지도 스크립트가 같이 쓴다.
 // 저장소 키
 //   hnw-area-list   : 지역 전체 [{ id(대시보드 번호, 확장에서 새로 만든 것은 null), name, lat, lng, radiusM, enabled }]
 //   hnw-areas       : 지도에 그릴 켜진 지역(naver.js가 읽음)
 //   hnw-areas-edited: 확장에서 바꾸고 아직 대시보드에 못 보낸 시각(없으면 null)
-//   hnw-stations    : 대시보드의 역 목록(팝업 '역으로 추가'·지도에서 찍을 때 이름 제안에 씀)
+//   hnw-stations    : 대시보드의 역 목록(팝업 '역으로 추가', 지도에서 찍을 때 이름 제안에 씀)
 
 /** 목록 전체를 저장하고, 지도에 그릴 켜진 지역을 따로 둔다. edited: 확장에서 바꾼 시각 또는 null(대시보드와 맞춤). */
 async function hnwWriteAreas(list, edited) {

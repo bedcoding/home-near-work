@@ -44,7 +44,7 @@ export function normalizeNaverItem(item: any): NaverItem | null {
       }
     : null;
 
-  // 층은 '7'처럼 숫자일 때도 있고 '저·중·고'로만 나올 때도 있다.
+  // 층은 '7'처럼 숫자일 때도 있고 '저, 중, 고'로만 나올 때도 있다.
   const fl = rep.articleDetail?.floorDetailInfo ?? {};
   const target = String(fl.targetFloor ?? '');
   const floorNumber = /^-?\d+$/.test(target) ? Number(target) : null;
@@ -64,7 +64,7 @@ export function normalizeNaverItem(item: any): NaverItem | null {
     lng: toNumber(coords.xCoordinate),
     address: [rep.address?.city, rep.address?.division, rep.address?.sector].filter(Boolean).join(' ') || null,
     dong: rep.address?.sector ?? null,
-    // 층이 '중'처럼 나오면 층 숫자로 구분이 안 되므로, 단지·동에 층 구간과 방향까지 붙여 같은 집을 가린다.
+    // 층이 '중'처럼 나오면 층 숫자로 구분이 안 되므로, 단지, 동에 층 구간과 방향까지 붙여 같은 집을 가린다.
     buildingKey: complexNumber ? `nv-c${complexNumber}-${rep.dongName ?? ''}-${floorNumber == null ? target : ''}-${direction}` : null,
     buildingType: TYPES[rep.realEstateType] ?? rep.realEstateType ?? null,
     roomLabel: null,
@@ -88,7 +88,7 @@ export function normalizeNaverItem(item: any): NaverItem | null {
       label: '가격',
       raw: `tradeType="${tradeType}", priceInfo.dealPrice=${p.dealPrice ?? '없음'}원, warrantyPrice=${p.warrantyPrice ?? '없음'}원, rentPrice=${p.rentPrice ?? '없음'}원`,
       value: listing.prices.map(priceText).join(', ') || '없음',
-      note: '원 → 만원으로 바꿈. B2(월세)·B3(단기) 코드는 추정',
+      note: '원 → 만원으로 바꿈. B2(월세), B3(단기) 코드는 추정',
     },
     { label: '매물 종류', raw: `realEstateType="${rep.realEstateType ?? ''}"`, value: listing.buildingType ?? '모름' },
     {
@@ -100,7 +100,7 @@ export function normalizeNaverItem(item: any): NaverItem | null {
       label: '층',
       raw: `articleDetail.floorInfo="${rep.articleDetail?.floorInfo ?? ''}"`,
       value: floorText(listing),
-      note: '저·중·고로만 나오면 층 숫자는 모름으로 둠',
+      note: '저, 중, 고로만 나오면 층 숫자는 모름으로 둠',
     },
     { label: '관리비', raw: `priceInfo.managementFeeAmount=${p.managementFeeAmount ?? '없음'}원`, value: listing.maintenance != null ? `${money(listing.maintenance)}만` : '모름', note: '원 → 만원으로 바꿈' },
     {

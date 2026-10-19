@@ -48,9 +48,8 @@ const day = (iso: string) => new Date(iso).toLocaleDateString('ko-KR', { month: 
         <a v-for="x in ZONE_LINKS" :key="x.url" :href="x.url" target="_blank" rel="noopener" :title="x.title">{{ x.label }} ↗</a>
         <span v-if="view.pnu" class="num" title="토지이음에서 찾을 때 쓰는 필지 번호(PNU)">필지 번호 {{ view.pnu }}</span>
       </p>
-      <p class="zone-basis">
-        브이월드 토지이용계획{{ view.checkedAt ? ` ${day(view.checkedAt)} 조회` : '' }} 기준(법적 효력은 없음), 법령은 {{ dot(ZONE_CHECKED) }}에 원문을 확인했습니다.
-        사업 단계와 권리산정기준일은 이 표시에 없습니다.{{ view.basis ? ` ${view.basis}` : '' }}
+      <p class="zone-basis" :title="`법적 효력은 없습니다. 사업 단계와 권리산정기준일은 이 표시에 없습니다.${view.basis ? ' 단지가 여러 필지면 다른 동은 구역이 다를 수 있습니다.' : ''} 법령은 ${dot(ZONE_CHECKED)}에 원문을 확인했습니다.`">
+        브이월드 토지이용계획{{ view.checkedAt ? ` ${day(view.checkedAt)} 조회` : '' }}{{ view.basis ? `, ${view.basis}` : '' }}
       </p>
     </div>
   </div>

@@ -3,7 +3,7 @@ import type { ExplainRow, NormalizedListing, PriceOption } from '../shared/types
 
 /**
  * 직방 원룸 역 화면이 받는 `house/property/v1/items/subways/<역 번호>/onerooms?radius=…` 응답: 그 역 반경(km) 안 방 번호 전부.
- * key: 역 번호와 조회 조건(radius·depositMin·rentMin 등). 모양이 다르면 null.
+ * key: 역 번호와 조회 조건(radius, depositMin, rentMin 등). 모양이 다르면 null.
  */
 export function parseZigbangStationIds(url: string, body: string): { key: string; subwayId: string; ids: number[] } | null {
   try {
@@ -23,7 +23,7 @@ const num = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' &
 
 /**
  * `house/property/v1/items/list` 응답(목록에 보이는 방들의 내용) 한 줄 → 공통 형식. 금액은 만원(manage_cost만 원).
- * floor: 숫자면 층, '반지하'·'지하'는 지하, '옥탑'은 옥탑. pageUrl: 이 방을 본 직방 화면(원본 열기 주소로 씀).
+ * floor: 숫자면 층, '반지하', '지하'는 지하, '옥탑'은 옥탑. pageUrl: 이 방을 본 직방 화면(원본 열기 주소로 씀).
  */
 function toListing(x: Record<string, unknown>, pageUrl: string): NormalizedListing | null {
   const id = num(x.item_id);
@@ -46,8 +46,8 @@ function toListing(x: Record<string, unknown>, pageUrl: string): NormalizedListi
   const service = typeof x.service_type === 'string' ? x.service_type : null;
   const addr = x.addressOrigin as { local3?: unknown } | undefined;
   const explain: ExplainRow[] = [
-    { label: '가격', raw: `sales_type·deposit·rent: ${x.sales_type ?? '?'} ${x.deposit ?? '?'}/${x.rent ?? '?'}`, value: prices.map(priceText).join(', ') || '못 읽음' },
-    { label: '층', raw: `floor_string·building_floor: ${floorText || '?'} / ${x.building_floor ?? '?'}`, value: floor != null ? `${floor}층` : floorText || '모름' },
+    { label: '가격', raw: `sales_type, deposit, rent: ${x.sales_type ?? '?'} ${x.deposit ?? '?'}/${x.rent ?? '?'}`, value: prices.map(priceText).join(', ') || '못 읽음' },
+    { label: '층', raw: `floor_string, building_floor: ${floorText || '?'} / ${x.building_floor ?? '?'}`, value: floor != null ? `${floor}층` : floorText || '모름' },
     { label: '관리비', raw: `manage_cost: ${x.manage_cost ?? '?'}`, value: fee != null ? `${fee / 10000}만원` : '모름', note: '원 단위를 만원으로' },
     { label: '등록일', raw: `reg_date: ${x.reg_date ?? '?'}`, value: typeof x.reg_date === 'string' ? x.reg_date.slice(0, 10) : '모름' },
   ];

@@ -26,6 +26,9 @@ import { restSeconds } from './browser.js';
 import { updateZonesNow, zoneFileCheckState } from './redev-zones-update.js';
 import { getProgress, startLineRun, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
+import { refreshTradeSignals } from './trade-signals.js';
+import { collectPeakSources } from './peak-sources.js';
+import { collectRegionVolume } from './region-volume.js';
 import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, withTrustFacts } from './views.js';
 import { CAPTURE_SOURCES, REST_CHOICES, RUN_SCOPES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type SourceId, type Verdict } from '../shared/types.js';
 
@@ -41,7 +44,7 @@ processPendingNaverCaptures();
 
 const app = Fastify({ logger: false });
 
-/** 크롬 확장(네이버·다방) 하루치 기록은 '마지막 조회' 줄에서 뺀다. 그 줄은 '조회하기'로 돈 기록을 보여 준다. */
+/** 크롬 확장(네이버, 다방) 하루치 기록은 '마지막 조회' 줄에서 뺀다. 그 줄은 '조회하기'로 돈 기록을 보여 준다. */
 const isNaverOnly = (r: { summary: { sources: { source: string }[] } | null }) =>
   !!r.summary && r.summary.sources.length > 0 && r.summary.sources.every((s) => CAPTURE_SOURCES.includes(s.source as SourceId));
 
@@ -101,7 +104,7 @@ app.put<{ Body: { line?: unknown; radiusM?: unknown } | null }>('/api/line-view'
   }
 });
 
-/** 조회할 때 역·지역·구 사이에 쉬는 시간(초)을 바꾼다. */
+/** 조회할 때 역, 지역, 구 사이에 쉬는 시간(초)을 바꾼다. */
 app.put<{ Body: { seconds?: unknown } | null }>('/api/rest-seconds', async (req, reply) => {
   const seconds = Number(req.body?.seconds);
   if (!REST_CHOICES.includes(seconds)) {
@@ -122,7 +125,7 @@ app.put<{ Body: { gus?: unknown } | null }>('/api/apt-gus', async (req, reply) =
   return { aptGus: store.setAptGus(gus) };
 });
 
-/** 경매·공매 아파트 단지 세대수를 건축물대장에서 지금 채운다(공공데이터포털 키가 있을 때). 결과 한 줄을 돌려준다. */
+/** 경매와 공매 아파트 단지 세대수를 건축물대장에서 지금 채운다(공공데이터포털 키가 있을 때). 결과 한 줄을 돌려준다. */
 app.post('/api/apt-households/fill', async (_req, reply) => {
   try {
     return { text: await fillHouseholds() };
@@ -132,7 +135,7 @@ app.post('/api/apt-households/fill', async (_req, reply) => {
   }
 });
 
-/** 집터 경매·공매(단독, 토지)가 재개발 쪽 구역 안인지 토지이용계획으로 지금 확인한다(브이월드 키가 있을 때). 결과 한 줄을 돌려준다. */
+/** 집터 경매와 공매(단독, 토지)가 재개발 쪽 구역 안인지 토지이용계획으로 지금 확인한다(브이월드 키가 있을 때). 결과 한 줄을 돌려준다. */
 app.post('/api/plot-zones/check', async (_req, reply) => {
   try {
     return { text: await checkZones() };
@@ -186,7 +189,7 @@ app.get('/api/stations/catalog', async () => stationCatalog());
 
 app.get('/api/listings', async () => buildListingViews());
 
-/** 공고(가격 없는 공매·임대 공고)와 곳별 마지막 수집 결과. */
+/** 공고(가격 없는 공매, 임대 공고)와 곳별 마지막 수집 결과. */
 app.get('/api/notices', async () => ({ notices: withTrustFacts(store.listNotices()), sources: store.noticeStatuses() }));
 
 /**
@@ -250,15 +253,17 @@ app.post<{ Querystring: { name?: string } }>('/api/redev-zones', { bodyLimit: 60
 });
 
 /**
- * 시세 통계 자료를 지금 받고 탭 자료를 돌려준다: KB 지수 모두, 서울 아파트 실거래 최근 1년과 안 받은 지난 해 모두(몇 분 걸릴 수 있다).
- * 한쪽만 실패하면 그 오류는 탭 자료의 kb.error나 trades.error에 남고, 둘 다 실패하면 502.
+ * 시세 통계 자료를 지금 받고 탭 자료를 돌려준다: KB 지수 모두, 고점 신호 공공 자료, 지역별 거래 건수, 서울 아파트 실거래 최근 1년과 안 받은 지난 해 모두(몇 분 걸릴 수 있다).
+ * 일부만 실패하면 그 오류는 탭 자료의 kb.error, peak.sources.error, regionVolume.error, trades.error에 남고, 넷 다 실패하면 502.
  */
 app.post('/api/market/fetch', async (_req, reply) => {
   const errors: string[] = [];
   const fail = (e: unknown) => errors.push(e instanceof Error ? e.message : String(e));
   await collectKbStats().catch(fail);
+  await collectPeakSources().catch(fail);
+  await collectRegionVolume().catch(fail);
   await collectAptTrades(undefined, { recent: true }).catch(fail);
-  if (errors.length === 2) {
+  if (errors.length === 4) {
     reply.code(502);
     return { error: errors.join(' / ') };
   }
@@ -368,7 +373,7 @@ app.addHook('onRequest', async (req) => {
   console.log(`크롬 확장 연결: ${key} (${new Date().toLocaleTimeString('ko-KR')})`);
 });
 
-/** 크롬 확장 팝업·지도에서 바꾼 지역 목록을 통째로 받는다. 확장에서 온 요청만 받는다. */
+/** 크롬 확장 팝업, 지도에서 바꾼 지역 목록을 통째로 받는다. 확장에서 온 요청만 받는다. */
 app.put<{ Body: { areas?: unknown } }>('/api/areas', async (req, reply) => {
   if (!fromExtension(req.headers.origin)) {
     reply.code(403);
@@ -513,6 +518,13 @@ learnFromStoredCaptures();
 await app.listen({ host: HOST, port: PORT });
 console.log(`회사근처 내집마련: ${DASHBOARD_URL}`);
 startAutoCheck();
+setTimeout(() => {
+  try {
+    refreshTradeSignals();
+  } catch (e) {
+    console.error('신고가 집계 오류:', e);
+  }
+}, 3000);
 processPendingNaverCaptures();
 finishCaptureSession();
 if (!fs.existsSync(WEB_DIST)) console.log('화면이 아직 빌드되지 않았습니다. 개발 중이면 npm run dev로 http://localhost:5173 을 여세요.');
