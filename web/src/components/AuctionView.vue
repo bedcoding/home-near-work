@@ -64,8 +64,8 @@ const props = defineProps<{
   houseError: string | null;
   /** 집터 탭: 재개발 구역 확인 상태(키, 마지막 결과)와 지금 확인하는 중, 난 오류. 있으면 제목 줄에 '재개발 구역 확인'과 매매 매물의 구역 표시가 보인다. */
   zone?: AppState['zoneCheck'] & { checking: boolean; error: string | null };
-  /** 집터 탭: 뺀 지분 매각 수, 숨긴 다가구·다중주택 수, 다가구·다중주택을 보는지 */
-  plotHidden?: { share: number; multi: number; showMulti: boolean };
+  /** 집터 탭: 뺀 지분 매각 수(주인이 여럿) */
+  plotShareHidden?: number;
 }>();
 const emit = defineEmits<{
   select: [ListingView];
@@ -89,8 +89,6 @@ const emit = defineEmits<{
   houseFetch: [];
   /** 집터 경매·공매의 재개발 구역을 지금 확인 */
   zoneCheck: [];
-  /** 집터 탭: 다가구·다중주택도 볼지 */
-  plotMulti: [boolean];
 }>();
 
 const KIND_NAMES: { id: AuctionKind; name: string; title: string }[] = [
@@ -213,15 +211,8 @@ const days = computed(() => {
               </select>
             </label>
           </div>
-          <p v-if="plotHidden && (plotHidden.share || (kind === 'house' && (plotHidden.multi || plotHidden.showMulti)))" class="plot-hidden">
-            <span v-if="plotHidden.share" title="집이나 땅 전체가 아니라 일부 지분만 파는 물건입니다. 다른 공유자가 있어 헐고 새로 짓기 어렵습니다.">지분 매각 {{ plotHidden.share }}건 뺌</span>
-            <label
-              v-if="kind === 'house' && (plotHidden.multi || plotHidden.showMulti)" class="multi-toggle"
-              title="다가구·다중주택은 건축법상 단독주택이라 집 전체의 주인은 한 명이지만(공유가 아니면), 여러 가구가 세 들어 사는 집입니다."
-            >
-              <input type="checkbox" :checked="plotHidden.showMulti" @change="emit('plotMulti', ($event.target as HTMLInputElement).checked)">
-              다가구·다중주택도 보기<span v-if="!plotHidden.showMulti" class="muted num"> {{ plotHidden.multi }}건 숨김</span>
-            </label>
+          <p v-if="plotShareHidden" class="plot-hidden" title="집이나 땅 전체가 아니라 일부 지분만 파는 물건입니다. 다른 공유자가 있어 헐고 새로 짓기 어려워 이 탭에서 뺐습니다(경매 탭에는 '지분' 표시로 나옴).">
+            지분 매각 {{ plotShareHidden }}건 뺌
           </p>
           <div class="panels">
             <HouseTrades
@@ -283,13 +274,7 @@ const days = computed(() => {
               @select="emit('select', l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
               @source="emit('source', l)" @raw="emit('raw', l)"
             >
-              <template v-if="zone" #tags>
-                <ZoneBanner part="chip" :listing="l" :key-set="zone.key" sale />
-                <span
-                  v-if="l.buildingType === '단독/다가구'" class="chip chip-muted"
-                  title="네이버는 단독주택과 다가구주택을 한 종류(단독/다가구)로 줘서 어느 쪽인지 여기서는 모릅니다. 원본 매물이나 건축물대장에서 확인하세요."
-                >단독·다가구 구분 없음</span>
-              </template>
+              <template v-if="zone" #tags><ZoneBanner part="chip" :listing="l" :key-set="zone.key" sale /></template>
             </ListingCard>
           </div>
         </section>
@@ -328,9 +313,7 @@ const days = computed(() => {
 .links a { color: var(--ink-2); text-decoration: none; white-space: nowrap; }
 .links a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .auction-actions .run { min-height: 34px; padding: 0 12px; font-size: 13px; }
-.plot-hidden { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin: 0; font-size: 13px; color: var(--ink-2); }
-.multi-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-.multi-toggle input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+.plot-hidden { margin: 0; font-size: 13px; color: var(--ink-2); cursor: help; }
 .zone-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 10px; min-width: 0; }
 .zone-msg { font-size: 12px; }
 .zone-msg.err { color: var(--new); font-weight: 600; }
