@@ -223,8 +223,11 @@ function entry(files: Record<string, Uint8Array>, ext: string): Uint8Array | nul
   return key ? files[key] : null;
 }
 
-/** 서울플랜+ ZIP을 읽어 지도에 그릴 구역으로 바꿔 저장하고 돌려준다. */
-export function importRedevZones(zip: Uint8Array, fileName: string | null): RedevZonesView {
+/**
+ * 서울플랜+ ZIP을 읽어 지도에 그릴 구역으로 바꿔 저장하고 돌려준다.
+ * listed: 열린데이터광장 파일 목록에서 자동으로 받았으면 그 파일 번호와 목록의 날짜(사용자가 넣은 파일이면 없음).
+ */
+export function importRedevZones(zip: Uint8Array, fileName: string | null, listed: { seq: number; date: string | null } | null = null): RedevZonesView {
   let files: Record<string, Uint8Array>;
   try {
     files = unzipSync(zip);
@@ -279,7 +282,16 @@ export function importRedevZones(zip: Uint8Array, fileName: string | null): Rede
   });
   // 넓은 구역(테두리만)을 먼저 그려 안의 사업 구역이 위에 오게 한다.
   features.sort((a, b) => Number(b.properties.outline) - Number(a.properties.outline));
-  const view: RedevZonesView = { importedAt: new Date().toISOString(), fileDate, fileName, count: features.length, skipped: { done, other }, features };
+  const view: RedevZonesView = {
+    importedAt: new Date().toISOString(),
+    fileDate,
+    fileName,
+    seq: listed?.seq ?? null,
+    listedAt: listed?.date ?? null,
+    count: features.length,
+    skipped: { done, other },
+    features,
+  };
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(FILE, JSON.stringify(view));
   return view;
@@ -290,6 +302,6 @@ export function redevZones(): RedevZonesView {
   try {
     return JSON.parse(fs.readFileSync(FILE, 'utf8')) as RedevZonesView;
   } catch {
-    return { importedAt: null, fileDate: null, fileName: null, count: 0, skipped: { done: 0, other: 0 }, features: [] };
+    return { importedAt: null, fileDate: null, fileName: null, seq: null, listedAt: null, count: 0, skipped: { done: 0, other: 0 }, features: [] };
   }
 }

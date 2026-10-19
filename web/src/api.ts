@@ -53,6 +53,8 @@ export const api = {
   fetchMarket: () => request<MarketView>('POST', '/api/market/fetch'),
   /** 지도에 칠하는 정비사업 구역(넣어 둔 서울플랜+ 파일) */
   redevZones: () => request<RedevZonesView>('GET', '/api/redev-zones'),
+  /** 열린데이터광장 최신판을 보고 새것이면 받아 바꾼다(message는 결과 글) */
+  updateRedevZones: () => request<RedevZonesView & { message: string }>('POST', '/api/redev-zones/update'),
   /** 서울플랜+ ZIP을 넣는다(본문 그대로) */
   uploadRedevZones: async (file: File) => {
     const res = await fetch(`/api/redev-zones?name=${enc(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file });

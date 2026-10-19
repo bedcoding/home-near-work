@@ -1004,12 +1004,25 @@ export interface RedevZoneFeature {
   geometry: { type: 'Polygon'; coordinates: [number, number][][] } | { type: 'MultiPolygon'; coordinates: [number, number][][][] };
 }
 
-/** 넣어 둔 정비사업 구역 파일: 넣은 때, 파일 안 가장 늦은 작성일, 파일 이름, 그리는 구역 수, 뺀 수(done 준공·철회, other 다른 사업), 구역 */
+/**
+ * 넣어 둔 정비사업 구역 파일: 넣은 때, 파일 안 가장 늦은 작성일, 파일 이름, 열린데이터광장 파일 번호와 목록 날짜(자동으로 받았을 때만),
+ * 그리는 구역 수, 뺀 수(done 준공·철회, other 다른 사업), 구역. check는 새 파일 자동 확인의 마지막 결과(GET /api/redev-zones가 붙임).
+ */
 export interface RedevZonesView {
   importedAt: string | null;
   fileDate: string | null;
   fileName: string | null;
+  seq: number | null;
+  listedAt: string | null;
+  check?: RedevZonesCheck | null;
   count: number;
   skipped: { done: number; other: number };
   features: RedevZoneFeature[];
+}
+
+/** 정비구역 파일 새 판 확인의 마지막 결과: 확인한 때, 성공 여부, 결과 글('새 파일 없음(5번, 2026.09.10)' 등) */
+export interface RedevZonesCheck {
+  at: string;
+  ok: boolean;
+  text: string;
 }
