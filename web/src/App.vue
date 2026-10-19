@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
-  COLLECT_MARGIN_M, hasHomeListings, inGus, nearReason, noticeSection, noticeSourcesOf, SOURCE_LABEL,
+  COLLECT_MARGIN_M, hasHomeListings, inGus, nearReason, NOTICE_SHORT, noticeSection, noticeSourcesOf, RUN_SCOPES, SOURCE_LABEL,
   type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type DealType, type ExplainRow, type HouseTradeSummary, type ListingView, type MarketView as MarketData,
-  type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type SourceId, type Verdict,
+  type NoticeSection, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type RunScope, type SourceId, type Verdict,
 } from '../../shared/types';
 import { api } from './api';
 import { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, loadFilters, passes, saveFilters, type Filters } from './filters';
@@ -510,11 +510,11 @@ async function poll() {
   schedule();
 }
 
-/** sources를 주면 그 사이트만 조회한다(경매 탭의 '경매 조회하기'). */
-async function startRun(sources?: SourceId[]) {
+/** scope를 주면 그 탭에 보이는 사이트와 공고만 조회한다(조회하기 옆 ▾ 메뉴, 경매 탭의 '경매 조회하기'). */
+async function startRun(scope?: RunScope) {
   error.value = null;
   try {
-    await api.startRun(visibleMode.value, sources);
+    await api.startRun(visibleMode.value, scope);
     await refreshState();
     showLog.value = false;
     schedule();
@@ -671,15 +671,41 @@ function openAll(e?: MouseEvent) {
   openWait = window.setTimeout(() => showOpenNote('크롬 확장이 답하지 않습니다. 이 페이지를 새로고침한 뒤 다시 눌러 주세요.', false), 4000);
 }
 
-/** '한 번에 열기' 옆 ▾ 메뉴: 열 지역 고르기와 사이트 하나만 열기. 바깥을 누르거나 Esc로 닫는다. */
+/** '한 번에 열기' 옆 ▾ 메뉴: 열 지역 고르기와 사이트 하나만 열기. '조회하기' 옆 ▾ 메뉴: 탭 하나만 조회. 바깥을 누르거나 Esc로 닫는다. */
 const openMenu = ref(false);
 const openMenuEl = ref<HTMLElement | null>(null);
+const runMenu = ref(false);
+const runMenuEl = ref<HTMLElement | null>(null);
 const moreMenu = ref(false);
 const moreMenuEl = ref<HTMLElement | null>(null);
-watch(tab, () => { moreMenu.value = false; openMenu.value = false; });
+watch(tab, () => { moreMenu.value = false; openMenu.value = false; runMenu.value = false; });
 function onDocClick(e: MouseEvent) {
   if (openMenu.value && openMenuEl.value && !openMenuEl.value.contains(e.target as Node)) openMenu.value = false;
+  if (runMenu.value && runMenuEl.value && !runMenuEl.value.contains(e.target as Node)) runMenu.value = false;
   if (moreMenu.value && moreMenuEl.value && !moreMenuEl.value.contains(e.target as Node)) moreMenu.value = false;
+}
+
+/** 공고 탭 이름(탭 하나만 조회 메뉴의 설명) */
+const SECTION_NAME: Record<NoticeSection, string> = { rent: '임대 공고', trust: '신탁 공매 공고', subscription: '청약 공고', shop: 'LH 상가 공고', land: 'LH 토지 공고' };
+/** 탭 하나만 조회 메뉴: 범위마다 도는 곳(what), 마우스 설명(공고를 받는 곳 전부), 지금 보는 탭인지. 시세 통계는 탭의 '지금 받기'와 같다. */
+const runScopes = computed(() => [
+  ...RUN_SCOPES.map((s) => {
+    const noticeNames = [...new Set(s.sections.flatMap((sec) => noticeSourcesOf(sec)).map((id) => NOTICE_SHORT[id]))];
+    return {
+      id: s.id as RunScope | 'market',
+      label: s.label,
+      // 공고만 받는 범위는 받는 곳을, 매물 사이트도 도는 범위는 사이트와 공고 종류를 적는다(신탁사 이름은 마우스 설명에)
+      what: s.sources.length ? [...s.sources.map((id) => SOURCE_LABEL[id]), ...s.sections.map((sec) => SECTION_NAME[sec])].join(', ') : noticeNames.join(', '),
+      title: s.sources.length && noticeNames.length ? `공고를 받는 곳: ${noticeNames.join(', ')}` : '',
+      here: s.tabs.includes(tab.value),
+    };
+  }),
+  { id: 'market' as const, label: '시세 통계', what: 'KB 지수, 국토부 아파트 실거래', title: '시세 통계 탭의 \'지금 받기\'와 같습니다', here: tab.value === 'market' },
+]);
+function runScope(id: RunScope | 'market') {
+  runMenu.value = false;
+  if (id === 'market') void fetchMarket();
+  else void startRun(id);
 }
 
 /** 마지막 조회에서 실패한 사이트(사용자가 중단한 것은 빼고) */
@@ -701,11 +727,12 @@ function onKey(e: KeyboardEvent) {
     moreMenuEl.value?.querySelector('button')?.focus();
     return;
   }
-  if (e.key === 'Escape' && openMenu.value) {
+  if (e.key === 'Escape' && (openMenu.value || runMenu.value)) {
     openMenu.value = false;
+    runMenu.value = false;
     return;
   }
-  if (moreMenu.value || openMenu.value) return;
+  if (moreMenu.value || openMenu.value || runMenu.value) return;
   const isRadio = tag === 'INPUT' && (e.target as HTMLInputElement).type === 'radio';
   if (isRadio && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Enter', 'Home', 'End'].includes(e.key)) return;
   if ((tag === 'INPUT' && !isRadio) || tag === 'SELECT' || tag === 'TEXTAREA' || (e.target as HTMLElement | null)?.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -908,9 +935,23 @@ const emptyText: Partial<Record<Tab, string>> = {
           >{{ l.name }} ↗</a>
         </div>
       </div>
-      <button class="btn btn-primary run" :disabled="!!running" @click="startRun()">
-        {{ running ? '조회 중…' : '조회하기' }}
-      </button>
+      <div ref="runMenuEl" class="runall">
+        <button class="btn btn-primary run run-main" :disabled="!!running" title="모든 사이트와 공고를 조회합니다" @click="startRun()">
+          {{ running ? '조회 중…' : '조회하기' }}
+        </button>
+        <button
+          class="btn btn-primary run-more" :disabled="!!running" :aria-expanded="runMenu" aria-haspopup="true" aria-label="탭 하나만 조회"
+          title="탭 하나만 조회" @click="runMenu = !runMenu"
+        >▾</button>
+        <div v-if="runMenu" class="open-menu run-menu">
+          <span class="menu-label">탭 하나만 조회</span>
+          <button v-for="s in runScopes" :key="s.id" class="run-scope" :class="{ here: s.here }" :title="s.title || undefined" @click="runScope(s.id)">
+            <span class="run-scope-name">{{ s.label }}<span v-if="s.here" class="here-chip">지금 탭</span></span>
+            <span class="run-scope-what">{{ s.what }}</span>
+          </button>
+          <p class="run-note">'조회하기'는 전부 돕니다. 네이버, 다방, 직방은 '한 번에 열기'로 크롬 확장이 모읍니다.</p>
+        </div>
+      </div>
       <div ref="moreMenuEl" class="more-menu">
         <button class="more-trigger" :class="{ on: moreTabs.some((t) => t.id === tab) }" :aria-expanded="moreMenu" aria-controls="management-menu" @click="moreMenu = !moreMenu">
           {{ moreTabs.find((t) => t.id === tab)?.label ?? '더보기' }}
@@ -925,7 +966,7 @@ const emptyText: Partial<Record<Tab, string>> = {
           </nav>
           <div v-if="state" class="when">
             <span v-if="state.lastRun && !running">
-              마지막 조회 {{ dateTime(state.lastRun.finishedAt ?? state.lastRun.startedAt) }}<template v-if="state.lastRun.status === 'stopped'"> 중단</template>
+              마지막 조회 {{ dateTime(state.lastRun.finishedAt ?? state.lastRun.startedAt) }}<template v-if="state.lastRun.scope"> ({{ RUN_SCOPES.find((s) => s.id === state!.lastRun!.scope)?.label }}만)</template><template v-if="state.lastRun.status === 'stopped'"> 중단</template>
               <button v-if="failedSources.length || state.lastRun.status === 'error'" class="linkish err" :title="failedTitle" @click="tab = 'sites'; moreMenu = false">실패 {{ failedSources.length || '' }}곳</button>
             </span>
             <button class="linkish" title="자동 확인 요일과 시각, 창 띄우기는 설정에서 바꿉니다" @click="tab = 'alerts'; moreMenu = false">{{ autoCheckText }}</button>
@@ -1026,7 +1067,7 @@ const emptyText: Partial<Record<Tab, string>> = {
           @house-age="(a) => (houseAge = a)" @house-fetch="fetchHouseTrades"
           @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
           @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @pick="addPickedArea" @area="turnOffArea"
-          @ack-notices="ackNotices" @run="startRun(['courtauction', 'onbid'])"
+          @ack-notices="ackNotices" @run="startRun('auction')"
         />
       </template>
       <template v-else-if="tab === 'plot'">
@@ -1042,7 +1083,7 @@ const emptyText: Partial<Record<Tab, string>> = {
           @house-age="(a) => (houseAge = a)" @house-fetch="fetchHouseTrades"
           @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
           @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @pick="addPickedArea" @area="turnOffArea"
-          @ack-notices="ackNotices" @run="startRun(['courtauction', 'onbid'])" @zone-check="checkZones"
+          @ack-notices="ackNotices" @run="startRun('auction')" @zone-check="checkZones"
         />
       </template>
       <AptView
@@ -1051,7 +1092,7 @@ const emptyText: Partial<Record<Tab, string>> = {
         :fill="state?.householdsFill ?? { key: false, last: null }" :filling="householdsFill.running" :fill-error="householdsFill.error" :zone="zoneCheck"
         @visible="setAptVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
         @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @pick="addPickedArea" @area="turnOffArea"
-        @run="startRun(['courtauction', 'onbid'])" @gus="setAptGus" @households="setHouseholds" @fill="fillHouseholds" @zone-check="checkZones"
+        @run="startRun('auction')" @gus="setAptGus" @households="setHouseholds" @fill="fillHouseholds" @zone-check="checkZones"
       />
       <MarketView v-else-if="tab === 'market'" :view="market" :fetching="marketFetching" :error="marketError" :running="!!running" @fetch="fetchMarket" />
       <template v-else-if="tab === 'rooms'">
@@ -1176,6 +1217,21 @@ h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .menu-area.on { background: var(--ink); border-color: var(--ink); color: #fff; }
 .menu-link { display: flex; align-items: center; min-height: 40px; padding: 0 10px; border-radius: 8px; font-size: 15px; font-weight: 600; color: var(--ink-2); text-decoration: none; }
 .menu-link:hover { background: var(--surface-2); color: var(--ink); }
+/* 조회하기 + ▾ 메뉴(탭 하나만 조회) */
+.runall { position: relative; display: flex; }
+.run-main { border-radius: 10px 0 0 10px; }
+.run-more { min-height: 38px; width: 30px; margin-left: 1px; padding: 0; border-radius: 0 10px 10px 0; font-size: 13px; }
+.run-menu { min-width: 300px; }
+.run-scope {
+  display: grid; gap: 2px; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent;
+  font: inherit; text-align: left; color: var(--ink-2); cursor: pointer;
+}
+.run-scope:hover { background: var(--surface-2); color: var(--ink); }
+.run-scope.here { background: var(--accent-soft); }
+.run-scope-name { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; }
+.run-scope-what { font-size: 12px; color: var(--muted); }
+.here-chip { padding: 0 6px; border-radius: 999px; background: var(--surface); font-size: 11px; font-weight: 700; color: var(--accent); }
+.run-note { margin: 6px 0 0; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.5; color: var(--muted); }
 
 .progress {
   display: flex; align-items: center; gap: 14px; padding: 12px 24px;
@@ -1274,9 +1330,9 @@ summary { cursor: pointer; font-weight: 600; }
   .controls { position: relative; justify-content: flex-start; }
   .tabs { width: 100%; order: 3; gap: 2px; }
   .tab { min-height: 42px; padding-inline: 9px; font-size: 13px; }
-  .more-menu, .openall { position: static; }
+  .more-menu, .openall, .runall { position: static; }
   .management-menu { right: 0; }
-  .open-menu { right: 0; min-width: 0; width: min(320px, 100%); }
+  .open-menu, .run-menu { right: 0; min-width: 0; width: min(320px, 100%); }
   .source-filter { gap: 4px 14px; }
   .layout, .layout.no-side, .layout.idle { padding: 18px 12px 36px; }
 }

@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
-import { SOURCE_LABEL, type RunDetail, type RunInfo } from '../../../shared/types';
+import { RUN_SCOPES, SOURCE_LABEL, type RunDetail, type RunInfo, type RunScope } from '../../../shared/types';
 import { api } from '../api';
 import { dateTime } from '../format';
+
+/** 탭 하나만 돈 조회의 범위 이름 */
+const scopeLabel = (scope: RunScope) => RUN_SCOPES.find((s) => s.id === scope)?.label ?? scope;
 
 const props = defineProps<{ refreshKey: number }>();
 const runs = ref<RunInfo[]>([]);
@@ -34,7 +37,7 @@ const kindText: Record<'page' | 'data' | 'action', string> = { page: '페이지'
           <td class="num tight">#{{ run.id }}</td>
           <td class="num tight">{{ dateTime(run.startedAt) }}</td>
           <td class="words">{{ statusText[run.status] }}<span v-if="run.error" class="muted">, {{ run.error }}</span></td>
-          <td class="tight">{{ run.auto ? '자동, ' : '' }}{{ run.noticesOnly ? '공고만, ' : '' }}{{ run.visible ? '보면서' : '조용히' }}</td>
+          <td class="tight">{{ run.auto ? '자동, ' : '' }}{{ run.noticesOnly ? '공고만, ' : '' }}{{ run.scope ? `${scopeLabel(run.scope)}만, ` : '' }}{{ run.visible ? '보면서' : '조용히' }}</td>
           <td class="words">
             <div v-for="s in run.summary?.sources ?? []" :key="s.source" class="src">
               <strong>{{ SOURCE_LABEL[s.source] }}</strong>

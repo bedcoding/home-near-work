@@ -23,7 +23,7 @@ import { acceptNoticeFiles, noticeFileViews } from './notice-files.js';
 import { getProgress, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
 import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, withTrustFacts } from './views.js';
-import { CAPTURE_SOURCES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type SourceId, type Verdict } from '../shared/types.js';
+import { CAPTURE_SOURCES, RUN_SCOPES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type SourceId, type Verdict } from '../shared/types.js';
 
 // 처리하지 못한 비동기 오류가 나도 대시보드 서버가 꺼지지 않게 기록만 남긴다.
 process.on('unhandledRejection', (e) => console.error('처리하지 못한 오류:', e instanceof Error ? e.message : e));
@@ -326,13 +326,15 @@ app.delete<{ Params: { id: string } }>('/api/areas/:id', async (req) => {
   return { ok: true };
 });
 
-/** 조회를 시작한다. sources(예: ['courtauction'])를 주면 그 사이트만 돈다. */
-app.post<{ Body: { visible?: boolean; sources?: unknown } }>('/api/runs', async (req, reply) => {
-  const sources = Array.isArray(req.body?.sources)
-    ? req.body!.sources.filter((s): s is SourceId => typeof s === 'string' && s in SOURCE_LABEL)
-    : undefined;
+/**
+ * 조회를 시작한다. scope(RUN_SCOPES의 id, 예: 'auction')를 주면 그 탭에 보이는 사이트와 공고만 돈다.
+ * 예전 화면이 보내는 sources(['courtauction', 'onbid'])는 경매 범위로 본다.
+ */
+app.post<{ Body: { visible?: boolean; scope?: unknown; sources?: unknown } }>('/api/runs', async (req, reply) => {
+  const scope = RUN_SCOPES.find((s) => s.id === req.body?.scope)?.id
+    ?? (Array.isArray(req.body?.sources) && req.body!.sources.some((s) => s === 'courtauction' || s === 'onbid') ? 'auction' : undefined);
   try {
-    return { runId: startRun(req.body?.visible !== false, sources) };
+    return { runId: startRun(req.body?.visible !== false, scope) };
   } catch (e) {
     reply.code(409);
     return { error: e instanceof Error ? e.message : String(e) };
