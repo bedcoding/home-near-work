@@ -44,6 +44,28 @@ const changeText = computed(() => {
   return { label, detail: `${before} → ${after}`, tone: c.type === 'price_down' ? 'chip-down' : c.type === 'price_up' ? 'chip-up' : 'chip-muted' };
 });
 
+/** 매매가가 같은 단지·면적 실거래 중간값보다 이만큼(%) 이상 낮으면 '실거래보다 낮음'으로 보인다(거래가 2건 이상일 때) */
+const BELOW_PCT = 5;
+/** 큰 금액을 짧게('23.9억', 1억이 안 되면 '9,000만') */
+const eok = (x: number) => (x >= 10000 ? `${(x / 10000).toFixed(1)}억` : manwon(x));
+/** 아파트 실거래 비교(네이버 매매가, 경매·공매 최저가): 낮으면 초록 이름표, 아니면 흐린 기준 값 */
+const tradeChip = computed(() => {
+  const t = l.value.trade;
+  if (!t) return null;
+  const pct = `${t.diffPct > 0 ? '+' : ''}${t.diffPct.toFixed(1)}%`;
+  const auction = isAuction(l.value);
+  const title = [
+    `같은 단지(${t.complex})·같은 전용면적(±2㎡)의 최근 ${t.months}개월 국토부 실거래 ${t.count}건: 중간값 ${manwon(t.median)}(${manwon(t.min)} ~ ${manwon(t.max)})`,
+    t.latest ? `가장 최근 거래: ${t.latest.date.replace(/-/g, '.')} ${manwon(t.latest.price)}, ${t.latest.areaM2}㎡${t.latest.floor != null ? `, ${t.latest.floor}층` : ''}` : '',
+    `이 ${auction ? '물건 최저가' : '매물 값'}는 중간값보다 ${pct}입니다. ${BELOW_PCT}% 넘게 낮고 거래가 2건 이상이면 '실거래보다 낮음'으로 보입니다.`,
+    t.basis === 'jibun' ? `단지는 ${auction ? '주소 지번으로' : '네이버 단지 좌표로 찾은 필지의 번지로'} 맞췄습니다.` : '단지는 같은 법정동의 단지 이름으로 맞췄습니다.',
+    auction ? '최저가는 입찰 시작 값이라 낙찰가는 보통 이보다 높습니다. 층·향·수리 상태는 따지지 않았습니다.' : '매물 값은 부르는 값(호가)이고, 층·향·수리 상태는 따지지 않았습니다.',
+    '최근 한두 달 거래는 신고가 덜 들어왔을 수 있습니다.',
+  ].filter(Boolean).join('\n');
+  if (t.count >= 2 && t.diffPct <= -BELOW_PCT) return { text: `${auction ? '최저가 ' : ''}실거래보다 ${Math.round(-t.diffPct)}% 낮음`, tone: 'chip-down', title };
+  return { text: `실거래 중간 ${eok(t.median)}`, tone: 'chip-muted', title };
+});
+
 /** 가격 칸의 작은 거래 이름. 경매 금액은 최저가다. */
 const dealName = (p: PriceOption) => (p.deal === 'auction' ? '최저가' : DEAL_LABEL[p.deal]);
 
@@ -52,7 +74,7 @@ const appraisal = computed(() => {
   const a = l.value.auction;
   const price = l.value.prices[0]?.price;
   if (!a?.appraisal || !price) return null;
-  return { rate: Math.round((price / a.appraisal) * 100), title: `감정가 ${money(a.appraisal)}` };
+  return { rate: Math.round((price / a.appraisal) * 100), amount: money(a.appraisal), title: `감정가 ${money(a.appraisal)}, 최저가는 그 ${Math.round((price / a.appraisal) * 100)}%` };
 });
 
 /** 첫 가격이 월세나 단기면 셋째 칸에 관리비, 아니면 전용 평당 가격을 둔다. */
@@ -138,7 +160,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
             <b v-for="(p, i) in l.prices" :key="i"><span class="deal">{{ dealName(p) }}</span>{{ priceAmount(p) }}</b>
             <b v-if="!l.prices.length" class="muted">가격 모름</b>
           </template>
-          <small v-if="appraisal" :title="appraisal.title">감정가의 {{ appraisal.rate }}%</small>
+          <small v-if="appraisal" :title="appraisal.title">감정가 {{ appraisal.amount }}의 {{ appraisal.rate }}%</small>
         </div>
         <template v-if="!room">
           <div class="stat">
@@ -174,6 +196,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
           <span class="chip" :class="changeText.tone">{{ changeText.label }}</span>
           <span class="change num">{{ changeText.detail }}</span>
         </template>
+        <span v-if="tradeChip" class="chip trade-chip" :class="tradeChip.tone" :title="tradeChip.title">{{ tradeChip.text }}</span>
         <span v-if="l.verdict === 'star'" class="chip chip-star">★ 관심</span>
         <span v-if="l.relistedOf" class="chip chip-muted" :title="`원래 매물: ${l.relistedOf}`">재등록이라 숨김</span>
         <span v-else-if="l.verdict === 'discard'" class="chip chip-muted">버림</span>
@@ -278,6 +301,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 .expect .stat small { white-space: normal; overflow: visible; }
 
 .tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
+.trade-chip { cursor: help; }
 .chip-room { background: var(--surface-2); color: var(--ink-2); }
 .change { font-size: 13px; color: var(--ink-2); }
 .title { flex: 1 1 0; min-width: 6em; margin-left: 4px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
