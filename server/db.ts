@@ -1316,6 +1316,18 @@ export function aptTradeRows(from: string, to: string): AptTradeRow[] {
     .all(from, to) as AptTradeRow[];
 }
 
+export interface CompareTradeRow { gu: string; dong: string; jibun: string | null; complex: string; area_m2: number; contract_date: string; price: number; floor: number | null }
+
+/** 계약일이 from(YYYY-MM-DD) 이후이고 해제되지 않은 아파트 매매(매물 가격 비교용, 단지·면적·층까지) */
+export function aptTradesSince(from: string): CompareTradeRow[] {
+  return db
+    .prepare(
+      `SELECT gu, dong, jibun, complex, area_m2, contract_date, price, floor FROM apt_trades
+       WHERE contract_date >= ? AND canceled_at IS NULL AND area_m2 > 0 ORDER BY contract_date DESC`,
+    )
+    .all(from) as CompareTradeRow[];
+}
+
 /** 해제되지 않은 아파트 매매의 구별, 계약 달(YYYY-MM)별 건수 */
 export function aptTradeMonthCounts(): { gu: string; ym: string; count: number }[] {
   return db
