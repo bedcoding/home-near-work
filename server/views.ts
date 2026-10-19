@@ -2,11 +2,12 @@ import * as store from './db.js';
 import { toNumber } from './collectors/types.js';
 import { looksSimilar } from './identity.js';
 import { parseLot, pnuOf } from './lots.js';
+import { compareSale, jibunOfAddr } from './trade-compare.js';
 import { manwon } from '../shared/format.js';
 import {
   isApartmentType, isDetachedHouseType, listingSection, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seoulGuOf, type AptInfo, type AptRegistry, type AuctionResultSummary,
   type AuctionResultView, type AuctionSummaryKind, type LandZoneCheck, type ListingView, type NormalizedListing, type NoticeFacts, type NoticeView, type PlotZone,
-  type PriceChangeType, type PriceOption, type RatioStats, type SourceId, type TrustDocRound, type TrustDocView,
+  type PriceChangeType, type PriceOption, type RatioStats, type SourceId, type TradeRef, type TrustDocRound, type TrustDocView,
 } from '../shared/types.js';
 
 type CourtRow = {
@@ -186,6 +187,43 @@ function zoneRef(
   return { ...base, lot, pnu, why: null, check: zones.get(lot) ?? null };
 }
 
+/**
+ * 서울 아파트의 매매가(네이버)나 최저가(법원경매, 온비드)를 같은 단지·면적의 국토부 실거래와 비교한다(trade-compare).
+ * 경매·공매는 주소의 지번 키로, 네이버는 재개발 구역 확인 때 단지 좌표로 찾아 둔 필지(points)의 번지로 단지를 맞추고,
+ * 번지로 못 찾으면 단지명으로 찾는다. 다른 매물은 null.
+ */
+function tradeRef(source: string, l: NormalizedListing, raw: unknown, points: Map<string, store.PointParcel>): TradeRef | null {
+  if (!isApartmentType(l.buildingType)) return null;
+  if (source === 'courtauction' || source === 'onbid') {
+    const price = l.prices.find((p) => p.deal === 'auction')?.price ?? null;
+    const lot = parseLot(auctionLot(source, l, raw).lot ?? '');
+    if (!price || !lot) return null;
+    return compareSale({
+      gu: lot.gu,
+      dong: lot.dong,
+      // 단지 이름 자리에서 앞의 구, 동, 지번을 뺀다('노원구 상계동 1234 상계주공아파트' → '상계주공아파트')
+      complexName: l.address ? complexNameOf(l.address).replace(/^.*?\d+(?:-\d+)?\s+/, '') || null : null,
+      jibun: `${lot.san ? '산' : ''}${lot.bun}${lot.ji !== '0' ? `-${lot.ji}` : ''}`,
+      areaM2: l.areaM2,
+      price,
+    });
+  }
+  if (source !== 'naver') return null;
+  const sale = l.prices.find((p) => p.deal === 'sale')?.price ?? null;
+  const gu = seoulGuOf(l.address ?? '');
+  if (!sale || !gu || !l.dong) return null;
+  const rep = (raw as { representativeArticleInfo?: { complexNumber?: unknown; complexName?: unknown } } | null)?.representativeArticleInfo;
+  const parcel = rep?.complexNumber != null ? points.get(`nv:${rep.complexNumber}`) : undefined;
+  return compareSale({
+    gu,
+    dong: l.dong,
+    complexName: typeof rep?.complexName === 'string' ? rep.complexName : null,
+    jibun: parcel?.status === 'ok' ? jibunOfAddr(parcel.addr) : null,
+    areaM2: l.areaM2,
+    price: sale,
+  });
+}
+
 /** 네이버 서울 아파트 매매의 구역 정보: 단지 번호와 좌표가 있어야 본다(매물 주소에는 지번이 없다). */
 function naverZoneRef(l: NormalizedListing, raw: unknown, zones: Map<string, LandZoneCheck>, points: Map<string, store.PointParcel>): PlotZone | null {
   if (!isApartmentType(l.buildingType) || !l.prices.some((p) => p.deal === 'sale') || !seoulGuOf(l.address ?? '')) return null;
@@ -277,6 +315,7 @@ export function buildListingViews(): ListingView[] {
       options: optionsRef(row.source, optionRaw.get(row.id), data.title ?? ''),
       apt: aptRef(row.id, row.source, data, raw, households, registry),
       zone: zoneRef(row.source, data, raw, zones, points),
+      trade: tradeRef(row.source, data, raw, points),
     };
   });
 }
