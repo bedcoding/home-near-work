@@ -93,7 +93,7 @@ function normalize(h: any): NormalizedListing | null {
     },
     { label: '전용면적', raw: `info.real_size=${h.info?.real_size ?? '없음'}, info.supplied_size=${h.info?.supplied_size ?? '없음'}`, value: listing.areaM2 != null ? `${listing.areaM2}㎡` : '모름' },
     { label: '층', raw: `floor.floor_text="${floorRaw}", floor.target=${h.floor?.target ?? '없음'}, floor.total=${h.floor?.total ?? '없음'}`, value: floorText(listing) },
-    { label: '반지하·옥탑', raw: `info.is_half_underground=${h.info?.is_half_underground ?? '없음'}, info.is_octop=${h.info?.is_octop ?? '없음'}`, value: `반지하 ${listing.basement ? '예' : '아니오'}, 옥탑 ${listing.rooftop ? '예' : '아니오'}`, note: '층 글자에 반지·지하·옥탑이 있어도 예로 봄' },
+    { label: '반지하와 옥탑', raw: `info.is_half_underground=${h.info?.is_half_underground ?? '없음'}, info.is_octop=${h.info?.is_octop ?? '없음'}`, value: `반지하 ${listing.basement ? '예' : '아니오'}, 옥탑 ${listing.rooftop ? '예' : '아니오'}`, note: '층 글자에 반지, 지하, 옥탑이 있어도 예로 봄' },
     { label: '방', raw: `info.room_type="${h.info?.room_type ?? ''}", info.room_count=${h.info?.room_count ?? '없음'}`, value: `${listing.roomLabel ?? '모름'}, 방 ${listing.rooms ?? '?'}개` },
     { label: '관리비', raw: `price.maintenance_cost=${h.price?.maintenance_cost ?? '없음'}원`, value: listing.maintenance != null ? `${money(listing.maintenance)}만` : '모름', note: '원 → 만원으로 바꿈' },
     { label: '입주 가능일', raw: `info.live_start_date="${h.info?.live_start_date ?? ''}"`, value: listing.availableFrom ?? '모름' },

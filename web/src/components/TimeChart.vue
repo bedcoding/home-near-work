@@ -30,8 +30,10 @@ const props = withDefaults(
     /** 세로를 0부터 */
     zero?: boolean;
     height?: number;
+    /** 올린 자리 날짜 글자(없으면 '2026.09') */
+    dateText?: (date: string) => string;
   }>(),
-  { format: (v: number) => v.toLocaleString('ko-KR', { maximumFractionDigits: 1 }), baseline: null, faded: 0, zero: false, height: 220 },
+  { format: (v: number) => v.toLocaleString('ko-KR', { maximumFractionDigits: 1 }), baseline: null, faded: 0, zero: false, height: 220, dateText: undefined },
 );
 
 const box = ref<HTMLDivElement | null>(null);
@@ -144,7 +146,7 @@ const tip = computed(() => {
   const rows = props.series.map((s) => ({ name: s.name, color: s.color, value: s.values[i] })).filter((r) => r.value != null);
   if (!rows.length) return null;
   const x = xOf(i);
-  return { x, left: Math.min(Math.max(x - 90, 0), width.value - 180), date: dot(props.dates[i]), faded: hasBars.value && i >= n.value - props.faded, rows };
+  return { x, left: Math.min(Math.max(x - 90, 0), width.value - 180), date: (props.dateText ?? dot)(props.dates[i]), faded: hasBars.value && i >= n.value - props.faded, rows };
 });
 </script>
 

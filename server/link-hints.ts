@@ -2,7 +2,7 @@ import * as store from './db.js';
 import { distanceM } from './geo.js';
 
 // 사이트 바로 가기를 그 동네로 바로 여는 데 쓰는 값. 크롬 확장이 받은 응답(사용자가 그 사이트를 볼 때 화면이 받은 것)에서 배운다.
-// 직방: 지하철역 번호(`/common/subway/all`의 id·name·lat·lng, 수도권만). 호갱노노: 단지 번호(`/api/apt/bounding`의 id·name·lat·lng, 본 동네마다 쌓임).
+// 직방: 지하철역 번호(`/common/subway/all`의 id, name, lat, lng, 수도권만). 호갱노노: 단지 번호(`/api/apt/bounding`의 id, name, lat, lng, 본 동네마다 쌓임).
 
 interface Place {
   id: string;

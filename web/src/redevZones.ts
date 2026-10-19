@@ -7,10 +7,10 @@ import { api } from './api';
 
 /** 묶음마다 이름과 색 */
 export const ZONE_GROUPS: { id: RedevZoneGroup; name: string; color: string }[] = [
-  { id: 'redev', name: '재개발·재건축', color: '#2f9e44' },
+  { id: 'redev', name: '재개발과 재건축', color: '#2f9e44' },
   { id: 'promo', name: '재정비촉진', color: '#5c940d' },
-  { id: 'small', name: '모아타운·가로주택 등', color: '#0b7285' },
-  { id: 'public', name: '공공주택 복합·지구', color: '#e8590c' },
+  { id: 'small', name: '모아타운과 가로주택 등', color: '#0b7285' },
+  { id: 'public', name: '공공주택 지구와 복합', color: '#e8590c' },
 ];
 export const ZONE_COLOR = Object.fromEntries(ZONE_GROUPS.map((g) => [g.id, g.color])) as Record<RedevZoneGroup, string>;
 /** 파일을 받는 곳(서울 열린데이터광장 OA-22712) */

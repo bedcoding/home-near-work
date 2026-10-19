@@ -8,7 +8,7 @@ import {
 import GuaranteeCalc from './GuaranteeCalc.vue';
 import SupportSteps from './SupportSteps.vue';
 
-// 지원 제도 탭: 전세 대출, 전세보증금 반환보증(보증보험), 월세 지원 같은 국가·서울시 제도와 계약 전 확인 도구를 칸별로 정리해 보인다.
+// 지원 제도 탭: 전세 대출, 전세보증금 반환보증(보증보험), 월세 지원 같은 국가, 서울시 제도와 계약 전 확인 도구를 칸별로 정리해 보인다.
 // 모으는 데이터가 아니라 조사한 날(SUPPORT_CHECKED) 기준으로 손으로 정리한 표다(web/src/support.ts). 그래서 조사한 날과 근거를 같이 보인다.
 
 const emit = defineEmits<{ notices: [] }>();
@@ -84,7 +84,7 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
   <section class="support">
     <div class="head">
       <strong class="total">지원 제도</strong>
-      <span class="checked" title="조사한 날 기준입니다. 금리, 한도, 소득 기준은 해마다(때로는 몇 달 만에) 바뀝니다.">{{ dot(SUPPORT_CHECKED) }} 조사, 신청 전에 공식 안내에서 다시 확인하세요</span>
+      <span class="checked" title="조사한 날 기준입니다. 금리, 한도, 소득 기준은 해마다(때로는 몇 달 만에) 바뀌니 신청 전에 공식 안내에서 다시 확인하세요.">{{ dot(SUPPORT_CHECKED) }} 조사</span>
     </div>
 
     <nav class="links" aria-label="공식 안내">
@@ -113,7 +113,7 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
     <details v-if="section === 'guard'" class="fold howto" :open="guardHowto.open.value" @toggle="guardHowto.onToggle">
       <summary>
         <span class="fold-name">보험 되는지 먼저 확인하는 순서</span>
-        <span class="howto-sub muted">HUG 반환보증 기준, 집 보러 다닐 때부터 정식 가입까지 순서대로</span>
+        <span class="howto-sub muted" title="집 보러 다닐 때부터 정식 가입까지 순서대로">HUG 반환보증 기준</span>
       </summary>
       <div class="fold-body">
         <SupportSteps :steps="GUARD_CHECK_STEPS" @section="pickSection" />
@@ -130,15 +130,14 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
     <details v-if="section === 'loan'" class="fold howto" :open="loanHowto.open.value" @toggle="loanHowto.onToggle">
       <summary>
         <span class="fold-name">대출 받는 순서</span>
-        <span class="howto-sub muted">버팀목 기준, 계약 전에 확인할 것부터 잔금 뒤까지 순서대로</span>
+        <span class="howto-sub muted" title="계약 전에 확인할 것부터 잔금 뒤까지 순서대로">버팀목 기준</span>
       </summary>
       <div class="fold-body">
         <SupportSteps :steps="LOAN_STEPS" @section="pickSection" />
 
         <div class="clauses">
           <div class="clauses-head">
-            <strong>계약서에 넣을 특약</strong>
-            <span class="muted">예시 문구입니다. 계약 상황에 맞게 중개사와 고쳐 넣으세요.</span>
+            <strong title="예시 문구입니다. 계약 상황에 맞게 중개사와 고쳐 넣으세요.">계약서에 넣을 특약</strong>
           </div>
           <ul>
             <li v-for="c in LOAN_CLAUSES" :key="c.id" class="clause">
@@ -244,8 +243,7 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
     </ul>
 
     <p class="cross muted">
-      공공이 직접 빌려주는 전세·임대 주택(HUG 든든전세, LH 전세임대, SH 장기전세 등)의 모집 공고는
-      <button class="linkish" @click="emit('notices')">임대 공고 탭</button>에 모입니다.
+      <button class="linkish" title="HUG 든든전세, LH 전세임대, SH 장기전세처럼 공공이 직접 빌려주는 전세와 임대 주택의 모집 공고" @click="emit('notices')">공공 전세와 임대 공고: 임대 공고 탭</button>
     </p>
   </section>
 </template>

@@ -62,6 +62,7 @@ a { color: var(--accent); }
 .chip-star { background: var(--star-soft); color: var(--star); }
 .chip-muted { background: var(--surface-2); color: var(--muted); }
 .chip-warn { background: #fff4d6; color: #8a5a00; }
+.chip-danger { background: #c92a2a; color: #fff; }
 .chip-seen { background: var(--seen-soft); color: var(--seen); }
 .chip-kind { background: var(--ink); color: #fff; }
 .chip-kind.officetel { background: #5b3cc4; }

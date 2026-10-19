@@ -8,10 +8,10 @@ import type { ExplainRow, NormalizedListing, PriceOption } from '../../shared/ty
 
 // 고방(1인 가구 주거)은 종류별 목록 화면에서 구를 누르고 목록을 끝까지 내려, 그때 화면이 스스로 불러오는 목록 응답을 같이 읽는다.
 // 목록 응답 주소(api.gobang.kr)에는 직접 요청하지 않는다.
-// 한 건은 방 하나가 아니라 지점(원룸텔·고시원·쉐어하우스) 또는 중개사 매물(원·투룸)이고, 월세는 그 지점 방들의 가장 싼 값~비싼 값이다.
+// 한 건은 방 하나가 아니라 지점(원룸텔, 고시원, 쉐어하우스) 또는 중개사 매물(원·투룸)이고, 월세는 그 지점 방들의 가장 싼 값~비싼 값이다.
 
 const CATEGORIES = [
-  { path: 'gosi', label: '원룸텔·고시원' },
+  { path: 'gosi', label: '원룸텔과 고시원' },
   { path: 'share', label: '쉐어하우스' },
   { path: 'coliving', label: '코리빙' },
   { path: 'one-two', label: '원·투룸' },
@@ -31,7 +31,7 @@ const SIGUNGU_API = 'api.gobang.kr/v2/house-sigungus?';
 /** 한 구 목록을 내리는 최대 횟수(한 번에 휠 5번, 쪽마다 40곳). */
 const MAX_ROUNDS = 30;
 
-/** 목록 응답 주소의 조건(구 코드·쪽 번호). */
+/** 목록 응답 주소의 조건(구 코드, 쪽 번호). */
 function listQuery(url: string): { code: string | null; pageNo: number } {
   const q = new URL(url).searchParams;
   return { code: q.get('dongliCode'), pageNo: Number(q.get('pageNo') ?? '1') };
@@ -97,7 +97,7 @@ function normalize(h: any, thumbnail: string | null): NormalizedListing | null {
     { label: '종류', raw: `houseTypes=${JSON.stringify(h.houseTypes ?? [])}, service="${h.service ?? ''}"`, value: listing.buildingType ?? '모름', note: 'UCEO는 운영자 지점, UAGENT는 중개사 매물' },
     { label: '위치', raw: `latitude=${h.latitude}, longitude=${h.longitude}, eupmyeondongFullName="${h.eupmyeondongFullName ?? ''}"`, value: `${listing.lat}, ${listing.lng}` },
     { label: '가까운 역', raw: 'nearSubways', value: subways || '없음', note: 'distance(km)를 m로 바꿈' },
-    { label: '특징', raw: 'tags', value: tags.join(', ') || '없음', note: '엘리베이터·주차는 여기 있으면 있음으로 봄' },
+    { label: '특징', raw: 'tags', value: tags.join(', ') || '없음', note: '엘리베이터와 주차는 여기 있으면 있음으로 봄' },
   ];
   listing.explain = explain;
   return listing;
@@ -158,7 +158,7 @@ export const gobang: Collector = {
       ctx.log('고방: 켜진 지역이 서울 구에 닿지 않아 건너뜁니다');
       return items;
     }
-    ctx.log(`고방: ${gus.join('·')}의 ${CATEGORIES.map((c) => c.label).join('·')} 목록을 봅니다`);
+    ctx.log(`고방: ${gus.join(', ')}의 ${CATEGORIES.map((c) => c.label).join(', ')} 목록을 봅니다`);
 
     // 화면이 스스로 불러오는 목록 응답을 옆에서 같이 읽는다.
     let sigungus: { sigunguCode: string; sigunguName: string; houseCount: number }[] = [];

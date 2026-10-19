@@ -8,7 +8,7 @@ import { readTrustDocs } from './trust-docs.js';
 import { TRUST_COLLECTORS } from './trusts.js';
 import { BlockedError, type CollectContext } from './types.js';
 
-// 공고 수집기: 공매·임대·청약 공고를 제목·상태·날짜·링크로 모은다.
+// 공고 수집기: 공매, 임대, 청약 공고를 제목, 상태, 날짜, 링크로 모은다.
 // 임대 공고는 '임대 공고' 탭, 신탁 공매 공고는 '경매' 탭, 청약(분양) 공고는 '청약' 탭에 보인다(shared/types의 noticeSection).
 
 export interface NoticeCollector {
@@ -132,7 +132,7 @@ export const koreit: NoticeCollector = {
   },
 };
 
-// ---------- 서울주거포털 SH·LH 임대 공고 ----------
+// ---------- 서울주거포털 SH, LH 임대 공고 ----------
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -176,7 +176,7 @@ const param = (href: string | null, name: string) => {
 const SH_MAX_PAGES = 5;
 
 /**
- * SH 임대 공고(서울): 번호 · 유형 · 공고명 · 게시일 · 발표일 · 모집상태 · 담당 · 바로가기.
+ * SH 임대 공고(서울): 번호, 유형, 공고명, 게시일, 발표일, 모집상태, 담당, 바로가기.
  * 모집중인 공고가 첫 쪽에서 밀려나도 계속 보이게, 모집중 공고가 없는 쪽이 나올 때까지 넘겨 본다.
  */
 export const sh: NoticeCollector = {
@@ -217,7 +217,7 @@ const dotDate = (s: string | undefined) => (/^\d{4}\.\d{2}\.\d{2}$/.test(s ?? ''
 
 /**
  * LH 청약플러스 공고문 목록(mi: 1026 임대주택, 1027 분양주택)에서 지역을 서울특별시, 상태를 전체로 골라 검색하고 표를 읽는다(최근 두 달, 100건까지).
- * 칸: 번호 · 유형 · 공고명 · 지역 · 첨부 · 게시일 · 마감일 · 상태 · 조회수. 상세는 행 링크의 data-id1~4(공고 번호·시스템·상위 유형·유형)로 주소를 만든다.
+ * 칸: 번호, 유형, 공고명, 지역, 첨부, 게시일, 마감일, 상태, 조회수. 상세는 행 링크의 data-id1~4(공고 번호, 시스템, 상위 유형, 유형)로 주소를 만든다.
  * 서울 공고가 없으면 빈 목록을 돌려준다.
  */
 async function readLhList(ctx: CollectContext, source: NoticeSourceId, mi: string, name: string): Promise<NoticeInput[]> {
@@ -255,7 +255,7 @@ async function readLhList(ctx: CollectContext, source: NoticeSourceId, mi: strin
       const status = r.cells[7] || null;
       return {
         sourceId: panId,
-        // 공고명 뒤에 붙는 '1일전'·'NEW' 표시는 뺀다.
+        // 공고명 뒤에 붙는 '1일전', 'NEW' 표시는 뺀다.
         title: r.cells[2].replace(/\s*(\d+일전|NEW|new)\s*$/, '').trim(),
         url: `${LH_DETAIL}?panId=${panId}&ccrCnntSysDsCd=${sys}&uppAisTpCd=${upper}&aisTpCd=${type}&mi=${mi}`,
         status: status && posted && deadline ? `${status} ${monthDay(posted)}~${monthDay(deadline)}` : status,
@@ -266,7 +266,7 @@ async function readLhList(ctx: CollectContext, source: NoticeSourceId, mi: strin
     });
 }
 
-/** LH 임대 공고(서울): 행복주택·국민임대·통합공공임대·매입임대(든든전세 포함)·전세임대·신혼희망 행복주택 등 */
+/** LH 임대 공고(서울): 행복주택, 국민임대, 통합공공임대, 매입임대(든든전세 포함), 전세임대, 신혼희망 행복주택 등 */
 export const lh: NoticeCollector = {
   id: 'lh',
   label: 'LH 임대 공고(서울)',
@@ -542,7 +542,7 @@ const ymd = (s: string | null | undefined) => (/^\d{8}$/.test(s ?? '') ? `${s!.s
 
 /**
  * 마이홈포털 임대주택 입주자 모집공고(최근 여섯 달)에서 지역을 서울특별시로 골라 검색하고, 화면이 받는 목록 데이터를 쪽마다 읽는다.
- * LH 공고는 LH 청약플러스에서 따로 모으므로 빼고, 다른 공급기관(한국사학진흥재단·한국자산관리공사 등) 공고만 남긴다.
+ * LH 공고는 LH 청약플러스에서 따로 모으므로 빼고, 다른 공급기관(한국사학진흥재단, 한국자산관리공사 등) 공고만 남긴다.
  * 상세는 https://www.myhome.go.kr/hws/portal/sch/selectRsdtRcritNtcDetailView.do?pblancId=번호.
  */
 export const myhome: NoticeCollector = {
@@ -626,7 +626,7 @@ async function readHugPage(session: BrowserSession) {
 
 /**
  * HUG 든든전세주택 '모집공고 및 입주신청' 집 목록에서 서울특별시와 켜진 지역 근처 구를 골라 조회하고 쪽마다 읽는다(서울 전체는 400곳이 넘어 구마다 본다).
- * 칸: 번호 · 공고일자 · 청약 접수기간 · 시도 · 시군구 · 주소 · 주택유형 · 매입유형 · 전용면적 · 임대보증금액(원) · 신청자수.
+ * 칸: 번호, 공고일자, 청약 접수기간, 시도, 시군구, 주소, 주택유형, 매입유형, 전용면적, 임대보증금액(원), 신청자수.
  * 집 하나가 공고 한 건이다(상세 s070103.jsp?dt=공고일자&no=번호, 접수가 끝나면 상세는 닫힌다). 구는 regions에 담는다.
  */
 export const hugJeonse: NoticeCollector = {
@@ -731,7 +731,7 @@ const plain = (html: string) =>
 
 /**
  * HUG 전월세 안심신탁 매물 안내에서 시도를 서울특별시로 골라 조회한다. 조회는 사이트의 웹 필터 화면을 거쳐 같은 화면으로 돌아오므로,
- * 돌아온 화면(POST 응답)의 표를 읽는다. 칸: 번호 · 주소 · 주택유형 · 전용면적 · 임대차유형 · 임대보증금(원) · 월세 · 입대가능 시작일 · 종료일.
+ * 돌아온 화면(POST 응답)의 표를 읽는다. 칸: 번호, 주소, 주택유형, 전용면적, 임대차유형, 임대보증금(원), 월세, 입대가능 시작일, 종료일.
  * 상세 창은 열지 않고 링크는 목록 화면으로 건다. 칸을 못 읽어도 '총 N 건'이 0보다 크면 한 건으로 알린다.
  */
 export const hugTrust: NoticeCollector = {
@@ -811,7 +811,7 @@ export function parseHugTrust(html: string): { total: number | null; items: Noti
   return { total, items };
 }
 
-// ---------- 고방 청년·공공 임대 공고 ----------
+// ---------- 고방 청년, 공공 임대 공고 ----------
 
 interface GobangNotice {
   no: number;
@@ -840,8 +840,8 @@ const GOBANG_NOTICES = 'api.gobang.kr/v2/youth-notices';
 const monthDay = (iso: string | null | undefined) => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? `${iso.slice(5, 7)}.${iso.slice(8, 10)}` : '');
 
 /**
- * 고방 '모집공고' 화면(서울, 접수중·접수 예정)이 받는 공고 목록을 읽는다(목록 데이터 주소는 직접 요청하지 않음). 상세는 https://gobang.kr/notices/<번호>.
- * 모집 지역의 구는 regions에 담는다(서울 전체·전국 공고는 비움). 켜진 지역 근처 구만 보이게 거르는 것은 화면이 한다.
+ * 고방 '모집공고' 화면(서울, 접수중, 접수 예정)이 받는 공고 목록을 읽는다(목록 데이터 주소는 직접 요청하지 않음). 상세는 https://gobang.kr/notices/<번호>.
+ * 모집 지역의 구는 regions에 담는다(서울 전체, 전국 공고는 비움). 켜진 지역 근처 구만 보이게 거르는 것은 화면이 한다.
  * 상태 칸에는 접수 기간을 붙인다(안심주택 추가모집은 접수가 2~3일이라).
  */
 export const gobangNotices: NoticeCollector = {
@@ -933,11 +933,11 @@ export const gobangNotices: NoticeCollector = {
   },
 };
 
-// ---------- SH·LH 공공분양(서울주거포털) ----------
+// ---------- SH, LH 공공분양(서울주거포털) ----------
 
 const EMPTY_DETAIL: SubscriptionDetail = { address: null, households: null, priceMin: null, priceMax: null, moveIn: null, winnersAt: null, builder: null };
 
-/** SH 공공분양: 번호 · 청약유형 · 공고명 · 공고게시일 · 발표일 · 담당 · 바로가기 */
+/** SH 공공분양: 번호, 청약유형, 공고명, 공고게시일, 발표일, 담당, 바로가기 */
 export const shSale: NoticeCollector = {
   id: 'shsale',
   label: 'SH 공공분양',
@@ -959,7 +959,7 @@ export const shSale: NoticeCollector = {
   },
 };
 
-/** LH 공공분양(서울): 분양주택·신혼희망타운 공공분양·이익공유형. 서울 공고는 드물어서 보통 빈 목록이다. */
+/** LH 공공분양(서울): 분양주택, 신혼희망타운 공공분양, 이익공유형. 서울 공고는 드물어서 보통 빈 목록이다. */
 export const lhSale: NoticeCollector = {
   id: 'lhsale',
   label: 'LH 공공분양(서울)',
@@ -972,8 +972,8 @@ const APPLYHOME = 'https://www.applyhome.co.kr';
 /** 분양정보 목록 화면 세 곳. 공급지역을 서울로 골라 조회하고, 행을 누르면 화면 안 창(iframe)에 상세가 열린다. */
 const APPLYHOME_LISTS = [
   { name: 'APT 분양', path: '/ai/aia/selectAPTLttotPblancListView.do' },
-  { name: '무순위·잔여세대', path: '/ai/aia/selectAPTRemndrLttotPblancListView.do' },
-  { name: '오피스텔·도시형·민간임대', path: '/ai/aia/selectOtherLttotPblancListView.do' },
+  { name: '무순위와 잔여세대', path: '/ai/aia/selectAPTRemndrLttotPblancListView.do' },
+  { name: '오피스텔, 도시형, 민간임대', path: '/ai/aia/selectOtherLttotPblancListView.do' },
 ];
 /** 목록을 넘겨 보는 최대 쪽 수(한 쪽 10건) */
 const APPLYHOME_MAX_PAGES = 5;
@@ -1010,7 +1010,7 @@ async function readApplyhomeRows(session: BrowserSession) {
   });
 }
 
-/** 상세 창(iframe)에서 공급위치·공급규모·공급금액 범위·입주예정월·모집공고문 주소를 읽는다. */
+/** 상세 창(iframe)에서 공급위치, 공급규모, 공급금액 범위, 입주예정월, 모집공고문 주소를 읽는다. */
 async function readApplyhomeDetail(frame: Frame) {
   await frame.waitForLoadState('domcontentloaded').catch(() => {});
   await frame.waitForSelector('table', { timeout: 10000 }).catch(() => {});
@@ -1053,8 +1053,8 @@ function seoulPlace(address: string | null): { gu: string | null; place: string 
 }
 
 /**
- * 청약홈 분양정보 목록(APT 분양·무순위·잔여세대·오피스텔·도시형·민간임대)에서 공급지역 서울, 지난달부터의 공고를 읽는다.
- * 새 공고는 행을 눌러 화면이 여는 상세 창에서 공급위치(구)·세대수·공급금액·입주예정월·모집공고문 주소를 읽는다(이미 읽은 공고는 다시 열지 않음).
+ * 청약홈 분양정보 목록(APT 분양, 무순위와 잔여세대, 오피스텔, 도시형, 민간임대)에서 공급지역 서울, 지난달부터의 공고를 읽는다.
+ * 새 공고는 행을 눌러 화면이 여는 상세 창에서 공급위치(구), 세대수, 공급금액, 입주예정월, 모집공고문 주소를 읽는다(이미 읽은 공고는 다시 열지 않음).
  * 종류에 '임대'가 든 공고(민간임대 등)는 임대 공고 탭, 나머지는 청약 탭에 보인다.
  */
 export const applyhome: NoticeCollector = {

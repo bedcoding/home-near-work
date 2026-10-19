@@ -33,7 +33,7 @@ export function compareCount(marks: Marks, key: string, count: number, at: strin
 
 /**
  * KB부동산 지도가 받는 `land-property/propList/stutCdFilter/count` 응답 하나: 법정동의 매물 수(지역매물총건수).
- * key: 법정동코드와 검색 조건(지도 범위·확대는 뺌). 모양이 다르면 null.
+ * key: 법정동코드와 검색 조건(지도 범위, 확대는 뺌). 모양이 다르면 null.
  */
 export function kbAreaCount(requestBody: string | null, body: string): { key: string; dong: string; count: number } | null {
   try {

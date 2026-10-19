@@ -93,7 +93,7 @@ function extensionProfile() {
   return found[0];
 }
 
-/** 확장의 sites.js·areas.js를 읽어 { links: hnwSiteLinks, sites: HNW_SITES }를 꺼낸다. */
+/** 확장의 sites.js, areas.js를 읽어 { links: hnwSiteLinks, sites: HNW_SITES }를 꺼낸다. */
 function extensionSites() {
   const ctx = vm.createContext({});
   for (const file of ['areas.js', 'sites.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'extension', file), 'utf8'), ctx, { filename: file });

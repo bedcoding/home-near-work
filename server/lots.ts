@@ -2,9 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// 경매·공매 주소의 지번 키('lot:강남구 대치동 316')와 서울 법정동 코드. 건축물대장(세대수)과 토지이용계획(재개발 구역)이 같이 쓰고, 시세 통계가 구 코드를 쓴다.
-// 법정동 코드는 seoul-bjdong.json: 행정안전부 법정동코드 전체자료 중 서울의 '존재' 행(구 25곳, 법정동 467곳)을
-// building-register-mcp 저장소(Apache-2.0)의 사본에서 뽑았다(2026-10-18).
+// 경매와 공매 주소의 지번 키('lot:강남구 대치동 316')와 서울 법정동 코드. 건축물대장(세대수)과 토지이용계획(재개발 구역)이 같이 쓰고, 시세 통계가 구 코드를 쓴다.
+// 법정동 코드는 seoul-bjdong.json(행정안전부 법정동코드 중 서울의 '존재' 행, 구 25곳, 법정동 467곳).
 
 const BJDONG = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'seoul-bjdong.json'), 'utf8')) as Record<
   string,

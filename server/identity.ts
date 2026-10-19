@@ -16,7 +16,7 @@ export function identityKey(l: NormalizedListing): string {
 }
 
 /**
- * 버림한 매물과 '비슷한지'. 사이트가 달라도 위치·층·면적이 거의 같으면 true.
+ * 버림한 매물과 '비슷한지'. 사이트가 달라도 위치, 층, 면적이 거의 같으면 true.
  * 자동으로 숨기지 않고 배지만 붙이는 데 쓴다.
  */
 export function looksSimilar(a: NormalizedListing, b: NormalizedListing): boolean {

@@ -201,7 +201,7 @@ const newsSince = () => daysAgoIso(NEWS_DAYS);
 
 db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 
-// 공고(가격 없는 공매·임대 공고). 곳마다 처음 모은 것은 기준으로만 저장하고(is_new 0), 그 뒤 새로 보인 것만 새 공고로 친다.
+// 공고(가격 없는 공매, 임대 공고). 곳마다 처음 모은 것은 기준으로만 저장하고(is_new 0), 그 뒤 새로 보인 것만 새 공고로 친다.
 db.exec(`
 CREATE TABLE IF NOT EXISTS notices (
   id INTEGER PRIMARY KEY,
@@ -219,14 +219,14 @@ CREATE TABLE IF NOT EXISTS notices (
   UNIQUE (source, source_id)
 );
 `);
-// regions: 구 이름 JSON 배열, starts_at·ends_at: 접수 기간, detail: 청약 상세 JSON, facts: 줄에 보이는 숫자 JSON
+// regions: 구 이름 JSON 배열, starts_at, ends_at: 접수 기간, detail: 청약 상세 JSON, facts: 줄에 보이는 숫자 JSON
 {
   const columns = (db.prepare('PRAGMA table_info(notices)').all() as { name: string }[]).map((c) => c.name);
   for (const c of ['regions', 'starts_at', 'ends_at', 'detail', 'facts']) if (!columns.includes(c)) db.exec(`ALTER TABLE notices ADD COLUMN ${c} TEXT`);
 }
 
 // 사용자가 공고 사이트에서 직접 받은 첨부 파일(크롬 확장이 알림). path: 이 컴퓨터의 파일 위치, page_url: 받을 때 열려 있던 화면,
-// notice_id: 맞춘 공고, status: ok·unsupported·error, lines: 파일에서 읽은 줄(JSON 배열).
+// notice_id: 맞춘 공고, status: ok, unsupported, error, lines: 파일에서 읽은 줄(JSON 배열).
 db.exec(`
 CREATE TABLE IF NOT EXISTS notice_files (
   id INTEGER PRIMARY KEY,
@@ -344,7 +344,7 @@ CREATE INDEX IF NOT EXISTS house_trades_date ON house_trades (contract_date);
 `);
 
 // 서울 아파트 탭에서 직접 넣은 단지 세대수. key는 AptInfo.complexKey('lot:강남구 대치동 316', 'nv:1234'), name은 넣을 때 보인 단지 이름이나 주소.
-// apt_registry는 건축물대장에서 읽은 단지 정보(경매·공매 지번 키 'lot:…'마다, 칸은 shared/types AptRegistry와 같음).
+// apt_registry는 건축물대장에서 읽은 단지 정보(경매와 공매 지번 키 'lot:…'마다, 칸은 shared/types AptRegistry와 같음).
 db.exec(`
 CREATE TABLE IF NOT EXISTS apt_complexes (
   key TEXT PRIMARY KEY,
@@ -366,7 +366,7 @@ CREATE TABLE IF NOT EXISTS apt_registry (
 );
 `);
 
-// 집터 탭 경매·공매의 재개발 구역 확인 결과(브이월드 토지이용계획). lot은 PlotZone.lot('lot:강남구 대치동 316'), pnu는 필지 번호,
+// 집터 탭 경매와 공매의 재개발 구역 확인 결과(브이월드 토지이용계획). lot은 PlotZone.lot('lot:강남구 대치동 316'), pnu는 필지 번호,
 // zones는 걸린 구역 목록(shared/types LandZone 배열 JSON).
 db.exec(`
 CREATE TABLE IF NOT EXISTS land_zones (
@@ -397,7 +397,7 @@ CREATE TABLE IF NOT EXISTS point_parcels (
 // 시세 통계 탭. apt_trades는 국토부 실거래가 서울 아파트 매매(거래 하나에 한 줄, key는 구, 동, 번지, 단지명, 전용면적, 계약일, 금액, 층을 잇고
 // 뒤에 같은 줄의 순번 '#1'), contract_date YYYY-MM-DD, price 만원, area_m2 전용면적 ㎡, canceled_at 해제사유발생일.
 // market_series는 KB 통계 시계열(series는 kb-stats의 SERIES id, region_code는 KB 지역코드, date는 월간 YYYY-MM, 주간 YYYY-MM-DD,
-// detail은 매수우위지수의 응답 비율 JSON). 시계열은 받을 때마다 통째로 바꾼다.
+// detail은 매수우위지수의 응답 비율 JSON). 시계열은 받을 때마다 통째로 바꾼다. 지역별 거래 건수(rt-volume, region-volume.ts)만 달마다 넣고 바꾼다.
 db.exec(`
 CREATE TABLE IF NOT EXISTS apt_trades (
   key TEXT PRIMARY KEY,
@@ -585,7 +585,7 @@ function dayBefore(iso: string): string {
  * 모은 공고를 저장한다. 처음 모으는 곳이면 전부 기준으로만 저장한다. 새로 저장한 공고를 돌려준다.
  * 처음 보는 공고라도 게시일이 그 곳을 마지막으로 모은 날의 하루 전보다 이르면 새 공고로 치지 않는다
  * (목록을 더 깊이 읽거나 읽는 화면을 바꿔서 처음 보이는 예전 공고).
- * 주소·지역·접수 기간·상세·숫자는 값이 있을 때만 바꾼다(이번에 상세를 다시 읽지 않은 공고도 전에 읽은 것이 남게).
+ * 주소, 지역, 접수 기간, 상세, 숫자는 값이 있을 때만 바꾼다(이번에 상세를 다시 읽지 않은 공고도 전에 읽은 것이 남게).
  */
 export function saveNotices(source: NoticeSourceId, items: NoticeInput[], at: string): { added: NoticeInput[]; baseline: boolean } {
   const baselineKey = `notices_baseline_${source}`;
@@ -1336,7 +1336,7 @@ export function aptTradeRows(from: string, to: string): AptTradeRow[] {
 
 export interface CompareTradeRow { gu: string; dong: string; jibun: string | null; complex: string; area_m2: number; contract_date: string; price: number; floor: number | null }
 
-/** 계약일이 from(YYYY-MM-DD) 이후이고 해제되지 않은 아파트 매매(매물 가격 비교용, 단지·면적·층까지) */
+/** 계약일이 from(YYYY-MM-DD) 이후이고 해제되지 않은 아파트 매매(매물 가격 비교용, 단지, 면적, 층까지) */
 export function aptTradesSince(from: string): CompareTradeRow[] {
   return db
     .prepare(
@@ -1344,6 +1344,18 @@ export function aptTradesSince(from: string): CompareTradeRow[] {
        WHERE contract_date >= ? AND canceled_at IS NULL AND area_m2 > 0 ORDER BY contract_date DESC`,
     )
     .all(from) as CompareTradeRow[];
+}
+
+export interface SignalTradeRow { gu: string; dong: string; jibun: string | null; complex: string; area_m2: number; contract_date: string; price: number }
+
+/** 해제되지 않은 아파트 매매 전부(계약일 순, 한 줄씩 읽음). 고점 신호의 신고가 집계용. */
+export function iterAptTradesForSignals(): IterableIterator<SignalTradeRow> {
+  return db
+    .prepare(
+      `SELECT gu, dong, jibun, complex, area_m2, contract_date, price FROM apt_trades
+       WHERE canceled_at IS NULL AND area_m2 > 0 AND price > 0 ORDER BY contract_date, key`,
+    )
+    .iterate() as IterableIterator<SignalTradeRow>;
 }
 
 /** 해제되지 않은 아파트 매매의 구별, 계약 달(YYYY-MM)별 건수 */
@@ -1367,6 +1379,16 @@ export function replaceMarketSeries(series: string, points: MarketPoint[]) {
   })();
 }
 
+/** 시계열 series에 points를 넣는다(같은 지역코드와 날짜는 바꿈, 나머지 점은 그대로). */
+export function upsertMarketPoints(series: string, points: MarketPoint[]) {
+  const insert = db.prepare(
+    'INSERT OR REPLACE INTO market_series (series, region_code, region_name, date, value, detail) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  db.transaction(() => {
+    for (const p of points) insert.run(series, p.regionCode, p.regionName, p.date, p.value, p.detail);
+  })();
+}
+
 /** 시계열 series의 점들(지역코드, 날짜 순) */
 export function marketSeries(series: string): MarketPoint[] {
   return (
@@ -1385,7 +1407,7 @@ db.transaction(() => {
   db.prepare("DELETE FROM settings WHERE key = 'court_region_stats'").run();
 })();
 
-// ---------- 판정(버림·관심) ----------
+// ---------- 판정(버림, 관심) ----------
 
 export interface VerdictRow { listing_id: string; identity_key: string; verdict: Verdict; reason: string | null; created_at: string }
 
@@ -1406,7 +1428,7 @@ export function setVerdict(listingId: string, verdict: Verdict | null, reason: s
   ).run(listingId, listing.identity_key, verdict, reason, nowIso());
 }
 
-// ---------- 변화 기록(신규·가격 변동) ----------
+// ---------- 변화 기록(신규, 가격 변동) ----------
 
 export interface EventRow { id: number; run_id: number; listing_id: string; type: string; detail: string | null; created_at: string; acked: number }
 

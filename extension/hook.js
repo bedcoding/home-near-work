@@ -4,7 +4,7 @@
   if (window.__hnwHook) return;
   window.__hnwHook = true;
 
-  // 로그인·개인 정보·로그 요청은 읽지 않는다.
+  // 로그인, 개인 정보, 로그 요청은 읽지 않는다.
   const SKIP = /(member|login|logout|auth|token|user|\/my\b|mypage|favorite|interest|alarm|notif|nelo|\/log\b|analytics|\/si$)/i;
   const MAX_BODY = 2000000;
   // 그 사이트의 데이터 주소만 읽는다. 네이버는 부동산(land.naver.com)만, 당근은 daangn.com과 karrotmarket.com.
@@ -29,7 +29,7 @@
         url,
         method,
         status,
-        // 요청 본문(필터·묶음 번호)은 표시 계산에 쓰므로 넉넉히 넘긴다. 서버는 앞 4,000자만 저장한다.
+        // 요청 본문(필터, 묶음 번호)은 표시 계산에 쓰므로 넉넉히 넘긴다. 서버는 앞 4,000자만 저장한다.
         requestBody: typeof requestBody === 'string' ? requestBody.slice(0, 20000) : null,
         body,
       },

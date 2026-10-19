@@ -1,17 +1,20 @@
 import { aptCoverageFrom, aptTradesState } from './apt-trades.js';
 import * as store from './db.js';
-import { kbStatsState, type SeriesId } from './kb-stats.js';
+import { kbStatsState, RATE_SERIES, type SeriesId } from './kb-stats.js';
+import { tradeSignalMonths } from './trade-signals.js';
+import { peakSourcesState } from './peak-sources.js';
+import { buildRegionVolume } from './region-volume.js';
 import { guCode } from './lots.js';
 import { yearRange, ymd } from './rt-csv.js';
-import { SEOUL_GUS, type MarketChanges, type MarketChart, type MarketLine, type MarketNow, type MarketTier, type MarketView } from '../shared/types.js';
+import { SEOUL_GUS, type MarketChanges, type MarketChart, type MarketLine, type MarketNow, type MarketTier, type MarketView, type MarketYearly, type PeakSeries, type TradePeakSignals } from '../shared/types.js';
 
-// 시세 통계 탭: KB 통계 시계열(kb-stats)과 국토부 아파트 실거래(apt-trades)로 그래프 자료, 지금 흐름 요약, 구별 급지표를 만든다.
+// 시세 통계 탭: KB 통계 시계열(kb-stats), 국토부 아파트 실거래(apt-trades), 지역별 거래 건수(region-volume)로 그래프 자료, 지금 흐름 요약, 구별 급지표를 만든다.
 // 급지는 공식 분류가 아니다. 최근 1년 실거래의 전용면적 평당 중간값 순위로 구를 다섯 묶음으로 고르게 나눈 것이다.
 
 const PYEONG_M2 = 3.305785;
 /** KB 지역코드의 서울 */
 const SEOUL_CODE = '1100000000';
-/** 계약 뒤 이 날수 안에 신고한다(부동산 거래신고 등에 관한 법률 제3조 ①). 그 안의 달은 거래가 덜 들어와 있다. */
+/** 계약 뒤 이 날수 안에 신고한다. 그 안의 달은 거래가 덜 들어와 있다. */
 const REPORT_DAYS = 30;
 /** 서울 주간 지수 4주 변동률이 이만큼(%) 넘게 오르거나 내리면 방향으로 본다 */
 const FLAT_BAND = 0.1;
@@ -150,6 +153,89 @@ function tiersOf(gus: string[], price: MarketChart): MarketView['tiers'] {
   return { from: ymd(from), to: ymd(to), gus: tiers };
 }
 
+/** 신고가 비율을 세기 전에 쌓아 둘 앞선 거래 기간(달) */
+const WARMUP_MONTHS = 24;
+/** 신고가 비율을 보이는 데 필요한 3달 거래 수(따질 수 있는 거래) */
+const MIN_ELIGIBLE = 30;
+
+/** 실거래 고점 신호: 12달 거래 합과 3달 신고가 비율(전체, 아래 급 단지, 위 급 단지) */
+function tradePeakOf(volume: MarketView['volume']): TradePeakSignals {
+  const months = volume.months;
+  const at = new Map(tradeSignalMonths().map((m) => [m.ym, m]));
+  const complete = months.length - volume.incomplete;
+  const year = months.map((_, i) => (i >= 11 && i < complete ? volume.seoul.slice(i - 11, i + 1).reduce((a, b) => a + b, 0) : null));
+  const from = months.length > WARMUP_MONTHS ? months[WARMUP_MONTHS] : null;
+  const share = (pick: (m: { e: number; n: number; le: number; ln: number; he: number; hn: number }) => [number, number]) =>
+    months.map((ym, i) => {
+      if (!from || ym < from || i < 2) return null;
+      let num = 0;
+      let den = 0;
+      for (const m of months.slice(i - 2, i + 1)) {
+        const c = at.get(m);
+        if (!c) continue;
+        const [n, e] = pick(c);
+        num += n;
+        den += e;
+      }
+      return den >= MIN_ELIGIBLE ? round1((num / den) * 100) : null;
+    });
+  return {
+    months,
+    year,
+    newHigh: share((c) => [c.n, c.e]),
+    low: share((c) => [c.ln, c.le]),
+    high: share((c) => [c.hn, c.he]),
+    incomplete: volume.incomplete,
+    from,
+  };
+}
+
+/** 저장된 시계열 id의 한 지역 값(날짜 순) */
+function seriesOf(id: string, regionName: string): PeakSeries {
+  const points = store.marketSeries(id).filter((p) => p.regionName === regionName).sort((a, b) => a.date.localeCompare(b.date));
+  return { dates: points.map((p) => p.date), values: points.map((p) => p.value) };
+}
+
+/** 해마다 오른 비율: 12월에서 다음 12월까지(마지막 해는 지난 12월부터 받아 둔 마지막 달까지) */
+function yearlyOf(): MarketYearly {
+  const lines = {
+    seoulApt: seriesOf('price-month', '서울'),
+    nationApt: seriesOf('price-month', '전국'),
+    seoulAll: seriesOf('price-month-all', '서울'),
+    nationAll: seriesOf('price-month-all', '전국'),
+  };
+  const all = Object.values(lines).filter((s) => s.dates.length);
+  const lastMonth = all.map((s) => s.dates[s.dates.length - 1]).sort().at(-1) ?? null;
+  const firstDec = all.flatMap((s) => s.dates.filter((d) => d.endsWith('-12')).slice(0, 1)).sort()[0];
+  if (!lastMonth || !firstDec) return { years: [], seoulApt: [], nationApt: [], seoulAll: [], nationAll: [], lastMonth: null };
+  const years: string[] = [];
+  for (let y = Number(firstDec.slice(0, 4)) + 1; y <= Number(lastMonth.slice(0, 4)); y++) years.push(String(y));
+  const change = (s: PeakSeries) => {
+    const at = new Map(s.dates.map((d, i) => [d, s.values[i]]));
+    return years.map((y) => {
+      const before = at.get(`${Number(y) - 1}-12`);
+      const end = at.get(`${y}-12`) ?? (y === lastMonth.slice(0, 4) ? at.get(lastMonth) : undefined);
+      return before && end != null ? Math.round((end / before - 1) * 1000) / 10 : null;
+    });
+  };
+  return {
+    years,
+    seoulApt: change(lines.seoulApt),
+    nationApt: change(lines.nationApt),
+    seoulAll: change(lines.seoulAll),
+    nationAll: change(lines.nationAll),
+    lastMonth,
+  };
+}
+
+/** 서울 청약 신청자와 당첨자를 같은 달끼리 */
+function subsOf(): { dates: string[]; apply: number[]; win: number[] } {
+  const apply = seriesOf('subs-apply', '서울');
+  const win = new Map(store.marketSeries('subs-win').map((p) => [p.date, p.value]));
+  const dates = apply.dates.filter((d) => win.has(d));
+  return { dates, apply: dates.map((d) => apply.values[apply.dates.indexOf(d)]), win: dates.map((d) => win.get(d)!) };
+}
+
 /** 지금 흐름 요약 */
 function nowOf(price: MarketChart, weekly: MarketChart, buyer: MarketChart, volume: MarketView['volume']): MarketNow {
   const seoulWeek = weekly.lines.find((l) => l.kind === 'seoul');
@@ -200,6 +286,24 @@ export function buildMarketView(gus: string[]): MarketView {
     price,
     buyer,
     volume,
+    regionVolume: buildRegionVolume(),
     tiers: tiersOf(gus, price),
+    peak: {
+      trades: tradePeakOf(volume),
+      pir: seriesOf('pir', '서울'),
+      hai: seriesOf('hai', '서울'),
+      rate: seriesOf(RATE_SERIES, '전국'),
+      jeonse: seriesOf('jeonse-ratio-seoul', '서울'),
+      baseRate: seriesOf('base-rate', '전국'),
+      subs: subsOf(),
+      supply: {
+        done: seriesOf('completions', '서울'),
+        provisional: store.marketSeries('completions').filter((p) => p.detail?.includes('provisional')).map((p) => p.date),
+        plan: seriesOf('move-in-plan', '서울'),
+      },
+      unsold: seriesOf('unsold', '서울'),
+      sources: peakSourcesState(),
+    },
+    yearly: yearlyOf(),
   };
 }

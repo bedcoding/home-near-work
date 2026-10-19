@@ -125,12 +125,11 @@ function toggleStation(s: CatalogStation, event: Event, radiusM = 1000) {
 <template>
   <section class="areas">
     <div class="title-row">
-      <h2>지역</h2>
-      <span class="muted small">지도에서 역을 눌러도 켜고 끕니다</span>
+      <h2 title="지도에서 역을 눌러도 켜고 끕니다">지역</h2>
     </div>
     <p v-if="error" class="error">{{ error }}</p>
     <p v-if="restore" class="restore">
-      <span>예전 '이 노선만 켜기'로 바꾼 지역을 보는 중입니다(마지막 고른 노선 {{ restore.line }}, 켜진 지역 {{ enabledCount }}곳). 노선은 이제 노선 탭에서 따로 봅니다.</span>
+      <span :title="`예전 '이 노선만 켜기'로 바꾼 지역입니다(켜진 지역 ${enabledCount}곳). 노선은 이제 노선 탭에서 따로 봅니다.`">{{ restore.line }} 노선으로 바꾼 지역</span>
       <button class="btn btn-sm" :disabled="busy" @click="restoreAreas">전에 켜 둔 지역 {{ restore.count }}곳으로 되돌리기</button>
     </p>
     <p v-if="lineMessage" class="muted small">{{ lineMessage }}</p>
@@ -151,8 +150,7 @@ function toggleStation(s: CatalogStation, event: Event, radiusM = 1000) {
     </ul>
 
     <div class="add">
-      <h3>노선으로 찾기</h3>
-      <p class="muted small">노선을 고르면 그 노선 역이 펼쳐지고, 체크하면 그 역을 1km 지역으로 켭니다. 노선을 따라 역마다 매물을 견주어 보려면 노선 탭을 쓰세요(켜진 지역은 그대로 둠).</p>
+      <h3 title="노선을 고르면 그 노선 역이 펼쳐지고, 체크하면 그 역을 1km 지역으로 켭니다. 노선을 따라 역마다 매물을 견주어 보려면 노선 탭을 씁니다(켜진 지역은 그대로 둠).">노선으로 찾기</h3>
       <div class="chips small-chips" role="group" aria-label="노선">
         <button v-for="[name, n] in lineChips" :key="name" class="chip-btn" :class="{ on: line === name }" @click="line = line === name ? null : name">
           {{ name }} <span class="n">{{ n }}</span>

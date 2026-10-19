@@ -21,7 +21,7 @@ export function manwon(value: number): string {
   return `${value.toLocaleString('ko-KR')}만`;
 }
 
-/** 거래 이름 없이 금액만: 월세·단기 '1,000/60', 전세 '2억 1,000', 매매·경매 '1억 3,000'. */
+/** 거래 이름 없이 금액만: 월세, 단기 '1,000/60', 전세 '2억 1,000', 매매, 경매 '1억 3,000'. */
 export function priceAmount(p: PriceOption): string {
   switch (p.deal) {
     case 'monthly':

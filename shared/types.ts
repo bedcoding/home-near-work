@@ -11,7 +11,7 @@ export type DealType = 'monthly' | 'jeonse' | 'sale' | 'short' | 'auction';
 export type TrustSourceId =
   | 'kbtrust' | 'koreit' | 'reitpia' | 'ktrust' | 'hanatrust' | 'shinhantrust' | 'mghat' | 'shinyoung' | 'wooriat' | 'daishin' | 'kyobotrust' | 'koramco';
 
-/** 공고를 모으는 곳(가격이 없는 공매·임대 공고와 청약 공고, 집마다 올라오는 든든전세, LH 상가와 토지 공고, LH 선착순 계약). */
+/** 공고를 모으는 곳(가격이 없는 공매, 임대 공고와 청약 공고, 집마다 올라오는 든든전세, LH 상가와 토지 공고, LH 선착순 계약). */
 export type NoticeSourceId =
   | TrustSourceId
   | 'sh' | 'lh' | 'gobang' | 'myhome' | 'hugjeonse' | 'hugtrust' | 'applyhome' | 'shsale' | 'lhsale' | 'lhshop' | 'lhland' | 'lhfirst';
@@ -118,7 +118,7 @@ export type RunScope = 'home' | 'auction' | 'room' | 'rent' | 'subscription';
  */
 export const RUN_SCOPES: { id: RunScope; label: string; tabs: string[]; sources: SourceId[]; sections: NoticeSection[] }[] = [
   { id: 'home', label: '매물', tabs: ['overview'], sources: ['ziptoss', 'peterpanz', 'gobang'], sections: [] },
-  { id: 'auction', label: '경매·집터·서울 아파트', tabs: ['auction', 'plot', 'apt'], sources: ['courtauction', 'onbid'], sections: ['trust', 'shop', 'land'] },
+  { id: 'auction', label: '경매, 집터, 서울 아파트', tabs: ['auction', 'plot', 'apt'], sources: ['courtauction', 'onbid'], sections: ['trust', 'shop', 'land'] },
   { id: 'room', label: '고시원과 쉐어', tabs: ['rooms'], sources: ['gobang', 'betterliving', 'mangrove', 'celib'], sections: [] },
   { id: 'rent', label: '임대 공고', tabs: ['notices'], sources: [], sections: ['rent'] },
   { id: 'subscription', label: '청약', tabs: ['subs'], sources: [], sections: ['subscription'] },
@@ -135,10 +135,10 @@ export function noticeSection(n: { source: NoticeSourceId; kind: string | null }
 /** 켜진 지역 근처 구로 거르는 공고(임대 공고와 상가, 토지). 청약과 공매는 거르지 않는다. */
 export const regionalSection = (section: NoticeSection) => section === 'rent' || section === 'shop' || section === 'land';
 
-/** 고방에서 다른 사이트 월세와 같은 종류인 유형(중개사 매물). 유형이 이것뿐이면 매매·전월세 쪽에 둔다. */
+/** 고방에서 다른 사이트 월세와 같은 종류인 유형(중개사 매물). 유형이 이것뿐이면 매매와 전월세 쪽에 둔다. */
 const GOBANG_HOME_TYPES = ['원·투룸', '오피스텔'];
 
-/** 매물이 모두 경매 탭(법원경매·온비드 공매)이나 고시원·쉐어 탭(코리빙)에만 보이는 사이트 */
+/** 매물이 모두 경매 탭(법원경매, 온비드 공매)이나 고시원, 쉐어 탭(코리빙)에만 보이는 사이트 */
 const SECTION_OF_SOURCE: Partial<Record<SourceId, 'auction' | 'room'>> = {
   courtauction: 'auction',
   onbid: 'auction',
@@ -147,7 +147,7 @@ const SECTION_OF_SOURCE: Partial<Record<SourceId, 'auction' | 'room'>> = {
   celib: 'room',
 };
 
-/** 매매·전월세 매물이 있는 사이트(사이트 칸에 넣는 곳) */
+/** 매매와 전월세 매물이 있는 사이트(사이트 칸에 넣는 곳) */
 export const hasHomeListings = (source: SourceId) => !SECTION_OF_SOURCE[source];
 
 /** 경매 물건 중 상업용(상가) 검색으로 모은 것은 buildingType을 이 글자로 시작한다('상업용: 근린시설'). */
@@ -191,7 +191,7 @@ export interface SubscriptionDetail {
   address: string | null;
   /** 공급 세대수 */
   households: number | null;
-  /** 주택형별 공급금액(최고가 기준) 가운데 가장 낮은 값·높은 값 */
+  /** 주택형별 공급금액(최고가 기준) 가운데 가장 낮은 값, 높은 값 */
   priceMin: number | null;
   priceMax: number | null;
   /** 입주 예정월 'YYYY.MM' */
@@ -202,9 +202,9 @@ export interface SubscriptionDetail {
   builder: string | null;
 }
 
-/** 공고 줄에 칸을 따로 두고 보이는 숫자(든든전세 집마다의 보증금·면적 등). 금액은 만원. */
+/** 공고 줄에 칸을 따로 두고 보이는 숫자(든든전세 집마다의 보증금, 면적 등). 금액은 만원. */
 export interface NoticeFacts {
-  /** label: '전세'·'최저가' 등 */
+  /** label: '전세', '최저가' 등 */
   amount: { label: string; value: number } | null;
   areaM2: number | null;
   /** 그 밖의 짧은 값('신청 74명') */
@@ -216,9 +216,9 @@ export interface NoticeView {
   source: NoticeSourceId;
   title: string;
   url: string | null;
-  /** 진행 상태(진행중·유찰·모집중·공고중 등) */
+  /** 진행 상태(진행중, 유찰, 모집중, 공고중 등) */
   status: string | null;
-  /** 종류(오피스텔·행복주택·무순위 등) */
+  /** 종류(오피스텔, 행복주택, 무순위 등) */
   kind: string | null;
   place: string | null;
   postedAt: string | null;
@@ -414,13 +414,13 @@ export interface Station {
   label: string;
   lat: number;
   lng: number;
-  /** 역이 있는 자치구(서울 밖은 시·군) */
+  /** 역이 있는 자치구(서울 밖은 시, 군) */
   gu?: string;
   /** 직방 지하철역 번호(바로 가기 주소에 씀) */
   zigbangId?: string;
   /** 역에서 가까운 호갱노노 단지 번호(바로 가기를 그 단지 화면으로 열어 지도를 이 근처로 맞춘다) */
   hogangnonoApt?: string;
-  /** 서울·경기·인천 등 */
+  /** 서울과 경기, 인천 등 */
   sido?: string;
 }
 
@@ -447,15 +447,15 @@ export interface ListingView extends NormalizedListing {
   priceChange: { type: PriceChangeType; before: PriceOption[]; after: PriceOption[]; at: string } | null;
   /** 버림한 매물과 같은 집으로 판정돼 자동으로 숨긴 경우, 원래 매물 id. */
   relistedOf: string | null;
-  /** 버림한 매물과 위치·층·면적이 비슷하다. */
+  /** 버림한 매물과 위치, 층, 면적이 비슷하다. */
   similarToDiscarded: boolean;
   seenRef: SeenRef | null;
   /**
-   * 법원경매·온비드만. 법원·사건번호('2024타경12345')·물건번호는 다른 경매 사이트 주소를 만들 때 쓴다(온비드는 court '온비드', caseNo 물건관리번호).
+   * 법원경매, 온비드만. 법원, 사건번호('2024타경12345'), 물건번호는 다른 경매 사이트 주소를 만들 때 쓴다(온비드는 court '온비드', caseNo 물건관리번호).
    * appraisal 감정가(만원, 모르면 null), failed 유찰 횟수, lots 함께 매각하는 목록 수(1이면 단독).
    * mgmt: 법원경매 물건 비고에 관리단이나 관리비 이야기가 있으면 짧은 이름표('관리단 유치권 1,500만')와 비고 전문.
-   * share: 지분 매각(집이나 땅 전체가 아니라 일부 지분만 팔아 다른 공유자가 있음). 법원경매는 집합건물이 아닌 목록 글자의 'N분의 M'·'지분'이나
-   * 비고의 '지분'·'공유자', 온비드는 물건명의 '지분'으로 본다.
+   * share: 지분 매각(집이나 땅 전체가 아니라 일부 지분만 팔아 다른 공유자가 있음). 법원경매는 집합건물이 아닌 목록 글자의 'N분의 M', '지분'이나
+   * 비고의 '지분', '공유자', 온비드는 물건명의 '지분'으로 본다.
    * gu와 dong: 법원경매 물건 소재지의 구와 법정동('역삼동', 지역별 매각통계의 이름과 같음). 온비드는 null.
    */
   auction: {
@@ -477,10 +477,12 @@ export interface ListingView extends NormalizedListing {
   options: { list: string[] | null; full: boolean } | null;
   /** 서울 아파트면 구, 단지, 세대수(AptInfo). 아니면 null. */
   apt: AptInfo | null;
-  /** 경매·공매(단독주택 갈래, 토지, 아파트, 빌라)나 네이버 서울 아파트 매매면 재개발 구역 확인 정보(PlotZone). 아니면 null. */
+  /** 경매와 공매(단독주택 갈래, 토지, 아파트, 빌라)나 네이버 서울 아파트 매매면 재개발 구역 확인 정보(PlotZone). 아니면 null. */
   zone: PlotZone | null;
-  /** 서울 아파트 경매·공매와 네이버 매매면 같은 단지·같은 전용면적의 국토부 실거래 비교(TradeRef). 그런 거래가 없거나 다른 매물이면 null. */
+  /** 서울 아파트 경매와 공매와 네이버 매매면 같은 단지, 같은 전용면적의 국토부 실거래 비교(TradeRef). 그런 거래가 없거나 다른 매물이면 null. */
   trade: TradeRef | null;
+  /** 사는 매물(매매, 경매, 공매)의 좌표가 정비사업 구역(서울플랜+ 파일) 안이면 그 구역들과 파일의 작성일. 아니면 null. */
+  redev: { hits: RedevHit[]; fileDate: string | null } | null;
 }
 
 /** 경매 탭 칸(주거, 상가, 토지)에 맞춘 매각 결과 종류. other는 산업용, 용도복합용 등 세 칸에 들지 않는 것. */
@@ -538,7 +540,7 @@ export const COLLECT_MARGIN_M = 500;
 
 /**
  * 건물 용도 글자가 아파트인지(법원경매 '아파트', 온비드 '아파트', 네이버 '아파트'와 '재건축').
- * 아파트 분양권, 아파트형공장(지식산업센터), 경매 상가·토지 표시가 붙은 것은 뺀다.
+ * 아파트 분양권, 아파트형공장(지식산업센터), 경매 상가, 토지 표시가 붙은 것은 뺀다.
  */
 export const isApartmentType = (text: string | null | undefined) => {
   const t = text ?? '';
@@ -553,7 +555,7 @@ export function seoulGuOf(address: string | null | undefined): string | null {
 }
 
 /**
- * 건축물대장에서 읽은 단지 정보(경매·공매 물건의 지번으로 조회, 공공데이터포털 키가 있을 때).
+ * 건축물대장에서 읽은 단지 정보(경매와 공매 물건의 지번으로 조회, 공공데이터포털 키가 있을 때).
  * status: ok 세대수를 읽음, none 그 지번에 세대수가 있는 대장이 없음, error 조회 실패(다음에 다시 봄).
  * buildings 세대가 있는 동 수, floors 그중 가장 높은 지상층수, name 건물명, purpose 주용도(기타용도).
  * basis: recap 총괄표제부 세대수, title 동마다 표제부 세대수 합, ho 세대수가 비어 호수 합으로 셈.
@@ -571,8 +573,8 @@ export interface AptRegistry {
 }
 
 /**
- * 서울 아파트 탭에 보이는 아파트 정보(법원경매·온비드·매매 매물 중 건물 용도가 아파트이고 서울 구를 아는 것).
- * complexKey: 세대수를 같이 쓰는 단지 키(법원경매·온비드는 구·법정동·지번 'lot:강남구 대치동 316', 네이버는 단지 번호 'nv:1234',
+ * 서울 아파트 탭에 보이는 아파트 정보(법원경매, 온비드, 매매 매물 중 건물 용도가 아파트이고 서울 구를 아는 것).
+ * complexKey: 세대수를 같이 쓰는 단지 키(법원경매, 온비드는 구, 법정동, 지번 'lot:강남구 대치동 316', 네이버는 단지 번호 'nv:1234',
  * 지번을 못 찾으면 매물 하나 'id:courtauction:…'). complexName: 세대수 칸과 찾기에 쓰는 단지 이름이나 주소.
  * households: 세대수(직접 넣은 값, 없으면 건축물대장 값, 둘 다 없으면 null), householdsFrom: 그 값이 어디서 왔는지.
  * registry: 건축물대장 조회 결과(조회한 적 없으면 null). property: 온비드 재산 종류('압류재산', '수탁재산' 등, 그 밖에는 null).
@@ -589,9 +591,9 @@ export interface AptInfo {
 
 /**
  * 토지이용계획에 걸린 재개발 쪽 구역 하나(브이월드 토지이용계획 한 줄).
- * kind: redev 정비구역·재개발구역·재정비촉진지구 같은 정비사업 구역, small 소규모주택정비 관리지역(모아타운), limit 건축허가·착공 제한.
+ * kind: redev 정비구역, 재개발구역, 재정비촉진지구 같은 정비사업 구역, small 소규모주택정비 관리지역(모아타운), limit 건축허가와 착공 제한.
  * name: 토지이용계획의 구역 이름 그대로('정비구역'), overlap: 필지가 구역에 '포함'(안), '저촉'(일부 걸침), '접함'(경계에 붙음).
- * notice: 관리번호에서 읽은 고시·공고 번호('2024-448'), org: 그 번호를 낸 기관(관리번호 앞자리로 아는 것만, 모르면 null).
+ * notice: 관리번호에서 읽은 고시나 공고 번호('2024-448'), org: 그 번호를 낸 기관(관리번호 앞자리로 아는 것만, 모르면 null).
  */
 export interface LandZone {
   kind: 'redev' | 'small' | 'limit';
@@ -613,11 +615,11 @@ export interface LandZoneCheck {
 }
 
 /**
- * 경매·공매(단독주택 갈래 주거, 토지, 아파트, 빌라)와 네이버 아파트 매매의 재개발 구역 정보.
- * lot: 조회에 쓰는 키(경매·공매는 지번 키 'lot:강남구 대치동 316', 네이버는 단지 키 'nv:1234'), pnu: 필지 번호 19자리.
+ * 경매와 공매(단독주택 갈래 주거, 토지, 아파트, 빌라)와 네이버 아파트 매매의 재개발 구역 정보.
+ * lot: 조회에 쓰는 키(경매와 공매는 지번 키 'lot:강남구 대치동 316', 네이버는 단지 키 'nv:1234'), pnu: 필지 번호 19자리.
  * 못 정하면 pnu가 null이고 why가 그 까닭이다(네이버 단지의 필지를 아직 안 찾았으면 why도 null). check: 조회 결과(아직 안 봤으면 null).
- * form: 물건 갈래(house 단독주택, land 토지, apt 아파트, villa 다세대·연립 같은 빌라). basis: lot 주소의 지번, point 네이버 단지 좌표로 찾은 필지(parcel이 그 필지 주소).
- * point: 네이버 단지 좌표(필지를 찾을 때 씀, 경매·공매는 null).
+ * form: 물건 갈래(house 단독주택, land 토지, apt 아파트, villa 다세대, 연립 같은 빌라). basis: lot 주소의 지번, point 네이버 단지 좌표로 찾은 필지(parcel이 그 필지 주소).
+ * point: 네이버 단지 좌표(필지를 찾을 때 씀, 경매와 공매는 null).
  */
 export interface PlotZone {
   lot: string | null;
@@ -631,11 +633,11 @@ export interface PlotZone {
 }
 
 /**
- * 아파트 매물 값(경매·공매는 최저가, 네이버는 매매가)과 같은 단지·같은 전용면적(0.5㎡ 안) 국토부 실거래의 비교. 금액은 만원, 날짜는 YYYY-MM-DD.
+ * 아파트 매물 값(경매와 공매는 최저가, 네이버는 매매가)과 같은 단지, 같은 전용면적(0.5㎡ 안) 국토부 실거래의 비교. 금액은 만원, 날짜는 YYYY-MM-DD.
  * complex: 실거래 쪽 단지명, jibun: 실거래 번지('노원구 상계동 1234'),
  * basis: 단지를 맞춘 방법(jibun 주소 지번이 같음, name 같은 법정동의 같은 단지 이름, parcel 네이버 단지 좌표의 필지 번지가 같음),
- * months: 비교한 기간(최근 6개월에 3건 이상이면 6, 아니면 12), count·median·min·max: 그 기간 거래 수와 중간값·최저·최고,
- * areaMin·areaMax: 그 거래들의 전용면적 범위, latest: 가장 최근 거래, diffPct: 매물 값이 중간값보다 몇 % 높은지(음수면 낮음).
+ * months: 비교한 기간(최근 6개월에 3건 이상이면 6, 아니면 12), count, median, min, max: 그 기간 거래 수와 중간값, 최저, 최고,
+ * areaMin, areaMax: 그 거래들의 전용면적 범위, latest: 가장 최근 거래, diffPct: 매물 값이 중간값보다 몇 % 높은지(음수면 낮음).
  */
 export interface TradeRef {
   complex: string;
@@ -794,7 +796,7 @@ export interface AutoCheckState {
 
 /** 조회가 끝나면 띄울 알림 고르기('조회하기'와 자동 확인 모두). 금액은 만원, null이면 제한 없음. */
 export interface AlertSettings {
-  /** 매매·전월세 새 매물: 거래 유형마다 켜기와 상한 */
+  /** 매매와 전월세 새 매물: 거래 유형마다 켜기와 상한 */
   monthly: { on: boolean; monthlyMax: number | null; depositMax: number | null };
   jeonse: { on: boolean; depositMax: number | null };
   short: { on: boolean; monthlyMax: number | null };
@@ -807,7 +809,7 @@ export interface AlertSettings {
   shopAuction: { on: boolean; priceMax: number | null; areaMax: number | null };
   /** 토지 경매(땅만 파는 물건) 새 물건, 최저가 상한(만원)과 면적 상한(㎡, 지분이면 지분만큼) */
   landAuction: { on: boolean; priceMax: number | null; areaMax: number | null };
-  /** 서울 아파트 탭에서 고른 구의 아파트 경매·공매 새 물건(켜진 지역 반경과 상관없음), 최저가 상한 */
+  /** 서울 아파트 탭에서 고른 구의 아파트 경매와 공매 새 물건(켜진 지역 반경과 상관없음), 최저가 상한 */
   aptAuction: { on: boolean; priceMax: number | null };
   /** 임대 공고(켜진 지역 근처) */
   rentNotices: boolean;
@@ -824,7 +826,7 @@ export interface AlertSettings {
   failures: boolean;
   /** 매물은 켜진 지역 반경 안만 센다 */
   insideAreas: boolean;
-  /** 크롬 확장으로 본 사이트(다방 새 방, KB·네이버 늘어난 매물 수) */
+  /** 크롬 확장으로 본 사이트(다방 새 방, KB, 네이버 늘어난 매물 수) */
   captureSites: boolean;
 }
 
@@ -868,7 +870,7 @@ export interface AppState {
   areaRestore: { line: string; count: number } | null;
   /** 노선 탭에서 고른 노선과 역 반경(고르지 않았으면 null) */
   lineView: LineViewSetting | null;
-  /** 조회할 때 역·지역·구 사이에 쉬는 시간(초) */
+  /** 조회할 때 역, 지역, 구 사이에 쉬는 시간(초) */
   restSeconds: number;
   stations: Station[];
   running: RunProgress | null;
@@ -880,11 +882,11 @@ export interface AppState {
   naverCapture: { total: number; lastAt: string | null; snapshots: number };
   /** 크롬 확장이 보낸 화면 데이터 수(사이트별). */
   captureSites: { site: string; total: number; lastAt: string | null }[];
-  /** 지역을 마지막으로 바꾼 시각(대시보드·크롬 확장 어느 쪽이든). 확장이 어느 쪽 목록을 따를지 정할 때 쓴다. */
+  /** 지역을 마지막으로 바꾼 시각(대시보드, 크롬 확장 어느 쪽이든). 확장이 어느 쪽 목록을 따를지 정할 때 쓴다. */
   areasUpdatedAt: string | null;
   autoCheck: AutoCheckState;
   alerts: AlertSettings;
-  /** 크롬 확장 사이트(dabang·kbland·naver)마다 마지막 확인 결과 */
+  /** 크롬 확장 사이트(dabang, kbland, naver)마다 마지막 확인 결과 */
   captureNews: Partial<Record<string, CaptureNews>>;
   /** 켜진 지역 근처 서울 구(임대 공고를 지역으로 거를 때 쓴다) */
   gus: string[];
@@ -994,11 +996,88 @@ export interface MarketView {
   buyer: MarketChart;
   /** 실거래 월별 건수(서울 합과 구별, months와 같은 순서). 끝에서 incomplete달은 신고 기한(계약 뒤 30일) 안이라 덜 들어왔다. */
   volume: { months: string[]; incomplete: number; seoul: number[]; gus: { gu: string; near: boolean; counts: number[] }[] };
+  /** 지역별 아파트 매매 건수(전국, 수도권, 지방, 경기, 인천) */
+  regionVolume: RegionVolumeView;
   /** 구별 급지표(계약일 from ~ to). 실거래를 아직 안 받았으면 null. */
   tiers: { from: string; to: string; gus: MarketTier[] } | null;
+  /** 고점 신호 */
+  peak: PeakSignals;
+  /** 해마다 오른 비율 */
+  yearly: MarketYearly;
 }
 
-/** 지도에 칠하는 정비사업 구역의 묶음: redev 정비사업(재개발, 재건축, 신속통합기획, 주거환경개선), small 소규모 정비(모아타운, 가로주택 등), promo 재정비촉진, public 공공주택지구·도심 공공주택 복합사업 */
+/**
+ * 지역별 아파트 매매 건수(계약한 달 기준, 국토부 실거래가 자료제공 화면의 건수라 해제된 거래도 셈). counts는 months와 같은 순서, 아직 안 받은 달은 null.
+ * 수도권은 서울, 인천, 경기의 합, 지방은 전국에서 수도권을 뺀 수. 끝에서 incomplete달은 다 들어오기 전에 받았거나 아직 안 받은 달.
+ * missing은 아직 안 받은 달 수(조회할 때 조금씩 채움).
+ */
+export interface RegionVolumeView {
+  months: string[];
+  incomplete: number;
+  regions: { id: 'nation' | 'capital' | 'local' | 'gyeonggi' | 'incheon'; name: string; counts: (number | null)[] }[];
+  fetchedAt: string | null;
+  error: string | null;
+  missing: number;
+}
+
+/**
+ * KB 월간 매매가격지수로 본 해마다 오른 비율(%, 그해 12월 ÷ 지난해 12월 − 1). years와 같은 순서, 모르면 null.
+ * 아파트(apt)와 주택종합(all), 서울과 전국. 마지막 해가 12월까지 안 찼으면 지난해 12월부터 lastMonth까지.
+ */
+export interface MarketYearly {
+  years: string[];
+  seoulApt: (number | null)[];
+  nationApt: (number | null)[];
+  seoulAll: (number | null)[];
+  nationAll: (number | null)[];
+  lastMonth: string | null;
+}
+
+/**
+ * 실거래로 본 고점 신호(서울 아파트, 계약한 달 기준). months는 끊김 없이 받아 둔 달(YYYY-MM).
+ * year: 그 달까지 12달 거래 합(신고 기한 안이라 덜 들어온 끝의 incomplete달과 12달이 안 찬 달은 null).
+ * newHigh, low, high: 그 달까지 3달 동안 신고가 비율(%): 전체, 지난해 그 구 평당가 아래 3분의 1 단지, 위 3분의 1 단지.
+ * 신고가는 같은 단지, 같은 전용면적의 앞선 최고가보다 비싼 거래이고, 앞선 거래가 2년 넘게 쌓인 from 달부터 센다.
+ */
+export interface TradePeakSignals {
+  months: string[];
+  year: (number | null)[];
+  newHigh: (number | null)[];
+  low: (number | null)[];
+  high: (number | null)[];
+  incomplete: number;
+  from: string | null;
+}
+
+/** 시계열 하나(날짜 YYYY-MM 순, 값) */
+export interface PeakSeries {
+  dates: string[];
+  values: number[];
+}
+
+/**
+ * 시세 통계 탭의 고점 신호 묶음. pir: KB아파트담보대출 PIR(서울, 분기 끝 달), hai: KB 주택구매력지수(서울 아파트, 매달),
+ * rate: 주택담보대출 금리(%, 매달, KB 주택구매력지수 자료의 값), jeonse: 아파트 매매가 대비 전세가 비율(서울, %, 매달)
+ */
+export interface PeakSignals {
+  trades: TradePeakSignals;
+  pir: PeakSeries;
+  hai: PeakSeries;
+  rate: PeakSeries;
+  jeonse: PeakSeries;
+  /** 한국은행 기준금리(바뀐 날 YYYY-MM-DD와 바뀐 뒤 금리 %) */
+  baseRate: PeakSeries;
+  /** 서울 청약 신청자 수와 당첨자 수(모집공고 달 YYYY-MM, dates와 같은 순서) */
+  subs: { dates: string[]; apply: number[]; win: number[] };
+  /** 서울 아파트 준공(사용검사, 세대, 달마다, provisional은 잠정치 달)과 입주예정(세대, 앞으로의 달) */
+  supply: { done: PeakSeries; provisional: string[]; plan: PeakSeries };
+  /** 서울 미분양(호, 달마다) */
+  unsold: PeakSeries;
+  /** 공공 자료(기준금리, 청약, 입주예정, 준공, 미분양)를 받은 상태 */
+  sources: { fetchedAt: string | null; error: string | null };
+}
+
+/** 지도에 칠하는 정비사업 구역의 묶음: redev 정비사업(재개발, 재건축, 신속통합기획, 주거환경개선), small 소규모 정비(모아타운, 가로주택 등), promo 재정비촉진, public 공공주택지구, 도심 공공주택 복합사업 */
 export type RedevZoneGroup = 'redev' | 'small' | 'promo' | 'public';
 
 /**
@@ -1012,9 +1091,20 @@ export interface RedevZoneFeature {
   geometry: { type: 'Polygon'; coordinates: [number, number][][] } | { type: 'MultiPolygon'; coordinates: [number, number][][][] };
 }
 
+/** 매물 좌표가 든 정비사업 구역 하나(RedevZoneFeature의 properties). edge: 구역 경계에서 25m 안이라 안팎을 지번으로 확인해야 함 */
+export interface RedevHit {
+  name: string;
+  type: string;
+  group: RedevZoneGroup;
+  outline: boolean;
+  stage: string | null;
+  date: string | null;
+  edge: boolean;
+}
+
 /**
  * 넣어 둔 정비사업 구역 파일: 넣은 때, 파일 안 가장 늦은 작성일, 파일 이름, 열린데이터광장 파일 번호와 목록 날짜(자동으로 받았을 때만),
- * 그리는 구역 수, 뺀 수(done 준공·철회, other 다른 사업), 구역. check는 새 파일 자동 확인의 마지막 결과(GET /api/redev-zones가 붙임).
+ * 그리는 구역 수, 뺀 수(done 준공, 철회, other 다른 사업), 구역. check는 새 파일 자동 확인의 마지막 결과(GET /api/redev-zones가 붙임).
  */
 export interface RedevZonesView {
   importedAt: string | null;
@@ -1041,6 +1131,6 @@ export interface LineViewSetting {
   radiusM: number;
 }
 
-/** 조회할 때 역·지역·구 사이에 쉬는 시간으로 고를 수 있는 값(초)과 처음 값. 사이트와 이 컴퓨터에 요청이 한꺼번에 몰리지 않게 한다. */
+/** 조회할 때 역, 지역, 구 사이에 쉬는 시간으로 고를 수 있는 값(초)과 처음 값. 사이트와 이 컴퓨터에 요청이 한꺼번에 몰리지 않게 한다. */
 export const REST_CHOICES = [0, 2, 3, 5, 10];
 export const REST_DEFAULT = 3;

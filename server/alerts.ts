@@ -32,7 +32,7 @@ export const DEFAULT_ALERTS: AlertSettings = {
 
 /**
  * 알림 설정을 base 위에 덮어 정리한다. 빠진 값은 base 것을 쓴다.
- * 금액은 1 이상 정수(만원) 또는 null·''(제한 없음)이고, 아니면 오류를 던진다.
+ * 금액은 1 이상 정수(만원) 또는 null, ''(제한 없음)이고, 아니면 오류를 던진다.
  */
 export function normalizeAlerts(input: unknown, base: AlertSettings = DEFAULT_ALERTS): AlertSettings {
   const o = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
@@ -94,7 +94,7 @@ type NewsTab = 'news' | 'auction' | 'rooms' | 'subs' | 'notices' | 'apt';
 const LISTING_TAB: Record<ReturnType<typeof listingSection>, NewsTab> = { home: 'news', auction: 'auction', shop: 'auction', land: 'auction', room: 'rooms' };
 const NOTICE_TAB: Record<NoticeSection, NewsTab> = { rent: 'notices', trust: 'auction', subscription: 'subs', shop: 'auction', land: 'auction' };
 
-/** 이번 조회의 새 소식 하나: 신규·가격 변동 매물(changed: 가격 변동, aptGu: 서울 아파트 탭에서 고른 구의 아파트면 그 구)이나 센 새 공고. */
+/** 이번 조회의 새 소식 하나: 신규, 가격 변동 매물(changed: 가격 변동, aptGu: 서울 아파트 탭에서 고른 구의 아파트면 그 구)이나 센 새 공고. */
 export type NewsItem =
   | { type: 'listing'; listing: NormalizedListing; changed: boolean; aptGu?: string }
   | { type: 'notice'; source: NoticeSourceId; section: NoticeSection; url: string | null; title: string; near: string | null };
@@ -121,7 +121,7 @@ const PURPOSE: Record<AlertRow, Purpose> = {
   monthly: 'rent', jeonse: 'rent', short: 'rent', rooms: 'rent', rentNotices: 'rent',
   sale: 'buy', auction: 'buy', aptAuction: 'buy', shopAuction: 'buy', shopNotices: 'buy', landAuction: 'buy', landNotices: 'buy', trustNotices: 'buy', subscriptions: 'buy',
 };
-/** 매매·전월세 거래 유형 줄(제목이 이것 하나면 '새 매물 N건'으로 적는다) */
+/** 매매와 전월세 거래 유형 줄(제목이 이것 하나면 '새 매물 N건'으로 적는다) */
 const DEAL_ROWS: AlertRow[] = ['monthly', 'jeonse', 'short', 'sale'];
 const NOTICE_ROW: Record<NoticeSection, AlertRow> = { rent: 'rentNotices', trust: 'trustNotices', subscription: 'subscriptions', shop: 'shopNotices', land: 'landNotices' };
 
@@ -182,7 +182,7 @@ export const matchesAlert = (l: NormalizedListing, s: AlertSettings, areas: Area
 
 /**
  * 이 매물이 맞는 켜진 매물 알림 줄. aptGu: 서울 아파트 탭에서 고른 구의 아파트(그 구).
- * 고른 구의 아파트 경매·공매는 '경매' 줄에 맞지 않으면(반경 밖이거나 상한 넘음) '서울 아파트 경매' 줄로 센다(지역 반경 안만 설정과 상관없음).
+ * 고른 구의 아파트 경매와 공매는 '경매' 줄에 맞지 않으면(반경 밖이거나 상한 넘음) '서울 아파트 경매' 줄로 센다(지역 반경 안만 설정과 상관없음).
  */
 function matchingRows(l: NormalizedListing, s: AlertSettings, areas: Area[], aptGu?: string): AlertRow[] {
   const rows = nearRows(l, s, areas);
@@ -237,7 +237,7 @@ function countText(names: string[]): string {
 /**
  * 조회가 끝났을 때 띄울 알림. 켜 둔 알림 줄에 맞는 것만 센다.
  * 전월세(월세, 전세, 단기, 고시원과 쉐어, 임대 공고)와 매매 목적(매매, 경매, 공매 공고, 청약)을 따로 띄운다.
- * 제목은 줄마다 'N건'(줄이 매매·전월세 하나뿐이면 '월세 50만 이하 새 매물 3건'), 아래는 사이트별 수, 공고 곳별 수, 가격 변동, 실패.
+ * 제목은 줄마다 'N건'(줄이 매매와 전월세 하나뿐이면 '월세 50만 이하 새 매물 3건'), 아래는 사이트별 수, 공고 곳별 수, 가격 변동, 실패.
  * 새 임대 공고 중 켜 둔 지역 바로 근처일 가능성이 높은 것(near)은 제목에 '(근처 N)', 아래 첫 줄에 '근처 공고: 공고 제목'.
  * 가격 변동은 바뀐 뒤 가격이 켜 둔 줄에 맞는 매물만 센다. quiet면 새 소식이 없을 때 띄우지 않고,
  * 아니면 아무것도 없을 때 '조회 끝: 새 소식 없음'과 이번에 확인한 켜 둔 줄을 띄운다.

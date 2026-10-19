@@ -7,6 +7,9 @@ import { isNoOption } from '../filters';
 import { KIND_LABEL, kindOf } from '../kinds';
 import { isRoomStay, roomRange as rangeOf, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
+import { redevChip } from '../zones';
+import { loanView } from '../loans';
+import CountTooltip from './CountTooltip.vue';
 
 const props = defineProps<{
   listing: ListingView;
@@ -22,6 +25,11 @@ const emit = defineEmits<{ open: []; verdict: [Verdict | null]; source: []; raw:
 const l = computed(() => props.listing);
 const near = computed(() => nearest(props.listing, props.areas));
 const kind = computed(() => kindOf(props.listing));
+/** 정비사업 구역 안이면 물딱지 표시(지금 사면 조합원이 못 되는지와 판 사람 조건) */
+const redev = computed(() => redevChip(props.listing, kind.value === 'land'));
+/** 사는 매물이면 대출 신호등(디딤돌, 신생아 특례, 보금자리론)과 일반 주택담보대출 한도 */
+const loan = computed(() => loanView(props.listing));
+const eokText = (manwon: number) => `${manwon / 10000}억`;
 /** 경매(법원경매, 온비드)는 사진을 받지 않아 사진 칸을 두지 않는다. */
 const noThumb = computed(() => isAuction(l.value));
 /** 고시원과 쉐어: 면적, 관리비, 층을 주지 않는 곳이라 그 칸을 두지 않고, 유형은 종류 칩 하나로 보인다. */
@@ -44,7 +52,7 @@ const changeText = computed(() => {
   return { label, detail: `${before} → ${after}`, tone: c.type === 'price_down' ? 'chip-down' : c.type === 'price_up' ? 'chip-up' : 'chip-muted' };
 });
 
-/** 매물 값(경매는 최저가)이 같은 단지·전용면적 실거래 중간값보다 이만큼(%) 넘게 낮으면 초록으로 보인다(거래가 2건 이상일 때) */
+/** 매물 값(경매는 최저가)이 같은 단지, 전용면적 실거래 중간값보다 이만큼(%) 넘게 낮으면 초록으로 보인다(거래가 2건 이상일 때) */
 const BELOW_PCT = 5;
 /** 단지를 맞춘 방법 */
 const TRADE_BASIS: Record<TradeRef['basis'], string> = {
@@ -52,7 +60,7 @@ const TRADE_BASIS: Record<TradeRef['basis'], string> = {
   name: '같은 법정동에서 단지 이름이 같음',
   parcel: '네이버 단지 좌표로 찾은 필지 번지가 실거래 번지와 같음',
 };
-/** 아파트 경매·공매와 네이버 매매의 실거래 비교(같은 단지·같은 전용면적): 많이 낮으면 초록 이름표, 아니면 흐린 기준 값 */
+/** 아파트 경매와 공매와 네이버 매매의 실거래 비교(같은 단지, 같은 전용면적): 많이 낮으면 초록 이름표, 아니면 흐린 기준 값 */
 const tradeChip = computed(() => {
   const t = l.value.trade;
   if (!t) return null;
@@ -65,7 +73,7 @@ const tradeChip = computed(() => {
     `단지 맞춘 방법: ${TRADE_BASIS[t.basis]}. 전용면적은 0.5㎡ 안으로 같은 거래만 봤습니다.`,
     `이 ${auction ? '물건 최저가' : '매물 값'}는 중간값보다 ${pct}입니다. ${BELOW_PCT}% 넘게 낮고 거래가 2건 이상이면 초록으로 보입니다.`,
     auction ? '최저가는 입찰 시작 값이라 낙찰가는 보통 이보다 높습니다.' : '매물 값은 부르는 값(호가)입니다.',
-    '층·향·수리 상태는 따지지 않았고, 최근 한두 달 거래는 신고 기한(30일) 안이라 덜 들어왔을 수 있습니다.',
+    '층, 향, 수리 상태는 따지지 않았고, 최근 한두 달 거래는 신고 기한(30일) 안이라 덜 들어왔을 수 있습니다.',
   ].join('\n');
   if (t.count >= 2 && t.diffPct <= -BELOW_PCT) return { text: `${auction ? '최저가 ' : ''}실거래보다 ${Math.round(-t.diffPct)}% 낮음`, tone: 'chip-down', title };
   return { text: `실거래 중간 ${manwon(t.median)}`, tone: 'chip-muted', title };
@@ -195,6 +203,10 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 
       <div class="tags">
         <slot name="banner" />
+        <CountTooltip v-if="redev" :text="redev.tip" :max-width="480"><span class="chip redev-chip" :class="`chip-${redev.tone}`">{{ redev.label }}</span></CountTooltip>
+        <CountTooltip v-if="loan" :text="loan.tip" :max-width="500">
+          <span class="chip loan-chip"><span v-for="x in loan.lights" :key="x.id" class="loan" :class="x.state"><i class="ld" />{{ x.name }}</span><span v-if="loan.cap" class="loan-cap">주담대 {{ eokText(loan.cap) }}</span></span>
+        </CountTooltip>
         <span v-if="selected" class="selection-label">✓ 선택됨</span>
         <span v-if="l.isNew" class="chip chip-new">신규</span>
         <template v-if="changeText">
@@ -307,6 +319,15 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 
 .tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
 .trade-chip { cursor: help; }
+/* 대출 신호등: 초록 가격과 집 조건 맞음, 노랑 확인 필요, 빨강 안 됨 */
+.loan-chip { gap: 8px; background: var(--surface-2); color: var(--ink-2); font-weight: 600; }
+.loan { display: inline-flex; align-items: center; gap: 4px; }
+.ld { width: 8px; height: 8px; border-radius: 50%; background: #adb5bd; }
+.loan.ok .ld { background: #2f9e44; }
+.loan.maybe .ld { background: #f59f00; }
+.loan.no .ld { background: #e03131; }
+.loan.no { color: var(--muted); }
+.loan-cap { color: var(--ink-2); }
 .chip-room { background: var(--surface-2); color: var(--ink-2); }
 .change { font-size: 13px; color: var(--ink-2); }
 .title { flex: 1 1 0; min-width: 6em; margin-left: 4px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

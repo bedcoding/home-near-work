@@ -24,6 +24,7 @@ import RunHistory from './components/RunHistory.vue';
 import SitesTab from './components/SitesTab.vue';
 import SubscriptionsView from './components/SubscriptionsView.vue';
 import SupportView from './components/SupportView.vue';
+import FraudView from './components/FraudView.vue';
 import ZoneBanner from './components/ZoneBanner.vue';
 import { loadCatalog, setAreaEnabled, toggleStationArea, type CatalogStation } from './areaActions';
 import { aptKindOf } from './apt';
@@ -34,8 +35,8 @@ import { isPastNotice } from './notices';
 import { isRoomStay, sortRooms } from './rooms';
 import { siteLinks } from './siteLinks';
 
-type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'apt' | 'line' | 'market' | 'subs' | 'rooms' | 'notices' | 'support' | 'sites' | 'runs' | 'areas' | 'alerts';
-const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'apt', 'line', 'market', 'subs', 'rooms', 'notices', 'support', 'sites', 'runs', 'areas', 'alerts'];
+type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'apt' | 'line' | 'market' | 'subs' | 'rooms' | 'notices' | 'support' | 'fraud' | 'sites' | 'runs' | 'areas' | 'alerts';
+const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'apt', 'line', 'market', 'subs', 'rooms', 'notices', 'support', 'fraud', 'sites', 'runs', 'areas', 'alerts'];
 
 /** 머리 줄 높이(px). 필터 칸이 그 아래에 붙어 따라 내려온다(--app-header-height). */
 const headerEl = ref<HTMLElement | null>(null);
@@ -139,7 +140,7 @@ const current = computed(() => listings.value.filter((l) => l.status === 'active
 /** 켜진 지역 반경(+모을 때 여유) 안인지. 위치를 모르면 밖으로 본다. */
 const insideMargin = (l: ListingView) =>
   l.lat != null && l.lng != null && areas.value.some((a) => distanceM(a.lat, a.lng, l.lat!, l.lng!) <= a.radiusM + COLLECT_MARGIN_M);
-/** 서울 아파트 탭에서만 보는 매물: 서울 아파트 경매·공매·매매 중 켜진 지역 반경(+여유) 밖(고른 구라서 모은 것) */
+/** 서울 아파트 탭에서만 보는 매물: 서울 아파트 경매와 공매, 매매 중 켜진 지역 반경(+여유) 밖(고른 구라서 모은 것) */
 const farApt = (l: ListingView) => !!l.apt && aptKindOf(l) !== null && !insideMargin(l);
 /** 회사 근처 탭(매물, 경매, 집터, 고시원과 쉐어)에 보이는 매물: 먼 서울 아파트는 뺀다 */
 const nearCurrent = computed(() => current.value.filter((l) => !farApt(l)));
@@ -316,7 +317,7 @@ function plotSalesOf(kind: AuctionKind) {
 }
 /**
  * 집터 탭은 헐고 새로 지을 집과 땅이라 주인이 여럿인 지분 매각은 뺀다(경매 탭에는 '지분' 표시로 그대로 나온다).
- * 다가구·다중주택은 건축법상 단독주택이라 지분 매각이 아니면 주인이 한 명이어서 그대로 둔다.
+ * 다가구와 다중주택은 지분 매각이 아니면 주인이 한 명이라 그대로 둔다.
  */
 const plotAuctionsOf = (kind: AuctionKind) => auctionsBoth.value.filter((l) => inAuctionKind(l, kind));
 const plotAuctions = computed(() => plotAuctionsOf(plotKind.value).filter((l) => !l.auction?.share));
@@ -335,7 +336,7 @@ const plotKinds = computed(() => {
 });
 
 // ---------- 서울 아파트 ----------
-/** 서울 아파트 탭: 서울 아파트 경매·공매·매매 매물(고른 구라서 모은 먼 것과 회사 근처 것 모두). 필터는 탭 안에 따로 있다. */
+/** 서울 아파트 탭: 서울 아파트 경매와 공매, 매매 매물(고른 구라서 모은 먼 것과 회사 근처 것 모두). 필터는 탭 안에 따로 있다. */
 const aptAll = computed(() => current.value.filter((l) => !!l.apt && aptKindOf(l) !== null));
 /** 서울 아파트 탭에서 보이는 매물(화면 순서). 키보드 이동에 쓴다. */
 const aptVisible = ref<ListingView[]>([]);
@@ -850,7 +851,7 @@ const tabs = computed<{ id: Tab; label: string; count: number | null; news?: num
     id: 'apt', label: '서울 아파트', count: aptAll.value.length, news: aptAll.value.filter(hasNews).length,
     title: '고른 서울 구의 아파트 경매, 공매, 매매(회사와 멀어도). 세대수와 살 때 붙는 조건(실거주, 대출, 양도세)', main: true,
   },
-  { id: 'line', label: '노선', count: null, title: '지하철 노선을 따라 역마다 매매·전월세 매물 수와 중간값(켜진 지역은 그대로)', main: true },
+  { id: 'line', label: '노선', count: null, title: '지하철 노선을 따라 역마다 매매와 전월세 매물 수와 중간값(켜진 지역은 그대로)', main: true },
   {
     id: 'market', label: '시세 통계', count: null, title: '오르는 때와 내리는 때(KB 지수, 매수우위지수, 실거래 거래량), 구별 급지와 평당가', main: true,
   },
@@ -868,6 +869,7 @@ const tabs = computed<{ id: Tab; label: string; count: number | null; news?: num
     title: 'SH, LH, 고방 등의 청년과 공공 임대 모집 공고', main: true,
   },
   { id: 'support', label: '지원 제도', count: null, title: '전세 대출, 전세보증금 반환보증, 월세 지원 같은 국가와 서울시 제도', main: true },
+  { id: 'fraud', label: '사기 사례', count: null, title: '부동산 사기 수법과 실제 사례, 서류에서 보이는 곳, 당하면 생기는 일', main: true },
   { id: 'hidden', label: '숨김함', count: hidden.value.length },
   { id: 'runs', label: '조회 기록', count: null },
   { id: 'sites', label: '사이트', count: null, title: '수집처 체크리스트' },
@@ -891,6 +893,7 @@ const filterUse = computed<string[] | 'all'>(() => {
     case 'apt':
     case 'market':
     case 'support':
+    case 'fraud':
     case 'runs':
     case 'sites':
     case 'areas':
@@ -975,12 +978,11 @@ const emptyText: Partial<Record<Tab, string>> = {
           title="탭 하나만 조회" @click="runMenu = !runMenu"
         >▾</button>
         <div v-if="runMenu" class="open-menu run-menu">
-          <span class="menu-label">탭 하나만 조회</span>
+          <span class="menu-label" title="'조회하기'는 전부 돕니다. 네이버, 다방, 직방은 '한 번에 열기'로 크롬 확장이 모읍니다.">탭 하나만 조회</span>
           <button v-for="s in runScopes" :key="s.id" class="run-scope" :class="{ here: s.here }" :title="s.title || undefined" @click="runScope(s.id)">
             <span class="run-scope-name">{{ s.label }}<span v-if="s.here" class="here-chip">지금 탭</span></span>
             <span class="run-scope-what">{{ s.what }}</span>
           </button>
-          <p class="run-note">'조회하기'는 전부 돕니다. 네이버, 다방, 직방은 '한 번에 열기'로 크롬 확장이 모읍니다.</p>
         </div>
       </div>
       <div ref="moreMenuEl" class="more-menu">
@@ -1071,8 +1073,7 @@ const emptyText: Partial<Record<Tab, string>> = {
           </ListingCard>
           <p v-if="!currentList.length" class="empty muted">
             <template v-if="site === 'naver' && !listings.some((l) => l.source === 'naver')">
-              네이버 매물은 크롬 확장으로 받습니다. 네이버 부동산 지도에서 동그라미를 눌러 목록을 보시면 여기에 모입니다.<br />
-              지금까지 받은 화면 데이터 {{ state?.naverCapture.total ?? 0 }}건
+              <span title="네이버 매물은 크롬 확장으로 받습니다. 네이버 부동산 지도에서 동그라미를 눌러 목록을 보면 여기에 모입니다.">네이버 매물 없음, 받은 화면 데이터 {{ state?.naverCapture.total ?? 0 }}건</span>
             </template>
             <template v-else>{{ emptyText[tab] }}</template>
           </p>
@@ -1144,6 +1145,7 @@ const emptyText: Partial<Record<Tab, string>> = {
         :gus="state?.gus ?? []" :names="state?.nearNames ?? []" :inside="filters.insideAreas" @ack="ackNotices"
       />
       <SupportView v-else-if="tab === 'support'" @notices="tab = 'notices'" />
+      <FraudView v-else-if="tab === 'fraud'" />
       <RunHistory v-else-if="tab === 'runs'" :refresh-key="runsKey" />
       <SitesTab
         v-else-if="tab === 'sites' && state" :state="state" :links="links" :ext-ready="!!ext" :notices="notices" :notice-status="noticeStatus"
@@ -1180,10 +1182,9 @@ const emptyText: Partial<Record<Tab, string>> = {
   <div v-if="rawOf" class="overlay" @click.self="rawOf = null">
     <div class="dialog">
       <div class="dialog-head">
-        <h3>원본 데이터: {{ SOURCE_LABEL[rawOf.listing.source] }} {{ rawOf.listing.sourceId }}</h3>
+        <h3 title="사이트가 준 원래 값을 도구가 어떻게 바꿔 저장했는지입니다. 추정한 값은 설명에 적혀 있습니다.">원본 데이터: {{ SOURCE_LABEL[rawOf.listing.source] }} {{ rawOf.listing.sourceId }}</h3>
         <button class="btn btn-sm" @click="rawOf = null">닫기</button>
       </div>
-      <p class="muted small">사이트가 준 원래 값을 도구가 어떻게 바꿔 저장했는지입니다. 추정한 값은 설명에 적혀 있습니다.</p>
       <table class="explain">
         <thead><tr><th>항목</th><th>사이트가 준 값</th><th>저장한 값</th><th>설명</th></tr></thead>
         <tbody>
@@ -1193,7 +1194,7 @@ const emptyText: Partial<Record<Tab, string>> = {
             <td>{{ row.value }}</td>
             <td class="muted">{{ row.note ?? '' }}</td>
           </tr>
-          <tr v-if="!rawOf.explain.length"><td colspan="4" class="muted">이 매물은 설명표가 없습니다. 다음 조회 때 채워집니다.</td></tr>
+          <tr v-if="!rawOf.explain.length"><td colspan="4" class="muted" title="다음 조회 때 채워집니다">설명표 없음</td></tr>
         </tbody>
       </table>
       <details>
@@ -1267,7 +1268,6 @@ h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .run-scope-name { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; }
 .run-scope-what { font-size: 12px; color: var(--muted); }
 .here-chip { padding: 0 6px; border-radius: 999px; background: var(--surface); font-size: 11px; font-weight: 700; color: var(--accent); }
-.run-note { margin: 6px 0 0; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.5; color: var(--muted); }
 
 .progress {
   display: flex; align-items: center; gap: 14px; padding: 12px 24px;

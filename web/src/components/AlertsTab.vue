@@ -19,7 +19,7 @@ const props = defineProps<{
   noticeTime: string | null;
   /** 조회 중이면 창 띄우기를 못 바꾼다 */
   running: boolean;
-  /** 조회할 때 역·지역·구 사이에 쉬는 시간(초) */
+  /** 조회할 때 역, 지역, 구 사이에 쉬는 시간(초) */
   restSeconds: number;
 }>();
 const emit = defineEmits<{ changed: []; visible: [boolean]; autoTime: [string]; autoDay: [number | null]; noticeTime: [string] }>();
@@ -136,11 +136,11 @@ async function toggleFlag(key: Flag, event: Event) {
         </li>
         <li
           class="row"
-          title="집토스는 역 페이지 하나, 피터팬은 지역 하나, 고방·법원경매·온비드는 구 하나를 다 본 뒤 이만큼 쉬고 다음으로 넘어갑니다. 사이트와 이 컴퓨터에 요청이 한꺼번에 몰리지 않게 하는 것이고, 길게 할수록 조회가 오래 걸립니다."
+          title="집토스는 역 페이지 하나, 피터팬은 지역 하나, 고방, 법원경매, 온비드는 구 하나를 다 본 뒤 이만큼 쉬고 다음으로 넘어갑니다. 사이트와 이 컴퓨터에 요청이 한꺼번에 몰리지 않게 하는 것이고, 길게 할수록 조회가 오래 걸립니다."
         >
-          <strong class="name">역·지역·구 사이 쉬기</strong>
+          <strong class="name">역, 지역, 구 사이 쉬기</strong>
           <span class="fields">
-            <select class="time" :value="restSeconds" aria-label="역·지역·구 사이 쉬는 시간" @change="setRest">
+            <select class="time" :value="restSeconds" aria-label="역, 지역, 구 사이 쉬는 시간" @change="setRest">
               <option v-for="s in REST_CHOICES" :key="s" :value="s">{{ s ? `${s}초` : '안 쉼' }}</option>
             </select>
           </span>

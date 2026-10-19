@@ -3,9 +3,9 @@ import { computed, nextTick, ref } from 'vue';
 import type { ListingView } from '../../../shared/types';
 import { householdLookupUrl } from '../apt';
 
-// 서울 아파트 탭 카드의 세대수 칩. 세대수는 수집처 목록에 없어서 건축물대장에서 채우거나(경매·공매, 공공데이터포털 키가 있을 때)
+// 서울 아파트 탭 카드의 세대수 칩. 세대수는 수집처 목록에 없어서 건축물대장에서 채우거나(경매와 공매, 공공데이터포털 키가 있을 때)
 // 단지마다 한 번 직접 넣는다(같은 단지 물건에 같이 보임, 직접 넣은 값이 먼저).
-// 대장에서 읽은 것은 '1,200세대 · 3개 동 · 15층'(세대가 있는 동 수, 가장 높은 동 지상층수), 직접 넣은 것은 '1,200세대'.
+// 대장에서 읽은 것은 '1,200세대, 3개 동, 15층'(세대가 있는 동 수, 가장 높은 동 지상층수), 직접 넣은 것은 '1,200세대'.
 // 대장에서 못 찾았으면 '대장에서 못 찾음', 모르면 '세대수 넣기'. 누르면 그 자리에서 숫자 칸과 찾아보기 링크가 열린다. 빈칸으로 저장하면 직접 넣은 값을 지운다.
 
 const props = defineProps<{ listing: ListingView }>();
@@ -24,7 +24,7 @@ const label = computed(() => {
     if (r.buildings) parts.push(`${r.buildings}개 동`);
     if (r.floors) parts.push(`${r.floors}층`);
   }
-  return parts.join(' · ');
+  return parts.join(', ');
 });
 /** 칩에 마우스를 올리면 보이는 설명 */
 const title = computed(() => {

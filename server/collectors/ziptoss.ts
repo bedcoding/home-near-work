@@ -145,7 +145,7 @@ export const ziptoss: Collector = {
         .waitForFunction(() => Array.from(document.querySelectorAll('ul li')).filter((li) => /㎡/.test((li as HTMLElement).innerText)).length > 3, null, { timeout: 10000 })
         .catch(() => {});
 
-      // 위쪽 카드(ul > li)는 링크 없이 클릭으로 열리므로 면적·가격으로 짝을 짓고, 아래쪽 표는 매물 링크로 짝을 짓는다.
+      // 위쪽 카드(ul > li)는 링크 없이 클릭으로 열리므로 면적, 가격으로 짝을 짓고, 아래쪽 표는 매물 링크로 짝을 짓는다.
       const summaries = listings.map((l) => ({
         id: l.sourceId,
         key: ziptossKey(l.sourceId),
