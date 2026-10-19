@@ -132,11 +132,13 @@ function tiersOf(gus: string[], price: MarketChart): MarketView['tiers'] {
     .map(({ gu, list }) => {
       const dongs = new Map<string, store.AptTradeRow[]>();
       for (const r of list) dongs.set(r.dong, [...(dongs.get(r.dong) ?? []), r]);
+      const p84 = list.filter((r) => r.area_m2 >= 84 && r.area_m2 < 85).map((r) => r.price);
       return {
         gu,
         count: list.length,
         pyeong: perPy(list),
-        price84: Math.round(median(list.map((r) => r.price / r.area_m2))! * 84),
+        median84: p84.length ? Math.round(median(p84)!) : null,
+        count84: p84.length,
         median: Math.round(median(list.map((r) => r.price))!),
         change: changeOf.get(gu) ?? { y1: null, y5: null, y10: null },
         near: gus.includes(gu),
