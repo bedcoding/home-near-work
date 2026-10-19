@@ -463,7 +463,7 @@ export interface ListingView extends NormalizedListing {
   apt: AptInfo | null;
   /** 경매·공매(단독주택 갈래, 토지, 아파트, 빌라)나 네이버 서울 아파트 매매면 재개발 구역 확인 정보(PlotZone). 아니면 null. */
   zone: PlotZone | null;
-  /** 서울 아파트 매매(네이버)와 경매·공매면 같은 단지·같은 면적의 국토부 실거래 비교(TradeRef, 경매·공매는 최저가로). 못 찾았으면 null. */
+  /** 서울 아파트 경매·공매면 같은 지번·같은 전용면적의 국토부 실거래 비교(TradeRef). 그런 거래가 없거나 다른 매물이면 null. */
   trade: TradeRef | null;
 }
 
@@ -615,20 +615,19 @@ export interface PlotZone {
 }
 
 /**
- * 아파트 매물(매매가, 경매·공매는 최저가)과 같은 단지·같은 전용면적(±2㎡)의 국토부 실거래 비교. 금액은 만원, 날짜는 YYYY-MM-DD.
- * complex: 실거래 쪽 단지명, basis: 단지를 찾은 방법(jibun 번지: 경매·공매는 주소 지번, 네이버는 단지 좌표로 찾은 필지, name 같은 법정동의 단지명),
- * months: 비교한 기간(최근 6개월에 3건 이상이면 6, 아니면 12), count·median·min·max: 그 기간 거래 수와 중간값·최저·최고,
- * latest: 같은 면적 가장 최근 거래, diffPct: 매물 가격이 중간값보다 몇 % 높은지(음수면 낮음).
+ * 경매·공매 아파트의 최저가와, 주소 지번이 같고 전용면적이 소수 둘째 자리까지 같은 국토부 실거래의 비교. 금액은 만원, 날짜는 YYYY-MM-DD.
+ * complex: 실거래 쪽 단지명, jibun: 맞춘 지번('노원구 상계동 1234'), months: 비교한 기간(최근 6개월에 3건 이상이면 6, 아니면 12),
+ * count·median·min·max: 그 기간 거래 수와 중간값·최저·최고, latest: 가장 최근 거래, diffPct: 최저가가 중간값보다 몇 % 높은지(음수면 낮음).
  */
 export interface TradeRef {
   complex: string;
-  basis: 'jibun' | 'name';
+  jibun: string;
   months: 6 | 12;
   count: number;
   median: number;
   min: number;
   max: number;
-  latest: { date: string; price: number; floor: number | null; areaM2: number } | null;
+  latest: { date: string; price: number; floor: number | null; areaM2: number };
   diffPct: number;
 }
 

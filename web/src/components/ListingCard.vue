@@ -44,25 +44,23 @@ const changeText = computed(() => {
   return { label, detail: `${before} → ${after}`, tone: c.type === 'price_down' ? 'chip-down' : c.type === 'price_up' ? 'chip-up' : 'chip-muted' };
 });
 
-/** 매매가가 같은 단지·면적 실거래 중간값보다 이만큼(%) 이상 낮으면 '실거래보다 낮음'으로 보인다(거래가 2건 이상일 때) */
+/** 최저가가 같은 지번·전용면적 실거래 중간값보다 이만큼(%) 넘게 낮으면 초록으로 보인다(거래가 2건 이상일 때) */
 const BELOW_PCT = 5;
 /** 큰 금액을 짧게('23.9억', 1억이 안 되면 '9,000만') */
 const eok = (x: number) => (x >= 10000 ? `${(x / 10000).toFixed(1)}억` : manwon(x));
-/** 아파트 실거래 비교(네이버 매매가, 경매·공매 최저가): 낮으면 초록 이름표, 아니면 흐린 기준 값 */
+/** 경매·공매 아파트의 실거래 비교(같은 지번·같은 전용면적만): 많이 낮으면 초록 이름표, 아니면 흐린 기준 값 */
 const tradeChip = computed(() => {
   const t = l.value.trade;
   if (!t) return null;
   const pct = `${t.diffPct > 0 ? '+' : ''}${t.diffPct.toFixed(1)}%`;
-  const auction = isAuction(l.value);
   const title = [
-    `같은 단지(${t.complex})·같은 전용면적(±2㎡)의 최근 ${t.months}개월 국토부 실거래 ${t.count}건: 중간값 ${manwon(t.median)}(${manwon(t.min)} ~ ${manwon(t.max)})`,
-    t.latest ? `가장 최근 거래: ${t.latest.date.replace(/-/g, '.')} ${manwon(t.latest.price)}, ${t.latest.areaM2}㎡${t.latest.floor != null ? `, ${t.latest.floor}층` : ''}` : '',
-    `이 ${auction ? '물건 최저가' : '매물 값'}는 중간값보다 ${pct}입니다. ${BELOW_PCT}% 넘게 낮고 거래가 2건 이상이면 '실거래보다 낮음'으로 보입니다.`,
-    t.basis === 'jibun' ? `단지는 ${auction ? '주소 지번으로' : '네이버 단지 좌표로 찾은 필지의 번지로'} 맞췄습니다.` : '단지는 같은 법정동의 단지 이름으로 맞췄습니다.',
-    auction ? '최저가는 입찰 시작 값이라 낙찰가는 보통 이보다 높습니다. 층·향·수리 상태는 따지지 않았습니다.' : '매물 값은 부르는 값(호가)이고, 층·향·수리 상태는 따지지 않았습니다.',
-    '최근 한두 달 거래는 신고가 덜 들어왔을 수 있습니다.',
-  ].filter(Boolean).join('\n');
-  if (t.count >= 2 && t.diffPct <= -BELOW_PCT) return { text: `${auction ? '최저가 ' : ''}실거래보다 ${Math.round(-t.diffPct)}% 낮음`, tone: 'chip-down', title };
+    `국토부 실거래 중 지번(${t.jibun})과 전용면적(${t.latest.areaM2}㎡)이 이 물건과 같은 거래만 봤습니다(단지명 ${t.complex}).`,
+    `최근 ${t.months}개월 ${t.count}건: 중간값 ${manwon(t.median)}(${manwon(t.min)} ~ ${manwon(t.max)})`,
+    `가장 최근 거래: ${t.latest.date.replace(/-/g, '.')} ${manwon(t.latest.price)}${t.latest.floor != null ? `, ${t.latest.floor}층` : ''}`,
+    `최저가는 이 중간값보다 ${pct}입니다. ${BELOW_PCT}% 넘게 낮고 거래가 2건 이상이면 초록으로 보입니다.`,
+    '최저가는 입찰 시작 값이라 낙찰가는 보통 이보다 높습니다. 층·향·수리 상태는 따지지 않았고, 최근 한두 달 거래는 신고 기한(30일) 안이라 덜 들어왔을 수 있습니다.',
+  ].join('\n');
+  if (t.count >= 2 && t.diffPct <= -BELOW_PCT) return { text: `최저가 실거래보다 ${Math.round(-t.diffPct)}% 낮음`, tone: 'chip-down', title };
   return { text: `실거래 중간 ${eok(t.median)}`, tone: 'chip-muted', title };
 });
 
