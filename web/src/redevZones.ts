@@ -27,8 +27,13 @@ function readOn() {
 
 export const zones = ref<RedevZonesView | null>(null);
 export const zonesOn = ref(readOn());
+/** ZIP을 읽는 중 */
 export const zonesBusy = ref(false);
+/** 열린데이터광장에서 새 파일을 확인하는 중 */
+export const zonesChecking = ref(false);
 export const zonesError = ref<string | null>(null);
+/** 마지막 '새 파일 확인' 결과 글 */
+export const zonesMessage = ref<string | null>(null);
 watch(zonesOn, (on) => {
   try {
     localStorage.setItem(KEY, on ? 'on' : 'off');
@@ -55,6 +60,23 @@ export function loadZones(): Promise<void> {
       loading = null;
     });
   return loading;
+}
+
+/** 열린데이터광장의 최신판을 보고 새것이면 받아 바꾼다(1~2분 걸릴 수 있음). */
+export async function checkZonesNow() {
+  zonesChecking.value = true;
+  zonesError.value = null;
+  zonesMessage.value = null;
+  try {
+    const { message, ...view } = await api.updateRedevZones();
+    zones.value = view;
+    zonesMessage.value = message;
+    zonesOn.value = true;
+  } catch (e) {
+    zonesError.value = `새 파일 확인 실패: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    zonesChecking.value = false;
+  }
 }
 
 /** 서울플랜+ ZIP을 넣고 새 구역으로 바꾼다. */

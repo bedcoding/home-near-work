@@ -8,7 +8,9 @@ import { KIND_LABEL, kindOf } from '../kinds';
 import { isRoomStay, roomRange, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
 import { manwon, perPyeong, priceText, pyeong } from '../format';
-import { loadZones, uploadZones, ZONE_COLOR, ZONE_GROUPS, ZONE_SOURCE_URL, zones, zonesBusy, zonesError, zonesOn } from '../redevZones';
+import {
+  checkZonesNow, loadZones, uploadZones, ZONE_COLOR, ZONE_GROUPS, ZONE_SOURCE_URL, zones, zonesBusy, zonesChecking, zonesError, zonesMessage, zonesOn,
+} from '../redevZones';
 import type { RedevZoneFeature } from '../../../shared/types';
 
 // 매물 탭 오른쪽 지도와 경매 탭, 고시원과 쉐어 탭의 지도가 같이 쓴다.
@@ -243,6 +245,12 @@ function drawZones() {
     },
   };
   zoneLayer = L.geoJSON(list as unknown as GeoJSON.FeatureCollection['features'], options).addTo(map);
+}
+
+/** ISO 시각 → 이 컴퓨터 날짜 'M.D' */
+function monthDay(iso: string) {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}.${d.getDate()}`;
 }
 
 function pickZoneFile() {
@@ -495,7 +503,14 @@ onBeforeUnmount(() => {
       <span><i class="pick-sample"></i>찍은 지역: 누르면 끄기</span>
       <template v-if="zonesOn && zones?.count">
         <span v-for="g in ZONE_GROUPS" :key="g.id"><i class="zone-sample" :style="{ background: `${g.color}33`, borderColor: g.color }"></i>{{ g.name }}</span>
-        <span class="zone-src" :title="`서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보'(OA-22712)${zones.fileName ? `, 넣은 파일 ${zones.fileName}` : ''}. 준공·입주중·후보지철회 ${zones.skipped.done}곳과 역세권·도시개발 같은 다른 사업 ${zones.skipped.other}곳은 뺐습니다. 점선 테두리는 넓은 구역(재정비촉진지구, 모아타운, 존치관리구역)입니다.`">
+        <span
+          class="zone-src"
+          :title="[
+            `서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보'(OA-22712)${zones.fileName ? `, 파일 ${zones.fileName}` : ''}${zones.seq ? ` (${zones.seq}번 파일)` : ''}.`,
+            `준공·입주중·후보지철회 ${zones.skipped.done}곳과 역세권·도시개발 같은 다른 사업 ${zones.skipped.other}곳은 뺐습니다. 점선 테두리는 넓은 구역(재정비촉진지구, 모아타운, 존치관리구역)입니다.`,
+            `새 파일은 조회할 때 7일마다 확인합니다${zones.check ? `(마지막 ${monthDay(zones.check.at)}: ${zones.check.text})` : ''}.`,
+          ].join('\n')"
+        >
           정비구역 {{ zones.count.toLocaleString('ko-KR') }}곳, 서울시 {{ zones.fileDate?.replace(/-/g, '.') ?? '' }} 기준
         </span>
       </template>
@@ -509,14 +524,19 @@ onBeforeUnmount(() => {
       </label>
       <template v-if="zonesOn">
         <span v-if="zonesBusy" class="zone-note">파일 읽는 중…</span>
+        <span v-else-if="zonesChecking" class="zone-note">서울시 새 파일 확인 중…(1~2분)</span>
         <template v-else-if="zones && !zones.count">
+          <button class="btn btn-sm" title="서울 열린데이터광장의 최신 서울플랜+ 파일을 받아 넣습니다(조회할 때도 7일마다 알아서 확인)" @click="checkZonesNow">서울시 파일 자동으로 받기</button>
           <span class="zone-note">
-            <a :href="ZONE_SOURCE_URL" target="_blank" rel="noopener" title="서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보'(OA-22712)에서 ZIP을 받습니다">서울시 파일 받기 ↗</a>
-            한 뒤
+            안 되면 <a :href="ZONE_SOURCE_URL" target="_blank" rel="noopener" title="서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보'(OA-22712)에서 ZIP을 받습니다">직접 받아 ↗</a>
           </span>
-          <button class="btn btn-sm" @click="pickZoneFile">ZIP 넣기</button>
+          <button type="button" class="zone-change" @click="pickZoneFile">ZIP 넣기</button>
         </template>
-        <button v-else-if="zones" type="button" class="zone-change" title="새로 받은 서울플랜+ ZIP으로 바꿉니다" @click="pickZoneFile">파일 바꾸기</button>
+        <template v-else-if="zones">
+          <button type="button" class="zone-change" title="서울 열린데이터광장에 새 판이 있으면 받아 바꿉니다(조회할 때도 7일마다 알아서 확인)" @click="checkZonesNow">새 파일 확인</button>
+          <button type="button" class="zone-change" title="직접 받은 서울플랜+ ZIP으로 바꿉니다" @click="pickZoneFile">파일 바꾸기</button>
+        </template>
+        <span v-if="zonesMessage && !zonesChecking" class="zone-note">{{ zonesMessage }}</span>
         <span v-if="zonesError" class="zone-note err" role="alert">{{ zonesError }}</span>
       </template>
       <input ref="fileEl" type="file" accept=".zip,application/zip" hidden @change="onZoneFile">

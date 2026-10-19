@@ -21,6 +21,7 @@ import {
 import { learnFromStoredCaptures, withLinkHints } from './link-hints.js';
 import { acceptNoticeFiles, noticeFileViews } from './notice-files.js';
 import { importRedevZones, redevZones } from './redev-zones.js';
+import { updateZonesNow, zoneFileCheckState } from './redev-zones-update.js';
 import { getProgress, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
 import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, withTrustFacts } from './views.js';
@@ -191,14 +192,24 @@ app.get('/api/market', async () => buildMarketView(gusFor(store.enabledAreas()))
 
 // 지도에 칠하는 정비사업 구역: 서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보' ZIP을 본문 그대로 받아 바꿔 둔다.
 app.addContentTypeParser(['application/zip', 'application/x-zip-compressed', 'application/octet-stream'], { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
-app.get('/api/redev-zones', async () => redevZones());
+app.get('/api/redev-zones', async () => ({ ...redevZones(), check: zoneFileCheckState() }));
+/** 지도 아래 '새 파일 확인': 열린데이터광장 최신판을 보고 새것이면 받아 바꾼다. message는 결과 글. */
+app.post('/api/redev-zones/update', async (_req, reply) => {
+  try {
+    const { text, view } = await updateZonesNow();
+    return { ...view, check: zoneFileCheckState(), message: text };
+  } catch (e) {
+    reply.code(502);
+    return { error: e instanceof Error ? e.message.split('\n')[0] : String(e) };
+  }
+});
 app.post<{ Querystring: { name?: string } }>('/api/redev-zones', { bodyLimit: 60 * 1024 * 1024 }, async (req, reply) => {
   if (!Buffer.isBuffer(req.body)) {
     reply.code(400);
     return { error: 'ZIP 파일을 보내 주세요.' };
   }
   try {
-    return importRedevZones(new Uint8Array(req.body), typeof req.query.name === 'string' ? req.query.name.slice(0, 200) : null);
+    return { ...importRedevZones(new Uint8Array(req.body), typeof req.query.name === 'string' ? req.query.name.slice(0, 200) : null), check: zoneFileCheckState() };
   } catch (e) {
     reply.code(400);
     return { error: e instanceof Error ? e.message : String(e) };
