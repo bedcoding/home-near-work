@@ -12,6 +12,7 @@ import { APT_TRADES_SOURCE, aptRecentDue, aptTradesDue, collectAptTrades } from 
 import { collectKbStats, KB_SOURCE, kbStatsDue } from './kb-stats.js';
 import { fillHouseholds, REGISTRY_SOURCE, registryKey } from './building-register.js';
 import { checkZones, vworldKey, ZONE_SOURCE } from './land-zones.js';
+import { updateZonesWith, ZONES_SOURCE, zoneUpdateDue } from './redev-zones-update.js';
 import { distanceM, nearestArea } from './geo.js';
 import { comparePrices, identityKey, priceSignature } from './identity.js';
 import { notify } from './notify.js';
@@ -436,6 +437,15 @@ async function execute(
         log(`${APT_TRADES_SOURCE}: ${await collectAptTrades(record, fullData ? { maxYears: 2 } : { recent: true, maxYears: 0 })}`);
       } catch (e) {
         log(`${APT_TRADES_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      }
+    }
+    // 정비구역 지도 파일(서울플랜+)의 새 판: 마지막 확인에서 7일(실패했으면 하루)이 지났으면 조회용 브라우저로 본다(경매 범위도).
+    if (!state.stopping && auctionData && zoneUpdateDue()) {
+      try {
+        const record = (url: string, status: number | null, note: string) => store.addRequest(runId, ZONES_SOURCE, 'data', url, status, note);
+        log(`${ZONES_SOURCE}: ${(await updateZonesWith(session.context, record)).text}`);
+      } catch (e) {
+        log(`${ZONES_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
     // 법원경매나 온비드를 돈 조회는 공공데이터포털 키가 있으면 아파트 단지 세대수를 건축물대장에서 채운다(아직 안 본 단지만).
