@@ -32,6 +32,11 @@ export const api = {
   createArea: (area: Omit<Area, 'id'>) => request<Area>('POST', '/api/areas', area),
   updateArea: (id: number, patch: Partial<Omit<Area, 'id'>>) => request<Area>('PUT', `/api/areas/${id}`, patch),
   deleteArea: (id: number) => request('DELETE', `/api/areas/${id}`),
+  /** 노선 역을 켜고 끈다(mode: only 그 노선만, add 더하기, off 끄기). 없는 역은 radiusM으로 만든다. */
+  areaLine: (line: string, mode: 'only' | 'add' | 'off', radiusM: number) =>
+    request<{ areas: Area[]; text: string }>('POST', '/api/areas/line', { line, mode, radiusM }),
+  /** 노선으로 바꾸기 전에 켜 둔 지역으로 되돌린다. */
+  restoreAreas: () => request<{ areas: Area[]; text: string }>('POST', '/api/areas/restore'),
   /** 고를 수 있는 역 전체(수도권 전철역, 좌표, 노선, 시도, 구 포함). */
   stationCatalog: () =>
     request<{ source: string; baseDate: string; stations: (Station & { lines: string[]; sido: string; gu: string | null })[] }>('GET', '/api/stations/catalog'),

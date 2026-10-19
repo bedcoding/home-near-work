@@ -21,6 +21,7 @@ import {
 import { learnFromStoredCaptures, withLinkHints } from './link-hints.js';
 import { acceptNoticeFiles, noticeFileViews } from './notice-files.js';
 import { importRedevZones, redevZones } from './redev-zones.js';
+import { applyLine, areaRestoreState, restoreAreas, type LineMode } from './line-areas.js';
 import { updateZonesNow, zoneFileCheckState } from './redev-zones-update.js';
 import { getProgress, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
@@ -76,6 +77,7 @@ app.get('/api/state', async (): Promise<AppState> => {
     aptGus: store.aptGus(),
     householdsFill: householdsFillState(),
     zoneCheck: zoneCheckState(),
+    areaRestore: areaRestoreState(),
   };
 });
 
@@ -286,6 +288,36 @@ app.post<{ Body: Omit<Area, 'id'> }>('/api/areas', async (req, reply) => {
   return store.createArea({ name, lat, lng, radiusM, enabled: enabled ?? true });
 });
 
+/**
+ * 지역 탭 '노선으로 보기': 노선(line, 예 '2호선') 역을 mode(only 그 노선만, add 더하기, off 끄기)로 켜고 끈다.
+ * 없는 역은 radiusM(300~2500m, 처음 500m)으로 만든다. 바뀐 지역 목록과 결과 한 줄을 돌려준다.
+ */
+app.post<{ Body: { line?: unknown; mode?: unknown; radiusM?: unknown } | null }>('/api/areas/line', async (req, reply) => {
+  const line = typeof req.body?.line === 'string' ? req.body.line : '';
+  const mode = req.body?.mode;
+  const radiusM = Number(req.body?.radiusM ?? 500);
+  if (!line || (mode !== 'only' && mode !== 'add' && mode !== 'off') || !(radiusM >= 300 && radiusM <= 2500)) {
+    reply.code(400);
+    return { error: '노선, 켜는 방법(only, add, off), 반경(300~2500m)이 필요합니다.' };
+  }
+  try {
+    return applyLine(line, mode as LineMode, Math.round(radiusM));
+  } catch (e) {
+    reply.code(400);
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+/** 노선으로 바꾸기 전에 켜 둔 지역으로 되돌린다. */
+app.post('/api/areas/restore', async (_req, reply) => {
+  try {
+    return restoreAreas();
+  } catch (e) {
+    reply.code(400);
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
 app.put<{ Params: { id: string }; Body: Partial<Omit<Area, 'id'>> }>('/api/areas/:id', async (req, reply) => {
   const area = store.updateArea(Number(req.params.id), req.body ?? {});
   if (!area) {
@@ -342,9 +374,10 @@ app.put<{ Body: { areas?: unknown } }>('/api/areas', async (req, reply) => {
   }));
   const valid = (a: NonNullable<typeof list>[number]) =>
     !!a.name && Math.abs(a.lat) <= 90 && Math.abs(a.lng) <= 180 && a.radiusM >= 100 && a.radiusM <= 5000;
-  if (!list || list.length > 30 || !list.every(valid)) {
+  // 노선 하나를 켜면 역이 75곳(1호선)까지 되므로 넉넉히 받는다.
+  if (!list || list.length > 150 || !list.every(valid)) {
     reply.code(400);
-    return { error: '지역 목록이 올바르지 않습니다(이름, 좌표, 반경 100~5000m, 30곳까지).' };
+    return { error: '지역 목록이 올바르지 않습니다(이름, 좌표, 반경 100~5000m, 150곳까지).' };
   }
   return { areas: store.replaceAreas(list), areasUpdatedAt: store.areasUpdatedAt() };
 });

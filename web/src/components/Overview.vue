@@ -131,6 +131,14 @@ const areaChips = computed(() => ({
   })),
 }));
 const allAreas = computed(() => !props.areas.some((a) => props.filters.areaIds.includes(a.id)));
+/** 지역이 이보다 많으면(노선 하나를 켠 때 등) 칸 대신 고르기 상자로 보인다(매물이 많은 지역 먼저). */
+const AREA_CHIP_MAX = 10;
+const areaOptions = computed(() => [...areaChips.value.list].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ko')));
+const pickedArea = computed(() => (props.filters.areaIds.length === 1 ? String(props.filters.areaIds[0]) : ''));
+function pickArea(event: Event) {
+  const v = (event.target as HTMLSelectElement).value;
+  emit('areas', v ? [Number(v)] : []);
+}
 
 // ---------- 거래 유형 ----------
 // 고른 거래 유형은 왼쪽 필터의 거래 유형과 같은 값이다. 카드를 누르면 필터도 그 하나로 바뀌고(deals 이벤트),
@@ -428,12 +436,18 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
       <button class="area-chip" :class="{ on: allAreas }" role="tab" :aria-selected="allAreas" @click="emit('areas', [])">
         모든 지역 <span class="num">{{ areaChips.all }}</span>
       </button>
-      <button
-        v-for="a in areaChips.list" :key="a.id" class="area-chip" :class="{ on: a.on }" role="tab"
-        :aria-selected="a.on" @click="emit('areas', [a.id])"
-      >
-        {{ a.label }} <span class="num">{{ a.count }}</span>
-      </button>
+      <template v-if="areaChips.list.length <= AREA_CHIP_MAX">
+        <button
+          v-for="a in areaChips.list" :key="a.id" class="area-chip" :class="{ on: a.on }" role="tab"
+          :aria-selected="a.on" @click="emit('areas', [a.id])"
+        >
+          {{ a.label }} <span class="num">{{ a.count }}</span>
+        </button>
+      </template>
+      <select v-else class="area-pick" :class="{ on: !allAreas }" :value="pickedArea" aria-label="지역 하나만 보기" @change="pickArea">
+        <option value="">지역 하나만 보기 ({{ areaChips.list.length }}곳)</option>
+        <option v-for="a in areaOptions" :key="a.id" :value="String(a.id)">{{ a.label }} · {{ a.count }}건</option>
+      </select>
     </div>
 
     <div class="deals" role="tablist" aria-label="거래 유형">
@@ -550,6 +564,11 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 .area-chip:hover { border-color: var(--ink-2); }
 .area-chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .area-chip .num { font-weight: 600; opacity: .8; }
+.area-pick {
+  min-height: 40px; max-width: 100%; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--surface); font: inherit; font-size: 14px; font-weight: 700; color: var(--ink-2);
+}
+.area-pick.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .bands { display: grid; gap: 8px; }
 .band { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); transition: box-shadow .12s; }
 .band.open { border-color: var(--line-strong); }
