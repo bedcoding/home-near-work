@@ -109,6 +109,21 @@ const SOURCE_SECTIONS: Record<NoticeSourceId, NoticeSection[]> = {
 export const noticeSourcesOf = (section: NoticeSection) =>
   (Object.keys(SOURCE_SECTIONS) as NoticeSourceId[]).filter((s) => SOURCE_SECTIONS[s].includes(section));
 
+/** 탭 하나만 조회하는 범위(조회하기 옆 ▾ 메뉴, 경매 탭의 '경매 조회하기') */
+export type RunScope = 'home' | 'auction' | 'room' | 'rent' | 'subscription';
+
+/**
+ * 범위마다 도는 매물 사이트(sources)와 공고 탭(sections, 그 탭에 공고가 보일 수 있는 곳을 모두 돈다). tabs는 그 범위가 채우는 탭.
+ * 네이버, 다방, 직방은 크롬 확장이 모으므로 어느 범위에도 들지 않는다.
+ */
+export const RUN_SCOPES: { id: RunScope; label: string; tabs: string[]; sources: SourceId[]; sections: NoticeSection[] }[] = [
+  { id: 'home', label: '매물', tabs: ['overview'], sources: ['ziptoss', 'peterpanz', 'gobang'], sections: [] },
+  { id: 'auction', label: '경매·집터·서울 아파트', tabs: ['auction', 'plot', 'apt'], sources: ['courtauction', 'onbid'], sections: ['trust', 'shop', 'land'] },
+  { id: 'room', label: '고시원과 쉐어', tabs: ['rooms'], sources: ['gobang', 'betterliving', 'mangrove', 'celib'], sections: [] },
+  { id: 'rent', label: '임대 공고', tabs: ['notices'], sources: [], sections: ['rent'] },
+  { id: 'subscription', label: '청약', tabs: ['subs'], sources: [], sections: ['subscription'] },
+];
+
 /** 청약홈은 종류에 '임대'가 있으면 임대 공고, LH 선착순 계약은 종류(선착순 토지, 상가, 분양주택, 그 밖의 임대)로 나눈다. */
 export function noticeSection(n: { source: NoticeSourceId; kind: string | null }): NoticeSection {
   const kind = n.kind ?? '';
@@ -755,6 +770,8 @@ export interface RunInfo {
   auto: boolean;
   /** 공고만 확인한 조회(매물 사이트는 안 돎) */
   noticesOnly: boolean;
+  /** 탭 하나만 돈 조회의 범위(RUN_SCOPES), 전부 돈 조회면 null */
+  scope: RunScope | null;
   summary: RunSummary | null;
   error: string | null;
 }

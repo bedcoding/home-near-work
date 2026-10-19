@@ -8,7 +8,7 @@ import { COLLECT_MARGIN_M } from './config.js';
 import { collectCourtResults, courtResultsDue } from './court-results.js';
 import * as store from './db.js';
 import { collectHouseTrades, HOUSE_TRADES_SOURCE, houseTradesDue } from './house-trades.js';
-import { APT_TRADES_SOURCE, aptTradesDue, collectAptTrades } from './apt-trades.js';
+import { APT_TRADES_SOURCE, aptRecentDue, aptTradesDue, collectAptTrades } from './apt-trades.js';
 import { collectKbStats, KB_SOURCE, kbStatsDue } from './kb-stats.js';
 import { fillHouseholds, REGISTRY_SOURCE, registryKey } from './building-register.js';
 import { checkZones, vworldKey, ZONE_SOURCE } from './land-zones.js';
@@ -17,42 +17,41 @@ import { comparePrices, identityKey, priceSignature } from './identity.js';
 import { notify } from './notify.js';
 import { priceText } from '../shared/format.js';
 import {
-  inGus, listingSection, nearReason, noticeSection, noticeSourcesOf, regionalSection, SEOUL_GUS,
-  type Area, type NormalizedListing, type NoticeSection, type RunProgress, type RunSourceSummary, type RunSummary, type SourceId,
+  inGus, listingSection, nearReason, noticeSection, noticeSourcesOf, regionalSection, RUN_SCOPES, SEOUL_GUS,
+  type Area, type NormalizedListing, type RunProgress, type RunScope, type RunSourceSummary, type RunSummary, type SourceId,
 } from '../shared/types.js';
-
-/** 경매 탭에 보이는 공고(신탁 공매, LH 상가와 토지). '경매 조회하기'가 같이 돈다. */
-const AUCTION_TAB_SECTIONS: NoticeSection[] = ['trust', 'shop', 'land'];
 
 let current: (RunProgress & { log: string[]; session: BrowserSession | null }) | null = null;
 
 export const getProgress = (): RunProgress | null =>
   current ? { runId: current.runId, message: current.message, log: current.log.slice(-300), stopping: current.stopping } : null;
 
+/** 조회 범위(scope, 없으면 전부)에서 돌 매물 사이트와 공고 곳. 공고만 확인은 매물 사이트 없이 공고 전부. */
+export function runPlan(scope: RunScope | undefined, noticesOnly: boolean) {
+  const def = noticesOnly ? undefined : RUN_SCOPES.find((s) => s.id === scope);
+  const collectors = noticesOnly ? [] : def ? COLLECTORS.filter((c) => def.sources.includes(c.id)) : COLLECTORS;
+  const notices = def ? NOTICE_COLLECTORS.filter((nc) => def.sections.some((s) => noticeSourcesOf(s).includes(nc.id))) : NOTICE_COLLECTORS;
+  return { def, collectors, notices };
+}
+
 /**
- * 조회를 시작한다. sources를 주면 그 사이트만 돈다(없으면 전부).
- * 공고는 전부 돌 때 모두, 법원경매만 돌 때는 같은 경매 탭에 보이는 공고(신탁 공매, LH 상가와 토지)만 돈다.
+ * 조회를 시작한다. scope를 주면 그 탭에 보이는 매물 사이트와 공고만 돈다(RUN_SCOPES, 없으면 전부).
  * auto: 자동 확인으로 시작한 조회(조회 기록의 방식 '자동').
  * quiet: 끝나면 새 소식이나 실패가 있을 때만 알림을 띄운다(아니면 새 소식이 없어도 '조회 끝: 새 소식 없음'을 띄움).
  * noticesOnly: 매물 사이트는 돌지 않고 공고만 모은다(법원경매 매각 결과를 모은 지 오래됐으면 그것도). 켜 둔 지역 바로 근처일
  * 가능성이 높은 새 임대 공고만 바로 알리고, 나머지 새 공고는 미뤄 두었다가 다음 알림(공고만 확인이 아닌 조회)에 넣는다.
  */
-export function startRun(visible: boolean, sources?: SourceId[], options: { auto?: boolean; quiet?: boolean; noticesOnly?: boolean } = {}): number {
+export function startRun(visible: boolean, scope?: RunScope, options: { auto?: boolean; quiet?: boolean; noticesOnly?: boolean } = {}): number {
   if (current) throw new Error('이미 조회 중입니다.');
   const areas = store.enabledAreas();
   if (areas.length === 0) throw new Error('켜진 지역이 없습니다. 지역 탭에서 하나 이상 켜 주세요.');
   const noticesOnly = !!options.noticesOnly;
-  const collectors = noticesOnly ? [] : sources ? COLLECTORS.filter((c) => sources.includes(c.id)) : COLLECTORS;
-  if (collectors.length === 0 && !noticesOnly) throw new Error('조회할 사이트가 없습니다.');
-  const notices = noticesOnly || !sources
-    ? NOTICE_COLLECTORS
-    : sources.includes('courtauction')
-      ? NOTICE_COLLECTORS.filter((nc) => AUCTION_TAB_SECTIONS.some((s) => noticeSourcesOf(s).includes(nc.id)))
-      : [];
+  const { def, collectors, notices } = runPlan(scope, noticesOnly);
+  if (collectors.length === 0 && notices.length === 0) throw new Error('조회할 사이트가 없습니다.');
   const auto = !!options.auto;
-  const runId = store.createRun(visible, auto, noticesOnly);
+  const runId = store.createRun(visible, auto, noticesOnly, def?.id ?? null);
   current = { runId, message: '조회용 브라우저를 여는 중', log: [], stopping: false, session: null };
-  void execute(runId, visible, areas, { collectors, notices, partial: !!sources || noticesOnly }, { auto, quiet: !!options.quiet, noticesOnly });
+  void execute(runId, visible, areas, { collectors, notices, scope: def ?? null }, { auto, quiet: !!options.quiet, noticesOnly });
   return runId;
 }
 
@@ -299,12 +298,12 @@ async function collectNotices(
   }
 }
 
-/** plan: 돌 매물 사이트와 공고 곳. partial이면 일부 사이트만 도는 조회('경매 조회하기'). */
+/** plan: 돌 매물 사이트와 공고 곳. scope가 있으면 탭 하나만 도는 조회(RUN_SCOPES의 한 줄). */
 async function execute(
   runId: number,
   visible: boolean,
   areas: Area[],
-  plan: { collectors: Collector[]; notices: NoticeCollector[]; partial: boolean },
+  plan: { collectors: Collector[]; notices: NoticeCollector[]; scope: (typeof RUN_SCOPES)[number] | null },
   mode: { auto: boolean; quiet: boolean; noticesOnly: boolean },
 ) {
   const { auto, quiet, noticesOnly } = mode;
@@ -333,7 +332,7 @@ async function execute(
   };
 
   try {
-    const only = noticesOnly ? '공고만, ' : plan.partial ? `${[...collectors, ...plan.notices].map((c) => c.label).join(', ')}만, ` : '';
+    const only = noticesOnly ? '공고만, ' : plan.scope ? `${plan.scope.label} 탭만(${[...collectors, ...plan.notices].map((c) => c.label).join(', ')}), ` : '';
     log(`조회 시작, ${auto ? '자동 확인, ' : ''}${only}지역: ${areas.map((a) => `${a.name} ${a.radiusM}m`).join(', ')}, ${visible ? '보면서 조회' : '조용히 조회'}`);
     session = await BrowserSession.open(runId, visible);
     state.session = session;
@@ -409,8 +408,11 @@ async function execute(
         if (!state.stopping) log(`법원경매 매각 결과 ${e instanceof BlockedError ? '차단' : '오류'}: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
-    // 국토부 단독/다가구 실거래(서울, 최근 1년)는 받은 지 7일이 지났으면 어떤 조회든 한 번 받는다.
-    if (!state.stopping && houseTradesDue()) {
+    // 아래 실거래와 KB 통계는 때가 됐으면 받는다. 탭 하나만 도는 조회는 그 탭이 쓰는 것만 받는다(경매 범위는 단독 실거래와
+    // 아파트 실거래 최근 1년, 다른 범위는 받지 않음). 국토부 단독/다가구 실거래(서울, 최근 1년)는 받은 지 7일이 지났으면 받는다.
+    const fullData = !plan.scope;
+    const auctionData = fullData || plan.scope?.id === 'auction';
+    if (!state.stopping && auctionData && houseTradesDue()) {
       try {
         const record = (url: string, status: number | null, note: string) => store.addRequest(runId, HOUSE_TRADES_SOURCE, 'data', url, status, note);
         log(`${HOUSE_TRADES_SOURCE}: ${await collectHouseTrades(record)}`);
@@ -418,8 +420,9 @@ async function execute(
         log(`${HOUSE_TRADES_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
-    // 시세 통계 탭 자료도 때가 됐으면 어떤 조회든 받는다: KB 지수는 3일, 서울 아파트 실거래 최근 1년은 7일에 한 번, 지난 해는 한 번에 두 해씩.
-    if (!state.stopping && kbStatsDue()) {
+    // 시세 통계 탭 자료: KB 지수는 3일, 서울 아파트 실거래 최근 1년은 7일에 한 번, 지난 해는 한 번에 두 해씩(전부 도는 조회만).
+    // 경매 범위 조회는 카드의 실거래 비교에 쓰는 아파트 실거래 최근 1년만 받는다.
+    if (!state.stopping && fullData && kbStatsDue()) {
       try {
         const record = (url: string, status: number | null, note: string) => store.addRequest(runId, KB_SOURCE, 'data', url, status, note);
         log(`${KB_SOURCE}: ${await collectKbStats(record)}`);
@@ -427,10 +430,10 @@ async function execute(
         log(`${KB_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
-    if (!state.stopping && aptTradesDue()) {
+    if (!state.stopping && (fullData ? aptTradesDue() : auctionData && aptRecentDue())) {
       try {
         const record = (url: string, status: number | null, note: string) => store.addRequest(runId, APT_TRADES_SOURCE, 'data', url, status, note);
-        log(`${APT_TRADES_SOURCE}: ${await collectAptTrades(record, { maxYears: 2 })}`);
+        log(`${APT_TRADES_SOURCE}: ${await collectAptTrades(record, fullData ? { maxYears: 2 } : { recent: true, maxYears: 0 })}`);
       } catch (e) {
         log(`${APT_TRADES_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }

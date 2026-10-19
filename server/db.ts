@@ -19,6 +19,7 @@ import type {
   RequestRow,
   RunDetail,
   RunInfo,
+  RunScope,
   RunSummary,
   SeenRef,
   SubscriptionDetail,
@@ -885,16 +886,17 @@ const toRun = (r: RunRow): RunInfo => ({
   visible: !!r.visible,
   auto: !!r.auto,
   noticesOnly: r.kind === 'notices',
+  scope: r.kind?.startsWith('scope:') ? (r.kind.slice(6) as RunScope) : null,
   summary: r.summary ? (JSON.parse(r.summary) as RunSummary) : null,
   error: r.error,
 });
 
-/** auto: 자동 확인으로 시작한 조회, noticesOnly: 공고만 확인하는 조회 */
-export function createRun(visible: boolean, auto = false, noticesOnly = false): number {
+/** auto: 자동 확인으로 시작한 조회, noticesOnly: 공고만 확인하는 조회, scope: 탭 하나만 도는 조회(kind에 'scope:auction'처럼 남김) */
+export function createRun(visible: boolean, auto = false, noticesOnly = false, scope: RunScope | null = null): number {
   return Number(
     db
       .prepare("INSERT INTO runs (started_at, status, visible, auto, kind) VALUES (?, 'running', ?, ?, ?)")
-      .run(nowIso(), visible ? 1 : 0, auto ? 1 : 0, noticesOnly ? 'notices' : null).lastInsertRowid,
+      .run(nowIso(), visible ? 1 : 0, auto ? 1 : 0, noticesOnly ? 'notices' : scope ? `scope:${scope}` : null).lastInsertRowid,
   );
 }
 
