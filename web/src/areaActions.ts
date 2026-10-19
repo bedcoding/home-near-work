@@ -13,13 +13,13 @@ export function loadCatalog(): Promise<CatalogStation[]> {
 }
 
 /**
- * 역 이름으로 지역을 켜고 끈다(지역 탭이나 지도에서 역을 누를 때). 없는 역이면 1km로 만들어 켠다.
+ * 역 이름으로 지역을 켜고 끈다(지역 탭이나 지도에서 역을 누를 때). 없는 역이면 radiusM(처음 1km)으로 만들어 켠다.
  * 모두 끄면 아무것도 안 보이므로 마지막 켜진 지역은 끄지 않는다.
  */
-export async function toggleStationArea(all: Area[], station: { name: string; lat: number; lng: number }): Promise<void> {
+export async function toggleStationArea(all: Area[], station: { name: string; lat: number; lng: number }, radiusM = 1000): Promise<void> {
   const area = all.find((a) => a.name === station.name);
   if (area) return setAreaEnabled(all, area, !area.enabled);
-  await api.createArea({ name: station.name, lat: station.lat, lng: station.lng, radiusM: 1000, enabled: true });
+  await api.createArea({ name: station.name, lat: station.lat, lng: station.lng, radiusM, enabled: true });
 }
 
 export async function setAreaEnabled(all: Area[], area: Area, enabled: boolean): Promise<void> {

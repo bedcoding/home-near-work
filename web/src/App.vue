@@ -1113,7 +1113,7 @@ const emptyText: Partial<Record<Tab, string>> = {
         v-else-if="tab === 'sites' && state" :state="state" :links="links" :ext-ready="!!ext" :notices="notices" :notice-status="noticeStatus"
         @open-all="openAll()"
       />
-      <AreaSettings v-else-if="tab === 'areas' && state" :areas="state.areas" @changed="refreshState" />
+      <AreaSettings v-else-if="tab === 'areas' && state" :areas="state.areas" :restore="state.areaRestore" @changed="refreshState" />
       <AlertsTab
         v-else-if="tab === 'alerts' && state" :settings="state.alerts" :visible="visibleMode" :auto-time="state.autoCheck.time" :auto-day="state.autoCheck.day" :notice-time="state.autoCheck.noticeTime"
         :auto-times="autoTimes" :running="!!running" @changed="refreshState" @visible="(v) => (visibleMode = v)"

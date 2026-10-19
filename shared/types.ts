@@ -862,6 +862,8 @@ export interface AppState {
   /** 확인하지 않은 새 공고 수 */
   newNotices: number;
   areas: Area[];
+  /** 지역 탭 '노선으로 보기'로 바꾸기 전 지역으로 되돌릴 수 있으면 마지막으로 고른 노선과 전에 켜 둔 지역 수 */
+  areaRestore: { line: string; count: number } | null;
   stations: Station[];
   running: RunProgress | null;
   lastRun: RunInfo | null;

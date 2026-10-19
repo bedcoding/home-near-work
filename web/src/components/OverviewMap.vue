@@ -263,15 +263,19 @@ function onZoneFile(e: Event) {
   if (file) void uploadZones(file);
 }
 
+/** 지역이 이보다 많으면(노선 하나를 켠 때 등) 지역 이름을 늘 띄우지 않는다(겹쳐서 지도를 가림). */
+const AREA_LABEL_MAX = 12;
+
 /** 지역 원. 역 이름이 아닌 지역(지도에서 찍은 곳)은 가운데에 마름모를 두고, 누르면 area 이벤트로 끈다. */
 function drawBase() {
   if (!base) return;
   base.clearLayers();
   const stationNames = new Set(stations.value.map((s) => s.name));
+  const labels = props.areas.length <= AREA_LABEL_MAX;
   for (const a of props.areas) {
-    L.circle([a.lat, a.lng], { radius: a.radiusM, color: '#16202e', weight: 1.5, fillOpacity: 0.03, dashArray: '6 6', interactive: false })
-      .bindTooltip(a.name, { permanent: true, direction: 'top', className: 'area-label' })
-      .addTo(base);
+    const circle = L.circle([a.lat, a.lng], { radius: a.radiusM, color: '#16202e', weight: 1.5, fillOpacity: 0.03, dashArray: '6 6', interactive: false });
+    if (labels) circle.bindTooltip(a.name, { permanent: true, direction: 'top', className: 'area-label' });
+    circle.addTo(base);
     if (!stations.value.length || stationNames.has(a.name)) continue;
     L.marker([a.lat, a.lng], { icon: L.divIcon({ className: 'pick-pin', html: '<span></span>', iconSize: [16, 16], iconAnchor: [8, 8] }), keyboard: false, zIndexOffset: 800 })
       .bindTooltip(`${esc(a.name)}<br><span class="st-tip">누르면 이 지역 끄기</span>`, { direction: 'top', offset: [0, -6] })
