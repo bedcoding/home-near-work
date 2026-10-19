@@ -20,6 +20,7 @@ import {
 } from './naver-capture.js';
 import { learnFromStoredCaptures, withLinkHints } from './link-hints.js';
 import { acceptNoticeFiles, noticeFileViews } from './notice-files.js';
+import { importRedevZones, redevZones } from './redev-zones.js';
 import { getProgress, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
 import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, withTrustFacts } from './views.js';
@@ -187,6 +188,22 @@ app.post<{ Body: { age?: unknown } | null }>('/api/house-trades/fetch', async (r
 
 /** 시세 통계 탭: KB 지수 그래프, 지금 흐름 요약, 서울 아파트 월별 거래량, 구별 급지표(켜진 지역 근처 구 표시). */
 app.get('/api/market', async () => buildMarketView(gusFor(store.enabledAreas())));
+
+// 지도에 칠하는 정비사업 구역: 서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보' ZIP을 본문 그대로 받아 바꿔 둔다.
+app.addContentTypeParser(['application/zip', 'application/x-zip-compressed', 'application/octet-stream'], { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
+app.get('/api/redev-zones', async () => redevZones());
+app.post<{ Querystring: { name?: string } }>('/api/redev-zones', { bodyLimit: 60 * 1024 * 1024 }, async (req, reply) => {
+  if (!Buffer.isBuffer(req.body)) {
+    reply.code(400);
+    return { error: 'ZIP 파일을 보내 주세요.' };
+  }
+  try {
+    return importRedevZones(new Uint8Array(req.body), typeof req.query.name === 'string' ? req.query.name.slice(0, 200) : null);
+  } catch (e) {
+    reply.code(400);
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+});
 
 /**
  * 시세 통계 자료를 지금 받고 탭 자료를 돌려준다: KB 지수 모두, 서울 아파트 실거래 최근 1년과 안 받은 지난 해 모두(몇 분 걸릴 수 있다).

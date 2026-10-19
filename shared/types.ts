@@ -989,3 +989,27 @@ export interface MarketView {
   /** 구별 급지표(계약일 from ~ to). 실거래를 아직 안 받았으면 null. */
   tiers: { from: string; to: string; gus: MarketTier[] } | null;
 }
+
+/** 지도에 칠하는 정비사업 구역의 묶음: redev 정비사업(재개발, 재건축, 신속통합기획, 주거환경개선), small 소규모 정비(모아타운, 가로주택 등), promo 재정비촉진, public 공공주택지구·도심 공공주택 복합사업 */
+export type RedevZoneGroup = 'redev' | 'small' | 'promo' | 'public';
+
+/**
+ * 정비사업 구역 하나(GeoJSON Feature, 좌표는 [경도, 위도]). 서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+)' 파일에서 읽는다.
+ * id: 파일의 현황 번호, name: 구역 이름, type: 사업 종류(코드정의표 이름), outline: 테두리만 그리는 넓은 구역(재정비촉진지구, 모아타운, 존치관리구역),
+ * stage: 추진 단계, date: 그 줄의 작성일(YYYY-MM-DD), gu: 구.
+ */
+export interface RedevZoneFeature {
+  type: 'Feature';
+  properties: { id: string; name: string; group: RedevZoneGroup; type: string; outline: boolean; stage: string | null; date: string | null; gu: string | null };
+  geometry: { type: 'Polygon'; coordinates: [number, number][][] } | { type: 'MultiPolygon'; coordinates: [number, number][][][] };
+}
+
+/** 넣어 둔 정비사업 구역 파일: 넣은 때, 파일 안 가장 늦은 작성일, 파일 이름, 그리는 구역 수, 뺀 수(done 준공·철회, other 다른 사업), 구역 */
+export interface RedevZonesView {
+  importedAt: string | null;
+  fileDate: string | null;
+  fileName: string | null;
+  count: number;
+  skipped: { done: number; other: number };
+  features: RedevZoneFeature[];
+}
