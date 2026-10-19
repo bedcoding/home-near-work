@@ -125,6 +125,8 @@ const recentDue = () => {
   const at = store.getSetting(FETCHED_KEY);
   return !at || Date.now() - Date.parse(at) >= MAX_AGE_MS;
 };
+/** 최근 1년을 받은 지 7일이 지났는지(지난 해는 따지지 않음, 탭 하나만 도는 경매 조회가 씀) */
+export const aptRecentDue = recentDue;
 const recentlyFailed = () => {
   const at = store.getSetting(FAILED_KEY);
   return !!at && Date.now() - Date.parse(at) < RETRY_MS;

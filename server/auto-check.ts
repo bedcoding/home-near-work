@@ -72,13 +72,14 @@ function latestSlot(now: Date, time: string | null, day: number | null): Date | 
 const slotOf = (kind: Kind, now: Date) =>
   kind === 'full' ? latestSlot(now, autoCheckTime(), autoCheckDay()) : latestSlot(now, noticeCheckTime(), null);
 
-/** since(ms) 뒤에 시작한 조회 중 매물 사이트를 돈 것이 있는지(경매만 조회, 공고만 확인, 크롬 확장 기록은 뺀다). */
+/** since(ms) 뒤에 시작한 조회 중 매물 사이트를 모두 돈 것이 있는지(경매만 조회, 탭 하나만 조회, 공고만 확인, 크롬 확장 기록은 뺀다). */
 function siteRunSince(since: number): boolean {
   return store
     .listRuns(20)
     .some(
       (r) =>
         Date.parse(r.startedAt) >= since &&
+        !r.scope &&
         (r.summary?.sources ?? []).some((s) => s.source !== 'courtauction' && s.source !== 'onbid' && !CAPTURE_SOURCES.includes(s.source)),
     );
 }

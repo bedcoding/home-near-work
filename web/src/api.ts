@@ -1,4 +1,4 @@
-import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, RunDetail, RunInfo, SourceId, Station, Verdict } from '../../shared/types';
+import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, RunDetail, RunInfo, RunScope, SourceId, Station, Verdict } from '../../shared/types';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -21,8 +21,8 @@ export const api = {
   ack: (id: string) => request('POST', `/api/listings/${enc(id)}/ack`),
   /** 법원경매 물건 상세를 프로그램이 띄운 크롬 창에 연다 */
   openCourt: (id: string) => request('POST', `/api/listings/${enc(id)}/open-court`),
-  /** sources를 주면 그 사이트만 조회한다(없으면 전부) */
-  startRun: (visible: boolean, sources?: SourceId[]) => request<{ runId: number }>('POST', '/api/runs', sources ? { visible, sources } : { visible }),
+  /** scope를 주면 그 탭에 보이는 사이트와 공고만 조회한다(없으면 전부) */
+  startRun: (visible: boolean, scope?: RunScope) => request<{ runId: number }>('POST', '/api/runs', scope ? { visible, scope } : { visible }),
   /** 자동 확인 시각(null이면 끄기)과 창 표시를 바꾼다. */
   setAutoCheck: (body: { time?: string | null; day?: number | null; visible?: boolean; noticeTime?: string | null }) => request<AutoCheckState>('PUT', '/api/auto-check', body),
   /** 조회가 끝나면 띄울 알림 설정을 바꾼다(준 값만). 바뀐 전체 설정을 돌려준다. */
