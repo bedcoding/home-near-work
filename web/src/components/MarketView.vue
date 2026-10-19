@@ -338,7 +338,7 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
         </div>
         <p v-if="view.tiers" class="muted note">
           계약일 {{ dot(view.tiers.from) }} ~ {{ dot(view.tiers.to) }}, 해제된 거래 뺌. 전용면적 평당 중간값 순위로 {{ view.tiers.gus.length }}개 구를 다섯 묶음으로 고르게 나눴습니다.
-          '84㎡로 치면'은 ㎡당 중간값 × 84입니다. 누르면 동별로 봅니다.
+          '84㎡대 중간값'은 전용 84㎡ 이상 85㎡ 미만 거래만의 거래가 중간값이고, 그런 거래가 없으면 '-'입니다. 누르면 동별로 봅니다.
         </p>
         <div v-if="view.tiers" class="tier-wrap">
           <table class="grid tiers">
@@ -347,7 +347,7 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
                 <th scope="col" class="r wide">순위</th>
                 <th scope="col">구</th>
                 <th scope="col" class="r">평당 중간값</th>
-                <th scope="col" class="r">84㎡로 치면</th>
+                <th scope="col" class="r" title="전용 84㎡ 이상 85㎡ 미만 거래만의 거래가 중간값">84㎡대<span class="wide-text"> 중간값</span></th>
                 <th scope="col" class="r wide">거래가 중간값</th>
                 <th scope="col" class="r" :title="`KB 월간 매매가격지수로 본 최근 ${changeLabel} 변동`">{{ changeLabel }} 변동</th>
                 <th scope="col" class="r wide">거래</th>
@@ -365,7 +365,8 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
                   <td class="num r wide">{{ t.rank }}</td>
                   <th scope="row"><span class="mark">{{ openGu === t.gu ? '▾' : '▸' }}</span>{{ t.gu }}<span v-if="t.near" class="chip chip-near near-chip">근처</span></th>
                   <td class="num r strong">{{ manwon(t.pyeong) }}</td>
-                  <td class="num r" :title="manwon(t.price84)">{{ eok(t.price84) }}</td>
+                  <td v-if="t.median84 != null" class="num r" :title="`전용 84㎡대 ${count(t.count84)}건 중간값 ${manwon(t.median84)}`">{{ eok(t.median84) }}</td>
+                  <td v-else class="num r muted" title="최근 1년 전용 84㎡대 거래 없음">-</td>
                   <td class="num r wide" :title="manwon(t.median)">{{ eok(t.median) }}</td>
                   <td class="num r" :class="{ up: (t.change[changeSpan] ?? 0) > 0, down: (t.change[changeSpan] ?? 0) < 0 }">{{ pct(t.change[changeSpan]) }}</td>
                   <td class="num r wide">{{ count(t.count) }}</td>
@@ -491,9 +492,9 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
 .tier-chip.tier-4 { background: #fbf2e4; color: #85561c; }
 .tier-chip.tier-5 { background: #f7eaea; color: #8c3a3a; }
 
-/* 좁으면 순위, 거래가 중간값, 거래 수 칸을 빼고(동 줄의 건수는 이름 옆에 남는다) 칸 여백을 줄인다 */
+/* 좁으면 순위, 거래가 중간값, 거래 수 칸을 빼고(동 줄의 건수는 이름 옆에 남는다) 머리 글자와 칸 여백을 줄인다 */
 @media (max-width: 560px) {
-  .grid .wide { display: none; }
+  .grid .wide, .grid .wide-text { display: none; }
   .grid th, .grid td { padding: 6px 7px; }
   .tier-chip { padding: 1px 5px; font-size: 11px; }
 }
