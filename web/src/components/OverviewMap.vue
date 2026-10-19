@@ -8,12 +8,15 @@ import { KIND_LABEL, kindOf } from '../kinds';
 import { isRoomStay, roomRange, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
 import { manwon, perPyeong, priceText, pyeong } from '../format';
+import { loadZones, uploadZones, ZONE_COLOR, ZONE_GROUPS, ZONE_SOURCE_URL, zones, zonesBusy, zonesError, zonesOn } from '../redevZones';
+import type { RedevZoneFeature } from '../../../shared/types';
 
 // 매물 탭 오른쪽 지도와 경매 탭, 고시원과 쉐어 탭의 지도가 같이 쓴다.
 // - 매물(같은 자리는 숫자 동그라미로 묶음)을 누르면 정보 창이 뜨고, 거기서 '목록에서 보기'나 '원본 열기'를 누른다.
 //   옆에 목록이 있으면 누를 때 그 자리 매물들을 reveal 이벤트로 알려 목록도 그 매물로 옮기게 한다.
 // - 역(흰 동그라미, 켜진 지역은 검은 동그라미)을 누르면 그 역 지역을 켜고 끈다(station 이벤트, 확대 12 이상에서 보임).
 // - 휠 한 칸에 약 1.2배씩 확대하거나 축소한다.
+// - 정비사업 구역(서울플랜+ 파일을 넣었으면)을 매물과 역 아래 층에 칠한다. 마우스를 올리면 구역 이름, 사업 종류, 추진 단계가 보인다.
 
 type Point = { lat: number; lng: number };
 
@@ -48,6 +51,9 @@ let base: L.LayerGroup | null = null; // 지역 원, 찍은 지역 표시
 let dots: L.LayerGroup | null = null; // 매물
 let stationLayer: L.LayerGroup | null = null; // 역
 let stationRenderer: L.Renderer | null = null;
+let zoneLayer: L.GeoJSON | null = null; // 정비사업 구역
+let zoneRenderer: L.Renderer | null = null;
+const fileEl = ref<HTMLInputElement | null>(null);
 const stations = ref<CatalogStation[]>([]);
 /** 이 확대보다 멀리서 보면 역을 그리지 않는다(수도권 658곳이 한꺼번에 보이면 매물이 가려서). */
 const STATION_MIN_ZOOM = 12;
@@ -212,6 +218,43 @@ function drawStations() {
   }
 }
 
+/** 정비사업 구역: 사업 구역은 옅게 칠하고, 넓은 구역(재정비촉진지구, 모아타운, 존치관리구역)은 점선 테두리만 그린다. */
+function drawZones() {
+  if (!map || !zoneRenderer) return;
+  zoneLayer?.remove();
+  zoneLayer = null;
+  const list = zonesOn.value ? (zones.value?.features ?? []) : [];
+  if (!list.length) return;
+  // renderer는 만들 때 넘겨야 해서(style로는 안 바뀜) 옵션에 같이 둔다.
+  const options: L.GeoJSONOptions & { renderer: L.Renderer } = {
+    renderer: zoneRenderer,
+    style: (f) => {
+      const p = (f as unknown as RedevZoneFeature).properties;
+      const c = ZONE_COLOR[p.group];
+      return p.outline
+        ? { color: c, weight: 2, opacity: 0.85, dashArray: '6 5', fill: false }
+        : { color: c, weight: 1.2, opacity: 0.9, fillColor: c, fillOpacity: 0.2 };
+    },
+    onEachFeature: (f, layer) => {
+      const p = (f as unknown as RedevZoneFeature).properties;
+      const sub = [p.type, p.stage].filter(Boolean).join(' · ');
+      const foot = [p.gu, p.date ? `${p.date.replace(/-/g, '.')} 기준` : null].filter(Boolean).join(', ');
+      layer.bindTooltip(`<strong>${esc(p.name)}</strong><br>${esc(sub)}${foot ? `<br><span class="st-tip">${esc(foot)}</span>` : ''}`, { sticky: true });
+    },
+  };
+  zoneLayer = L.geoJSON(list as unknown as GeoJSON.FeatureCollection['features'], options).addTo(map);
+}
+
+function pickZoneFile() {
+  fileEl.value?.click();
+}
+function onZoneFile(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (file) void uploadZones(file);
+}
+
 /** 지역 원. 역 이름이 아닌 지역(지도에서 찍은 곳)은 가운데에 마름모를 두고, 누르면 area 이벤트로 끈다. */
 function drawBase() {
   if (!base) return;
@@ -344,6 +387,9 @@ onMounted(() => {
   // (순서가 바뀌면 새로 보이는 역을 화면 밖으로 보고 그리지 않는다).
   map.createPane('stations').style.zIndex = '390';
   stationRenderer = L.svg({ pane: 'stations', padding: 0.3 }).addTo(map);
+  // 정비사업 구역은 역보다도 아래 층에 그린다(구역 수가 많아 canvas로).
+  map.createPane('zones').style.zIndex = '350';
+  zoneRenderer = L.canvas({ pane: 'zones', padding: 0.3 }).addTo(map);
   stationLayer = L.layerGroup().addTo(map);
   base = L.layerGroup().addTo(map);
   dots = L.layerGroup().addTo(map);
@@ -363,6 +409,8 @@ onMounted(() => {
     emit('pick', { lat: round6(e.latlng.lat), lng: round6(e.latlng.lng) });
   });
   drawBase();
+  if (zonesOn.value) void loadZones();
+  drawZones();
   fittedKey = props.fitKey;
   drawDots(true);
   // 칸 크기가 바뀌면(창 크기, 크게 보기) 지도를 다시 맞춘다.
@@ -393,6 +441,7 @@ watch(
   () => props.selectedId,
   () => highlight(true),
 );
+watch([zones, zonesOn], drawZones);
 watch(
   () => props.visible,
   async (visible) => {
@@ -421,7 +470,7 @@ onBeforeUnmount(() => {
   }
   // 늦게 끝난 역 목록 받기 등이 지운 지도에 그리지 않게 한다.
   map = null;
-  base = dots = stationLayer = null;
+  base = dots = stationLayer = zoneLayer = null;
 });
 </script>
 
@@ -444,11 +493,33 @@ onBeforeUnmount(() => {
       <span><b class="stack-sample">3</b>같은 건물 매물 수</span>
       <span><i class="st-sample"></i>역: 누르면 지역 켜고 끄기</span>
       <span><i class="pick-sample"></i>찍은 지역: 누르면 끄기</span>
+      <template v-if="zonesOn && zones?.count">
+        <span v-for="g in ZONE_GROUPS" :key="g.id"><i class="zone-sample" :style="{ background: `${g.color}33`, borderColor: g.color }"></i>{{ g.name }}</span>
+        <span class="zone-src" :title="`서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보'(OA-22712)${zones.fileName ? `, 넣은 파일 ${zones.fileName}` : ''}. 준공·입주중·후보지철회 ${zones.skipped.done}곳과 역세권·도시개발 같은 다른 사업 ${zones.skipped.other}곳은 뺐습니다. 점선 테두리는 넓은 구역(재정비촉진지구, 모아타운, 존치관리구역)입니다.`">
+          정비구역 {{ zones.count.toLocaleString('ko-KR') }}곳, 서울시 {{ zones.fileDate?.replace(/-/g, '.') ?? '' }} 기준
+        </span>
+      </template>
     </div>
     <div class="bar">
       <button class="btn btn-sm" :class="{ on: picking }" title="누른 뒤 지도에서 한 곳을 누르면 그 자리를 가운데로 1km 지역이 생깁니다" @click="picking = !picking">
         {{ picking ? '취소' : '위치 찍어 추가' }}
       </button>
+      <label class="zone-toggle" title="재개발·재건축, 모아타운, 재정비촉진, 공공주택 복합사업 구역을 칠합니다(서울시 서울플랜+ 파일을 넣어야 보임)">
+        <input v-model="zonesOn" type="checkbox"> 정비구역 칠하기
+      </label>
+      <template v-if="zonesOn">
+        <span v-if="zonesBusy" class="zone-note">파일 읽는 중…</span>
+        <template v-else-if="zones && !zones.count">
+          <span class="zone-note">
+            <a :href="ZONE_SOURCE_URL" target="_blank" rel="noopener" title="서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보'(OA-22712)에서 ZIP을 받습니다">서울시 파일 받기 ↗</a>
+            한 뒤
+          </span>
+          <button class="btn btn-sm" @click="pickZoneFile">ZIP 넣기</button>
+        </template>
+        <button v-else-if="zones" type="button" class="zone-change" title="새로 받은 서울플랜+ ZIP으로 바꿉니다" @click="pickZoneFile">파일 바꾸기</button>
+        <span v-if="zonesError" class="zone-note err" role="alert">{{ zonesError }}</span>
+      </template>
+      <input ref="fileEl" type="file" accept=".zip,application/zip" hidden @change="onZoneFile">
     </div>
   </div>
 </template>
@@ -476,6 +547,18 @@ onBeforeUnmount(() => {
 }
 .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .bar .on { border-color: var(--accent); color: var(--accent); }
+.zone-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; margin-left: 4px; font-size: 13px; font-weight: 600; color: var(--ink-2); cursor: pointer; }
+.zone-toggle input { width: 15px; height: 15px; margin: 0; accent-color: #2f9e44; }
+.zone-note { font-size: 12.5px; color: var(--muted); }
+.zone-note a { color: var(--ink-2); font-weight: 600; }
+.zone-note.err { color: var(--new); font-weight: 600; }
+.zone-change {
+  padding: 0; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--muted); cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px;
+}
+.zone-change:hover { color: var(--ink); }
+.legend .zone-sample { border-radius: 2px; border: 1.5px solid; box-sizing: border-box; }
+.zone-src { color: var(--muted); cursor: help; }
 :deep(.area-label) { font-weight: 700; }
 :deep(.pick-pin span), .legend .pick-sample {
   display: block; width: 11px; height: 11px; margin: 2px; background: #16202e; border: 2px solid #fff;
