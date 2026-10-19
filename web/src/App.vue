@@ -312,31 +312,20 @@ function plotSalesOf(kind: AuctionKind) {
     .sort((a, b) => Number(hasNews(b)) - Number(hasNews(a)) || price(a) - price(b));
 }
 /**
- * 집터 탭은 헐고 새로 지을 집과 땅이라 주인이 여럿인 지분 매각은 늘 빼고, 다가구·다중주택은 처음에 숨긴다(켜면 보임).
- * 다가구·다중주택은 건축법상 단독주택이라 주인은 한 명이지만 여러 가구가 세 들어 산다. 네이버 '단독/다가구'는 어느 쪽인지 몰라 숨기지 않는다.
+ * 집터 탭은 헐고 새로 지을 집과 땅이라 주인이 여럿인 지분 매각은 뺀다(경매 탭에는 '지분' 표시로 그대로 나온다).
+ * 다가구·다중주택은 건축법상 단독주택이라 지분 매각이 아니면 주인이 한 명이어서 그대로 둔다.
  */
-const plotMulti = ref(localStorage.getItem('hnw-plot-multi') === 'true');
-watch(plotMulti, (v) => localStorage.setItem('hnw-plot-multi', String(v)));
-const isMultiHousehold = (l: ListingView) => isAuction(l) && /다가구|다중주택/.test(l.buildingType ?? '');
-const plotDrop = (l: ListingView) => !!l.auction?.share || (!plotMulti.value && isMultiHousehold(l));
 const plotAuctionsOf = (kind: AuctionKind) => auctionsBoth.value.filter((l) => inAuctionKind(l, kind));
-const plotAuctions = computed(() => plotAuctionsOf(plotKind.value).filter((l) => !plotDrop(l)));
-/** 집터 탭 고른 칸에서 뺀 지분 매각 수, 숨긴 다가구·다중주택 수 */
-const plotHidden = computed(() => {
-  const all = plotAuctionsOf(plotKind.value);
-  return {
-    share: all.filter((l) => l.auction?.share).length,
-    multi: all.filter((l) => !l.auction?.share && isMultiHousehold(l)).length,
-    showMulti: plotMulti.value,
-  };
-});
+const plotAuctions = computed(() => plotAuctionsOf(plotKind.value).filter((l) => !l.auction?.share));
+/** 집터 탭 고른 칸에서 뺀 지분 매각 수 */
+const plotShareHidden = computed(() => plotAuctionsOf(plotKind.value).filter((l) => l.auction?.share).length);
 const plotSales = computed(() => plotSalesOf(plotKind.value));
 /** 집터 탭 목록(화면 순서: 경매 다음 매매 매물). 키보드 이동에 쓴다. */
 const plotList = computed(() => [...plotAuctions.value, ...plotSales.value]);
 const plotOutside = computed(() => auctionsOutsideOf(plotKind.value, plotAuctions.value.length));
 const plotKinds = computed(() => {
   const count = (kind: AuctionKind) => {
-    const list = [...plotAuctionsOf(kind).filter((l) => !plotDrop(l)), ...plotSalesOf(kind)];
+    const list = [...plotAuctionsOf(kind).filter((l) => !l.auction?.share), ...plotSalesOf(kind)];
     return { count: list.length, news: list.filter(hasNews).length + lhByKind.value[kind].filter((n) => n.isNew).length };
   };
   return { ...auctionKinds.value, house: count('house'), land: count('land') };
@@ -1043,7 +1032,7 @@ const emptyText: Partial<Record<Tab, string>> = {
       <template v-else-if="tab === 'plot'">
         <AuctionView
           title="집터" :kind-ids="PLOT_KINDS" :sales="plotSales" :trust="false" :links="MODULAR_LINKS" :zone="zoneCheck"
-          :plot-hidden="plotHidden" @plot-multi="(v) => (plotMulti = v)"
+          :plot-share-hidden="plotShareHidden"
           :listings="plotAuctions" :outside="plotOutside" :areas="areas" :selected-id="selectedId" :running="!!running"
           :kind="plotKind" :kinds="plotKinds" @kind="(k) => (plotKind = k, selected = 0)"
           :sort="auctionSort" @sort="(v) => (auctionSort = v, selected = 0)"
