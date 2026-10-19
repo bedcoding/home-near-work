@@ -209,7 +209,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
         <span v-if="isNoOption(l)" class="chip chip-seen" title="사이트가 준 옵션 목록이 비어 있거나 글에 '무옵션'이라고 적힌 집">무옵션</span>
         <span v-if="l.auction?.failed != null" class="chip chip-room">유찰 {{ l.auction.failed }}회</span>
         <span v-if="l.auction && l.auction.lots > 1" class="chip chip-room" title="같은 사건과 물건번호의 목록(토지, 호실)을 한 번에 매각">{{ l.auction.lots }}개 일괄매각</span>
-        <span v-if="l.auction?.share" class="chip chip-warn" title="지분 매각: 땅 전체가 아니라 일부 지분만 판다. 면적은 지분만큼">지분</span>
+        <span v-if="l.auction?.share" class="chip chip-warn" title="지분 매각: 집이나 땅 전체가 아니라 일부 지분만 팝니다(다른 공유자가 있음). 땅만 파는 물건의 면적은 지분만큼입니다.">지분</span>
         <span v-if="l.auction?.mgmt" class="chip chip-warn" :title="`물건 비고: ${l.auction.mgmt.text}`">{{ l.auction.mgmt.label }}</span>
         <slot name="tags" />
         <span v-if="titleText" class="title" :title="l.title || undefined">{{ titleText }}</span>
