@@ -126,7 +126,9 @@ async function copyClause(key: string, text: string) {
   window.clearTimeout(copiedTimer);
   copiedTimer = window.setTimeout(() => (copied.value = null), 2500);
 }
-const copyLabel = (key: string) => (copied.value?.key !== key ? '복사' : copied.value.ok ? '복사함' : '선택함, Ctrl+C');
+const copyLabel = (key: string, idle = '복사') => (copied.value?.key !== key ? idle : copied.value.ok ? '복사함' : '선택함, Ctrl+C');
+/** '전부 복사' 문장: 문구마다 1., 2. 번호를 붙여 줄을 바꾼다 */
+const allClauses = (it: CheckItem) => (it.clauses ?? []).map((c, i) => `${i + 1}. ${c.text}`).join('\n');
 onBeforeUnmount(() => window.clearTimeout(copiedTimer));
 
 /** 지금 거래 유형의 두 목록을 인쇄 창으로 보낸다. 창 제목이 PDF 파일 이름이 되도록 잠깐 바꾼다. */
@@ -205,8 +207,11 @@ function savePdf() {
               </ol>
             </div>
             <div v-if="it.clauses?.length" class="item-block">
-              <p class="block-title" title="공식 예문이 아니라 이 항목 내용을 계약서 문장으로 정리한 예시입니다. 옮겨 쓸 때 날짜와 금액을 계약에 맞춥니다.">특약 문구 예</p>
-              <ul class="clauses">
+              <div class="block-head">
+                <p class="block-title" title="공식 예문이 아니라 이 항목 내용을 계약서 문장으로 정리한 예시입니다. 옮겨 쓸 때 날짜와 금액을 계약에 맞춥니다.">특약 문구 예</p>
+                <button v-if="it.clauses.length > 1" type="button" class="btn btn-sm" :aria-label="`${it.name} 특약 문구 전부 복사`" title="문구마다 번호를 붙여 한 번에 복사합니다" @click="copyClause(`${it.id}-all`, allClauses(it))">{{ copyLabel(`${it.id}-all`, '전부 복사') }}</button>
+              </div>
+              <ul :id="`clause-${it.id}-all`" class="clauses">
                 <li v-for="(c, i) in it.clauses" :key="c.name" class="clause">
                   <div class="clause-head">
                     <span class="clause-name">{{ c.name }}</span>
@@ -367,6 +372,7 @@ function savePdf() {
 .step-body { flex: 1; min-width: 0; }
 .step-link { margin-left: 4px; color: var(--accent); text-decoration: none; white-space: nowrap; }
 .step-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.block-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .clauses { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .clause { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .clause-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
