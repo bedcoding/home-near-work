@@ -5,6 +5,7 @@ import { COLLECTORS } from './collectors/index.js';
 import { NOTICE_COLLECTORS, type NoticeCollector } from './collectors/notices.js';
 import { BlockedError, type CollectContext, type CollectedItem, type Collector } from './collectors/types.js';
 import { COLLECT_MARGIN_M } from './config.js';
+import { collectCourtClaims } from './court-claims.js';
 import { collectCourtResults, courtResultsDue } from './court-results.js';
 import * as store from './db.js';
 import { collectHouseTrades, HOUSE_TRADES_SOURCE, houseTradesDue } from './house-trades.js';
@@ -435,6 +436,14 @@ async function execute(
         log(`법원경매 매각 결과: ${await collectCourtResults(ctx, () => state.stopping)}`);
       } catch (e) {
         if (!state.stopping) log(`법원경매 매각 결과 ${e instanceof BlockedError ? '차단' : '오류'}: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      }
+    }
+    // 법원경매를 돈 조회는 지금 물건의 배당 순위(대항력 임차인보다 먼저 받을 수 있는 청구와 대항력 임차인)도 확인한다.
+    if (!state.stopping && collectors.some((c) => c.id === 'courtauction')) {
+      try {
+        log(`법원경매 배당 확인: ${await collectCourtClaims(ctx, () => state.stopping)}`);
+      } catch (e) {
+        if (!state.stopping) log(`법원경매 배당 확인 ${e instanceof BlockedError ? '차단' : '오류'}: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
     // 아래 실거래와 KB 통계는 때가 됐으면 받는다. 탭 하나만 도는 조회는 그 탭이 쓰는 것만 받는다(경매 범위는 단독 실거래와

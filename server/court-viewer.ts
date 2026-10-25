@@ -8,7 +8,7 @@ import { FORM_URL, ID, SCHEDULE_URL, SEARCH_API } from './collectors/courtauctio
 type CourtRow = { jiwonNm?: string; srnSaNo?: string; maemulSer?: string; maeGiil?: string };
 
 /** 법원, 사건번호로 찾는 검색 화면. 물건상세검색은 오늘부터 14일, 매각예정물건은 15일 뒤부터 60일 뒤까지 매각기일을 찾는다. */
-const CASE_SCREENS = {
+export const CASE_SCREENS = {
   detail: { url: FORM_URL, courtRadio: ID.courtRadio, court: ID.court, caseYear: ID.caseYear, caseNo: ID.caseNo, search: ID.search },
   schedule: {
     url: SCHEDULE_URL,

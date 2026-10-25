@@ -21,6 +21,9 @@ export function parseLot(key: string): Lot | null {
 /** 서울 구의 시군구 코드 5자리('강동구' → '11740'). 모르면 null. */
 export const guCode = (gu: string): string | null => BJDONG[gu]?.code ?? null;
 
+/** 서울 구의 법정동 이름들('강남구' → ['역삼동', …]). 모르는 구면 빈 배열. */
+export const dongsOfGu = (gu: string): string[] => Object.keys(BJDONG[gu]?.dongs ?? {});
+
 /** 시군구 코드 5자리의 서울 구 이름('11740' → '강동구'). 모르면 null. */
 export const guOfCode = (code: string): string | null => Object.keys(BJDONG).find((gu) => BJDONG[gu].code === code) ?? null;
 

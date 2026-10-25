@@ -16,7 +16,7 @@ import { buildMarketView } from './market.js';
 import { fillHouseholds, householdsFillState } from './building-register.js';
 import { checkZones, zoneCheckState } from './land-zones.js';
 import {
-  acceptCaptures, extensionVersion, finishCaptureSession, naverCaptureState, naverMarks, processPendingNaverCaptures, saveSnapshot, type CaptureInput,
+  acceptBrowseCaptures, acceptCaptures, browseReceipt, extensionVersion, finishCaptureSession, naverCaptureState, naverMarks, processPendingNaverCaptures, saveSnapshot, type CaptureInput,
 } from './naver-capture.js';
 import { learnFromStoredCaptures, withLinkHints } from './link-hints.js';
 import { acceptNoticeFiles, noticeFileViews } from './notice-files.js';
@@ -26,10 +26,12 @@ import { restSeconds } from './browser.js';
 import { updateZonesNow, zoneFileCheckState } from './redev-zones-update.js';
 import { getProgress, startLineRun, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
+import { normalizeBrowseProgress, type BrowseProgress } from './browse-progress.js';
 import { refreshTradeSignals } from './trade-signals.js';
 import { collectPeakSources } from './peak-sources.js';
 import { collectRegionVolume } from './region-volume.js';
 import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, withTrustFacts } from './views.js';
+import { siteReport } from './site-report.js';
 import { CAPTURE_SOURCES, REST_CHOICES, RUN_SCOPES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type SourceId, type Verdict } from '../shared/types.js';
 
 // 처리하지 못한 비동기 오류가 나도 대시보드 서버가 꺼지지 않게 기록만 남긴다.
@@ -85,8 +87,15 @@ app.get('/api/state', async (): Promise<AppState> => {
     areaRestore: areaRestoreState(),
     lineView: lineView(),
     restSeconds: restSeconds(),
+    baseRate: latestBaseRate(),
   };
 });
+
+/** 받아 둔 한국은행 기준금리 표의 가장 최근 값 */
+function latestBaseRate(): AppState['baseRate'] {
+  const last = store.marketSeries('base-rate').at(-1);
+  return last ? { value: last.value, date: last.date } : null;
+}
 
 /** 노선 탭에서 고른 노선과 역 반경을 바꾼다(line이 null이면 고르지 않음). 고른 노선 역 반경은 크롬 확장 화면 데이터를 저장할 때도 지역으로 친다. */
 app.put<{ Body: { line?: unknown; radiusM?: unknown } | null }>('/api/line-view', async (req, reply) => {
@@ -188,6 +197,8 @@ app.put<{ Body: unknown }>('/api/alerts', async (req, reply) => {
 app.get('/api/stations/catalog', async () => stationCatalog());
 
 app.get('/api/listings', async () => buildListingViews());
+/** 사이트별 탭: 소스마다 최근 조회 기록, 크롬 확장 사이트마다 사이트 화면이 센 수와 받은 수 */
+app.get('/api/site-report', async () => siteReport());
 
 /** 공고(가격 없는 공매, 임대 공고)와 곳별 마지막 수집 결과. */
 app.get('/api/notices', async () => ({ notices: withTrustFacts(store.listNotices()), sources: store.noticeStatuses() }));
@@ -452,6 +463,64 @@ app.post<{ Body: { captures?: CaptureInput[] } }>('/api/naver/capture', { bodyLi
   const captures = Array.isArray(req.body?.captures) ? req.body.captures.slice(0, 200) : [];
   const stored = acceptCaptures(captures);
   return { stored, total: naverCaptureState().total };
+});
+
+app.post<{ Body: { jobId?: unknown; batchId?: unknown; captures?: unknown } }>('/api/browse/capture', { bodyLimit: EXTENSION_BODY_LIMIT }, async (req, reply) => {
+  if (!fromExtension(req.headers.origin)) {
+    reply.code(403);
+    return { error: '확장 프로그램에서 온 요청만 받습니다.' };
+  }
+  try {
+    return { receipt: acceptBrowseCaptures(req.body ?? {}), total: naverCaptureState().total };
+  } catch (error) {
+    const invalid = error instanceof Error && 'statusCode' in error && error.statusCode === 400;
+    reply.code(invalid ? 400 : 503);
+    return { error: invalid ? error.message : '조회 응답을 저장하지 못했습니다. 같은 묶음으로 다시 시도해 주세요.' };
+  }
+});
+
+app.post('/api/browse/hints', async (req, reply) => {
+  if (!fromExtension(req.headers.origin)) {
+    reply.code(403);
+    return { error: '확장 프로그램에서 온 요청만 받습니다.' };
+  }
+  return { stations: withLinkHints(knownStations()) };
+});
+
+// 최신 순회의 단계, 집계, 이벤트만 로컬에 보관한다. 지역명, 좌표, URL, 매물 본문은 포함하지 않는다.
+const BROWSE_PROGRESS_KEY = 'browse_progress';
+function latestBrowseProgress(): BrowseProgress | null {
+  try {
+    const stored = JSON.parse(store.getSetting(BROWSE_PROGRESS_KEY) ?? 'null');
+    return stored ? normalizeBrowseProgress(stored, stored.receivedAt) : null;
+  } catch { return null; }
+}
+app.get('/api/browse/progress', async () => ({ progress: latestBrowseProgress() }));
+app.post('/api/browse/progress', async (req, reply) => {
+  if (!fromExtension(req.headers.origin)) {
+    reply.code(403);
+    return { error: '확장 프로그램에서 온 요청만 받습니다.' };
+  }
+  let progress: BrowseProgress;
+  try { progress = normalizeBrowseProgress(req.body); }
+  catch { reply.code(400); return { error: '조회 진행 정보가 올바르지 않습니다.' }; }
+  const previous = latestBrowseProgress();
+  if (previous && previous.updatedAt > progress.updatedAt) return { ok: true, ignored: true };
+  store.setSetting(BROWSE_PROGRESS_KEY, JSON.stringify(progress));
+  return { ok: true };
+});
+
+app.post<{ Body: { jobId?: unknown } }>('/api/browse/receipt', async (req, reply) => {
+  if (!fromExtension(req.headers.origin)) {
+    reply.code(403);
+    return { error: '확장 프로그램에서 온 요청만 받습니다.' };
+  }
+  try {
+    return { receipt: browseReceipt(req.body?.jobId) };
+  } catch (error) {
+    reply.code(400);
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
 });
 
 app.post<{ Body: Record<string, unknown> }>('/api/naver/snapshot', { bodyLimit: EXTENSION_BODY_LIMIT }, async (req, reply) => {

@@ -2,6 +2,8 @@
 import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { DEAL_LABEL, type Area, type DealType } from '../../../shared/types';
 import { DEFAULT_FILTERS, FILTER_DEALS, type Filters } from '../filters';
+import { DEALS_OF, OVERVIEW_DEALS, OVERVIEW_LABEL } from '../bands';
+import { M2_PER_PYEONG } from '../format';
 import { KIND_LABEL, KINDS } from '../kinds';
 
 const filters = defineModel<Filters>({ required: true });
@@ -29,6 +31,20 @@ function num(event: Event): number | null {
   const v = (event.target as HTMLInputElement).value.trim();
   return v === '' ? null : Number(v);
 }
+
+/** 면적 칸은 평으로 넣고 보인다(저장은 ㎡, 카드의 평과 같은 전용면적 ÷ 3.3058). */
+const pyeongText = (m2: number | null) => (m2 == null ? '' : String(Math.round((m2 / M2_PER_PYEONG) * 10) / 10));
+function m2Of(event: Event): number | null {
+  const v = num(event);
+  return v == null || !Number.isFinite(v) ? null : Math.round(v * M2_PER_PYEONG * 100) / 100;
+}
+
+/** 매물 탭(거래 유형 하나만 고름)의 거래 유형 칸: 월세와 전세는 '전월세' 하나로 고른다(가운데 카드와 같음). */
+const overviewChoices = computed(() => {
+  const ds = props.dealChoices ?? FILTER_DEALS;
+  return OVERVIEW_DEALS.filter((od) => DEALS_OF[od].some((d) => ds.includes(d))).map((od) => ({ id: od, label: OVERVIEW_LABEL[od], deals: DEALS_OF[od] }));
+});
+const sameDeals = (a: DealType[], b: DealType[]) => a.length === b.length && a.every((d) => b.includes(d));
 
 function reset() {
   filters.value = { ...DEFAULT_FILTERS, deals: [], areaIds: [], kinds: [] };
@@ -79,13 +95,18 @@ function summary(id: SectionId): string {
     id === 'area'
       ? [focusText.value, f.insideAreas ? null : '반경 밖 포함', f.distanceMax != null ? `역까지 ${f.distanceMax}m` : null]
       : id === 'deal'
-        ? [f.deals.map((d) => DEAL_LABEL[d]).join(', ') || null]
+        ? [
+            (props.singleDeal
+              ? overviewChoices.value.filter((c) => sameDeals(f.deals, c.deals)).map((c) => c.label)
+              : f.deals.map((d) => DEAL_LABEL[d])
+            ).join(', ') || null,
+          ]
         : id === 'kind'
           ? [f.kinds.map((k) => KIND_LABEL[k]).join(', ') || null]
         : id === 'price'
           ? [range('보증금', f.depositMin, f.depositMax), range('월세', f.monthlyMin, f.monthlyMax), range('매매가', f.priceMin, f.priceMax)]
           : id === 'home'
-            ? [range('면적', f.areaMin, f.areaMax), f.excludeBasement ? '반지하 빼기' : null, f.excludeFirstFloor ? '1층 빼기' : null, f.excludeRooftop ? '옥탑 빼기' : null, f.noOptionsOnly ? '무옵션만' : null]
+            ? [f.areaMin == null && f.areaMax == null ? null : `${pyeongText(f.areaMin)}~${pyeongText(f.areaMax)}평`, f.excludeBasement ? '반지하 빼기' : null, f.excludeFirstFloor ? '1층 빼기' : null, f.excludeRooftop ? '옥탑 빼기' : null, f.noOptionsOnly ? '무옵션만' : null]
             : [f.text.trim() ? `"${f.text.trim()}"` : null];
   return parts.filter(Boolean).join(', ');
 }
@@ -177,12 +198,22 @@ async function nudge(id: SectionId, delta: number, e: KeyboardEvent) {
 
           <div v-else-if="id === 'deal'" class="chips">
             <button class="chip-btn" :class="{ on: !filters.deals.length }" :aria-pressed="!filters.deals.length" @click="filters.deals = []">전체</button>
-            <button
-              v-for="d in props.dealChoices ?? FILTER_DEALS" :key="d" class="chip-btn" :class="{ on: filters.deals.includes(d) }"
-              :aria-pressed="filters.deals.includes(d)" @click="props.singleDeal ? (filters.deals = [d]) : toggle(filters.deals, d)"
-            >
-              {{ DEAL_LABEL[d] }}
-            </button>
+            <template v-if="props.singleDeal">
+              <button
+                v-for="c in overviewChoices" :key="c.id" class="chip-btn" :class="{ on: sameDeals(filters.deals, c.deals) }"
+                :aria-pressed="sameDeals(filters.deals, c.deals)" @click="filters.deals = [...c.deals]"
+              >
+                {{ c.label }}
+              </button>
+            </template>
+            <template v-else>
+              <button
+                v-for="d in props.dealChoices ?? FILTER_DEALS" :key="d" class="chip-btn" :class="{ on: filters.deals.includes(d) }"
+                :aria-pressed="filters.deals.includes(d)" @click="toggle(filters.deals, d)"
+              >
+                {{ DEAL_LABEL[d] }}
+              </button>
+            </template>
           </div>
 
           <div v-else-if="id === 'kind'" class="chips">
@@ -212,8 +243,8 @@ async function nudge(id: SectionId, delta: number, e: KeyboardEvent) {
 
           <template v-else-if="id === 'home'">
             <div class="pair">
-              <label class="field">전용면적 최소(㎡)<input type="number" min="0" step="1" :value="filters.areaMin ?? ''" @input="filters.areaMin = num($event)" /></label>
-              <label class="field">전용면적 최대(㎡)<input type="number" min="0" step="1" :value="filters.areaMax ?? ''" @input="filters.areaMax = num($event)" /></label>
+              <label class="field" title="카드에 보이는 평과 같은 기준(전용면적 ÷ 3.3058)">평 최소<input type="number" min="0" step="1" :value="pyeongText(filters.areaMin)" @change="filters.areaMin = m2Of($event)" /></label>
+              <label class="field" title="카드에 보이는 평과 같은 기준(전용면적 ÷ 3.3058)">평 최대<input type="number" min="0" step="1" :value="pyeongText(filters.areaMax)" @change="filters.areaMax = m2Of($event)" /></label>
             </div>
             <label class="check"><input v-model="filters.excludeBasement" type="checkbox" /> 반지하 빼기</label>
             <label class="check"><input v-model="filters.excludeFirstFloor" type="checkbox" /> 1층 빼기</label>

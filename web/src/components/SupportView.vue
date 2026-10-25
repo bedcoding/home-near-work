@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import {
-  GUARD_CHECK_SOURCES, GUARD_CHECK_STEPS, LOAN_CLAUSES, LOAN_DEPOSIT_NOTES, LOAN_HOWTO_SOURCES, LOAN_STEPS,
+  GUARD_CHECK_SOURCES, GUARD_CHECK_STEPS, LOAN_CLAUSES, LOAN_DEPOSIT_NOTES, LOAN_HOWTO_SOURCES, LOAN_STEPS, POLICY_LOANS,
   SUPPORT_CHECKED, SUPPORT_LINKS, SUPPORT_PROGRAMS, SUPPORT_SECTIONS, SUPPORT_STEPS, SUPPORT_TOOLS,
-  type SupportProgram, type SupportSectionId,
+  type SupportProgram, type SupportSectionId, type Unless,
 } from '../support';
+import { manwon } from '../format';
+import { cannotGet, profile } from '../profile';
+import CountTooltip from './CountTooltip.vue';
 import GuaranteeCalc from './GuaranteeCalc.vue';
 import SupportSteps from './SupportSteps.vue';
 
@@ -18,8 +21,30 @@ const saved = localStorage.getItem('hnw-support-section') as SupportSectionId | 
 const section = ref<SupportSectionId>(saved && SUPPORT_SECTIONS.some((s) => s.id === saved) ? saved : 'loan');
 watch(section, (s) => localStorage.setItem('hnw-support-section', s));
 const current = computed(() => SUPPORT_SECTIONS.find((s) => s.id === section.value) ?? SUPPORT_SECTIONS[0]);
-const programs = computed(() => SUPPORT_PROGRAMS.filter((p) => p.section === section.value));
-const countOf = (id: SupportSectionId) => (id === 'check' ? SUPPORT_TOOLS.length : SUPPORT_PROGRAMS.filter((p) => p.section === id).length);
+
+/** 내 조건(설정 탭의 연소득과 가구)으로 받을 수 없는 제도는 표와 카드에서 뺀다. */
+const hidden = computed(() => SUPPORT_PROGRAMS.filter((p) => cannotGet(p.id)));
+const shown = computed(() => SUPPORT_PROGRAMS.filter((p) => !cannotGet(p.id)));
+const hiddenTip = computed(() =>
+  [
+    `연소득 ${manwon(profile.value.income ?? 0)} 기준으로 받을 수 없는 제도를 뺐습니다: ${hidden.value.map((p) => p.name).join(', ')}`,
+    '설정 탭 내 조건에서 바꿉니다.',
+  ].join('\n'),
+);
+/** unless의 제도를 모두 못 받으면 그 대신 보일 글(빈 글이면 그 글을 뺌) */
+const pick = <T extends { text: string; unless?: Unless }>(x: T): T =>
+  x.unless && x.unless.ids.every((id) => cannotGet(id))
+    ? { ...x, text: x.unless.text, ...(x.unless.title ? { title: x.unless.title } : {}), ...(x.unless.links ? { links: x.unless.links } : {}) }
+    : x;
+const steps = computed(() => SUPPORT_STEPS.map(pick));
+const loanSteps = computed(() => LOAN_STEPS.map(pick));
+const depositNotes = computed(() => LOAN_DEPOSIT_NOTES.map(pick).filter((n) => n.text));
+const intro = computed(() => pick({ text: current.value.intro, unless: current.value.unless }).text);
+/** 정책 전세대출을 모두 못 받으면 '대출 받는 순서'는 은행 전세대출 기준 */
+const noPolicy = computed(() => POLICY_LOANS.every((id) => cannotGet(id)));
+
+const programs = computed(() => shown.value.filter((p) => p.section === section.value));
+const countOf = (id: SupportSectionId) => (id === 'check' ? SUPPORT_TOOLS.length : shown.value.filter((p) => p.section === id).length);
 /** 비교 표 칸(이 칸에서 쓰는 것만) */
 const columns = computed(() => current.value.columns ?? []);
 
@@ -85,6 +110,7 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
     <div class="head">
       <strong class="total">지원 제도</strong>
       <span class="checked" title="조사한 날 기준입니다. 금리, 한도, 소득 기준은 해마다(때로는 몇 달 만에) 바뀌니 신청 전에 공식 안내에서 다시 확인하세요.">{{ dot(SUPPORT_CHECKED) }} 조사</span>
+      <CountTooltip v-if="hidden.length" :text="hiddenTip" :max-width="460"><span class="checked">소득 기준으로 {{ hidden.length }}개 뺌</span></CountTooltip>
     </div>
 
     <nav class="links" aria-label="공식 안내">
@@ -93,7 +119,7 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
     </nav>
 
     <ol class="steps" aria-label="전세를 구할 때 볼 순서">
-      <li v-for="(s, i) in SUPPORT_STEPS" :key="s.text">
+      <li v-for="(s, i) in steps" :key="s.text">
         <span class="step-no num">{{ i + 1 }}</span>
         <span class="step-text">{{ s.text }}</span>
         <button v-if="s.section" class="linkish" @click="pickSection(s.section)">{{ SUPPORT_SECTIONS.find((x) => x.id === s.section)?.name }} 칸</button>
@@ -108,7 +134,7 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
       </label>
     </fieldset>
 
-    <p class="intro">{{ current.intro }}</p>
+    <p class="intro">{{ intro }}</p>
 
     <details v-if="section === 'guard'" class="fold howto" :open="guardHowto.open.value" @toggle="guardHowto.onToggle">
       <summary>
@@ -130,10 +156,10 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
     <details v-if="section === 'loan'" class="fold howto" :open="loanHowto.open.value" @toggle="loanHowto.onToggle">
       <summary>
         <span class="fold-name">대출 받는 순서</span>
-        <span class="howto-sub muted" title="계약 전에 확인할 것부터 잔금 뒤까지 순서대로">버팀목 기준</span>
+        <span class="howto-sub muted" title="계약 전에 확인할 것부터 잔금 뒤까지 순서대로">{{ noPolicy ? '은행 전세대출 기준' : '버팀목 기준' }}</span>
       </summary>
       <div class="fold-body">
-        <SupportSteps :steps="LOAN_STEPS" @section="pickSection" />
+        <SupportSteps :steps="loanSteps" @section="pickSection" />
 
         <div class="clauses">
           <div class="clauses-head">
@@ -157,7 +183,7 @@ onBeforeUnmount(() => window.clearTimeout(copiedTimer));
         <div class="notes">
           <strong>대출이 거절되면 계약금은?</strong>
           <ul>
-            <li v-for="n in LOAN_DEPOSIT_NOTES" :key="n">{{ n }}</li>
+            <li v-for="n in depositNotes" :key="n.text">{{ n.text }}</li>
           </ul>
         </div>
 

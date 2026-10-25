@@ -36,13 +36,16 @@ const result = computed(() =>
 );
 const officialPercent = `${Math.round(GUARANTEE_RULE.officialRate * 100)}%`;
 const ratioPercent = `${Math.round(GUARANTEE_RULE.ratio * 100)}%`;
-const seniorPercent = `${Math.round(GUARANTEE_RULE.seniorMax * 100)}%`;
+/** 선순위 채권 상한: 주택가액(집값 × 90%)의 60%를 집값에 대한 비율로(54%) */
+const seniorPercent = `${Math.round(GUARANTEE_RULE.ratio * GUARANTEE_RULE.seniorMax * 100)}%`;
+/** 비율을 '72%'처럼(집값이 0이면 '-') */
+const percent = (v: number) => (Number.isFinite(v) ? `${Math.round(v * 100)}%` : '-');
 </script>
 
 <template>
   <div class="calc">
     <div class="calc-head">
-      <strong title="HUG 반환보증 기준으로 대략 계산합니다. 실제 가입은 심사에서 정해집니다.">보증한도 계산기</strong>
+      <strong title="HUG 반환보증 기준으로 대략 계산합니다. 실제 가입은 심사에서 정해집니다.">보증한도와 전세가율 계산기</strong>
     </div>
 
     <fieldset class="basis">
@@ -93,13 +96,23 @@ const seniorPercent = `${Math.round(GUARANTEE_RULE.seniorMax * 100)}%`;
           <dt>이 집에서 들 수 있는 보증금</dt>
           <dd class="num"><b>{{ result.maxDeposit > 0 ? `${manwon(result.maxDeposit)}까지` : '없음' }}</b></dd>
         </div>
+        <div>
+          <dt :title="`HUG와 국토부는 보증금이 시세의 80%, 서울시는 70%를 넘지 않는 집을 권합니다.${form.basis === 'official' ? ' 여기 집값은 공시가격에 비율을 곱한 값입니다.' : ''}`">전세가율(내 보증금 ÷ 집값)</dt>
+          <dd class="num">{{ percent((deposit ?? 0) / result.house) }}</dd>
+        </div>
+        <div>
+          <dt>선순위 채권까지 더하면</dt>
+          <dd class="num">{{ percent((senior + (deposit ?? 0)) / result.house) }}</dd>
+        </div>
       </dl>
       <ul class="checks">
         <li :class="result.depositOk ? 'ok' : 'bad'">
           내 보증금 {{ manwon(deposit ?? 0) }}:
           {{ result.depositOk ? '보증한도 안' : result.limit > 0 ? `보증한도보다 ${manwon((deposit ?? 0) - result.limit)} 많음` : '보증한도가 없음' }}
         </li>
-        <li :class="result.seniorOk ? 'ok' : 'bad'">선순위 채권: {{ result.seniorOk ? `집값의 ${seniorPercent} 이내` : `집값의 ${seniorPercent}를 넘음` }}</li>
+        <li :class="result.seniorOk ? 'ok' : 'bad'" :title="`주택가액(집값 × ${ratioPercent})의 ${Math.round(GUARANTEE_RULE.seniorMax * 100)}%`">
+          선순위 채권: {{ result.seniorOk ? `집값의 ${seniorPercent} 이내` : `집값의 ${seniorPercent}를 넘음` }}
+        </li>
         <li :class="result.capOk ? 'ok' : 'bad'">보증금 상한({{ form.capital ? '수도권' : '그 밖' }} {{ manwon(result.cap) }}): {{ result.capOk ? '넘지 않음' : '넘음' }}</li>
       </ul>
       <p class="verdict" :class="result.ok ? 'ok' : 'bad'" title="집 종류, 위반건축물, 집주인 같은 나머지는 심사에서 봅니다">

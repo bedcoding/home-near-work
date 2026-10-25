@@ -48,7 +48,7 @@ export function normalizeAlerts(input: unknown, base: AlertSettings = DEFAULT_AL
     if (v === undefined) return d;
     if (v === null || v === '') return null;
     if (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 100_000) return v;
-    throw new Error('면적은 ㎡ 숫자로 적어 주세요(빈칸은 제한 없음).');
+    throw new Error('면적은 숫자로 적어 주세요(빈칸은 제한 없음).');
   };
   const [m, j, s, sa, r, a, sh, la, ap] = ['monthly', 'jeonse', 'short', 'sale', 'rooms', 'auction', 'shopAuction', 'landAuction', 'aptAuction'].map(sub);
   return {
@@ -131,6 +131,8 @@ const rowOn = (row: AlertRow, s: AlertSettings): boolean => {
 };
 
 const upTo = (max: number | null) => (max == null ? '' : ` ${manwon(max)} 이하`);
+/** 설정의 면적(㎡)을 평으로('10평', 소수 한 자리) */
+const pyeongText = (m2: number) => `${Math.round((m2 / 3.3058) * 10) / 10}평`;
 
 /** 알림 줄 이름: '월세 50만 이하', '전세 2억 이하', '임대 공고' */
 export function rowLabel(row: AlertRow, s: AlertSettings): string {
@@ -142,8 +144,8 @@ export function rowLabel(row: AlertRow, s: AlertSettings): string {
     case 'rooms': return `고시원과 쉐어${upTo(s.rooms.monthlyMax)}`;
     case 'auction': return `경매${upTo(s.auction.priceMax)}`;
     case 'aptAuction': return `서울 아파트 경매${upTo(s.aptAuction.priceMax)}`;
-    case 'shopAuction': return `상가 경매${upTo(s.shopAuction.priceMax)}${s.shopAuction.areaMax == null ? '' : ` ${s.shopAuction.areaMax}㎡ 이하`}`;
-    case 'landAuction': return `토지 경매${upTo(s.landAuction.priceMax)}${s.landAuction.areaMax == null ? '' : ` ${s.landAuction.areaMax}㎡ 이하`}`;
+    case 'shopAuction': return `상가 경매${upTo(s.shopAuction.priceMax)}${s.shopAuction.areaMax == null ? '' : ` ${pyeongText(s.shopAuction.areaMax)} 이하`}`;
+    case 'landAuction': return `토지 경매${upTo(s.landAuction.priceMax)}${s.landAuction.areaMax == null ? '' : ` ${pyeongText(s.landAuction.areaMax)} 이하`}`;
     case 'rentNotices': return '임대 공고';
     case 'trustNotices': return '공매 공고';
     case 'subscriptions': return '청약';

@@ -3,7 +3,7 @@ import { money } from '../../shared/format';
 
 export { floorText, money, priceAmount, priceText } from '../../shared/format';
 
-const M2_PER_PYEONG = 3.3058;
+export const M2_PER_PYEONG = 3.3058;
 
 export const pyeong = (m2: number) => (m2 / M2_PER_PYEONG).toFixed(1);
 

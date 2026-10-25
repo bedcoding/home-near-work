@@ -1,4 +1,4 @@
-import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, LineViewSetting, RedevZonesView, RunDetail, RunInfo, RunScope, SourceId, Station, Verdict } from '../../shared/types';
+import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, LineViewSetting, RedevZonesView, RunDetail, RunInfo, RunScope, SiteReport, SourceId, Station, Verdict } from '../../shared/types';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -16,6 +16,8 @@ const enc = encodeURIComponent;
 export const api = {
   state: () => request<AppState>('GET', '/api/state'),
   listings: () => request<ListingView[]>('GET', '/api/listings'),
+  /** 사이트별 탭: 소스마다 최근 조회 기록과 크롬 확장 사이트가 받은 화면 데이터 요약 */
+  siteReport: () => request<SiteReport>('GET', '/api/site-report'),
   raw: (id: string) => request<{ explain: ExplainRow[]; raw: unknown }>('GET', `/api/listings/${enc(id)}/raw`),
   setVerdict: (id: string, verdict: Verdict | null) => request('POST', `/api/listings/${enc(id)}/verdict`, { verdict }),
   ack: (id: string) => request('POST', `/api/listings/${enc(id)}/ack`),
