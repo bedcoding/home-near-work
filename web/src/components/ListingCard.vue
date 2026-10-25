@@ -2,13 +2,15 @@
 import { computed } from 'vue';
 import { DEAL_LABEL, SOURCE_LABEL, type Area, type ListingView, type PriceOption, type TradeRef, type Verdict } from '../../../shared/types';
 import { ago, dateTime, distanceText, manwon, money, nearest, perPyeong, priceAmount, priceText, pyeong, pyeongExact } from '../format';
-import { auctionSiteLinks, isAuction, saleDateOf, saleDay, type ExpectedPrice } from '../auction';
+import { auctionSiteLinks, claimsChip, isAuction, saleDateOf, saleDay, type ExpectedPrice } from '../auction';
 import { isNoOption } from '../filters';
 import { KIND_LABEL, kindOf } from '../kinds';
 import { isRoomStay, roomRange as rangeOf, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
 import { redevChip } from '../zones';
 import { loanView } from '../loans';
+import { cannotGet } from '../profile';
+import { convertedRent, loanMonthly } from '../rentRate';
 import CountTooltip from './CountTooltip.vue';
 
 const props = defineProps<{
@@ -27,8 +29,9 @@ const near = computed(() => nearest(props.listing, props.areas));
 const kind = computed(() => kindOf(props.listing));
 /** 정비사업 구역 안이면 물딱지 표시(지금 사면 조합원이 못 되는지와 판 사람 조건) */
 const redev = computed(() => redevChip(props.listing, kind.value === 'land'));
-/** 사는 매물이면 대출 신호등(디딤돌, 신생아 특례, 보금자리론)과 일반 주택담보대출 한도 */
-const loan = computed(() => loanView(props.listing));
+/** 사는 매물이면 대출 신호등(디딤돌, 신생아 특례, 보금자리론, 내 소득으로 못 받는 것은 뺌)과 일반 주택담보대출 한도 */
+const loan = computed(() => loanView(props.listing, cannotGet));
+const claims = computed(() => claimsChip(props.listing));
 const eokText = (manwon: number) => `${manwon / 10000}억`;
 /** 경매(법원경매, 온비드)는 사진을 받지 않아 사진 칸을 두지 않는다. */
 const noThumb = computed(() => isAuction(l.value));
@@ -36,6 +39,10 @@ const noThumb = computed(() => isAuction(l.value));
 const room = computed(() => isRoomStay(props.listing));
 /** 고시원과 쉐어의 가격 둘(가장 싼 방, 비싼 방)을 한 줄로 이은 것 */
 const roomRange = computed(() => rangeOf(props.listing));
+/** 월세 보증금이나 전세금을 월세로 바꾼 값(보증금이 다른 집이나 전세와 월세를 견줄 때) */
+const converted = computed(() => (room.value ? null : convertedRent(props.listing)));
+/** 보증금을 전세대출로 낼 때 매달 나가는 돈(월세 + 이자) */
+const loanCost = computed(() => (room.value ? null : loanMonthly(props.listing)));
 /** 매물 위치를 가운데로 여는 네이버 부동산 지도(그 자리 단지와 실거래가 확인용). */
 const naverMapUrl = computed(() =>
   l.value.lat != null && l.value.lng != null ? `https://fin.land.naver.com/map?center=${naverCenter(l.value.lat, l.value.lng)}&zoom=16` : null,
@@ -174,6 +181,8 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
             <b v-if="!l.prices.length" class="muted">가격 모름</b>
           </template>
           <small v-if="appraisal" :title="appraisal.title">감정가 {{ appraisal.amount }}의 {{ appraisal.rate }}%</small>
+          <CountTooltip v-if="converted" :text="converted.tip" :max-width="520"><small class="converted">환산 월 {{ converted.text }}</small></CountTooltip>
+          <CountTooltip v-if="loanCost" :text="loanCost.tip" :max-width="520"><small class="converted">대출 시 월 {{ loanCost.text }}</small></CountTooltip>
         </div>
         <template v-if="!room">
           <div class="stat">
@@ -229,6 +238,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
         <span v-if="l.auction?.failed != null" class="chip chip-room">유찰 {{ l.auction.failed }}회</span>
         <span v-if="l.auction && l.auction.lots > 1" class="chip chip-room" title="같은 사건과 물건번호의 목록(토지, 호실)을 한 번에 매각">{{ l.auction.lots }}개 일괄매각</span>
         <span v-if="l.auction?.share" class="chip chip-warn" title="지분 매각: 집이나 땅 전체가 아니라 일부 지분만 팝니다(다른 공유자가 있음). 땅만 파는 물건의 면적은 지분만큼입니다.">지분</span>
+        <CountTooltip v-if="claims" :text="claims.tip" :max-width="520"><span class="chip" :class="`chip-${claims.tone}`">{{ claims.label }}</span></CountTooltip>
         <span v-if="l.auction?.mgmt" class="chip chip-warn" :title="`물건 비고: ${l.auction.mgmt.text}`">{{ l.auction.mgmt.label }}</span>
         <slot name="tags" />
         <span v-if="titleText" class="title" :title="l.title || undefined">{{ titleText }}</span>
@@ -308,6 +318,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 .stat.price { min-width: 160px; }
 .stat.price b { font-size: 20px; }
 .deal { margin-right: 5px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.stat small.converted { color: var(--ink-2); font-weight: 700; }
 .stat.floor { min-width: 52px; }
 .stat.dist { width: 80px; }
 .stat.floor b, .stat.dist b { font-weight: 700; color: var(--ink-2); }

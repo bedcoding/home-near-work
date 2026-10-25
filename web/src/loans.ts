@@ -2,7 +2,7 @@ import { isDetachedHouseType, type ListingView } from '../../shared/types';
 import { kindOf } from './kinds';
 
 // 대출 신호등(ListingCard): 사는 매물(매매, 경매, 공매)의 값, 전용면적, 집 종류로 정책대출(디딤돌, 신생아 특례 디딤돌, 보금자리론)을
-// 받을 수 있는지와 일반 주택담보대출 한도 구간을 본다. 소득, 자산, 무주택 여부, 신용은 보지 않는다. 금액은 만원.
+// 받을 수 있는지와 일반 주택담보대출 한도 구간을 본다. 자산, 무주택 여부, 신용은 보지 않고, 소득은 내 조건(profile.ts)으로 못 받는 대출을 뺄 때만 쓴다. 금액은 만원.
 // ok 가격과 집 조건이 맞음, maybe 모르는 값이 있거나 경계라 확인 필요, no 아는 값으로 안 됨.
 // 고칠 때는 LOANS_CHECKED와 LOAN_SOURCES도 같이 고친다.
 
@@ -51,8 +51,12 @@ const worst = (states: LoanState[]): LoanState => (states.includes('no') ? 'no' 
 /**
  * 사는 매물의 대출 신호등. 매매나 경매 값이 없거나 집이 아닌 것(토지, 상가, 기타)이면 null.
  * 값: 매매가(경매는 이번 회차 최저가, 낙찰가는 그보다 높을 수 있음), 시세 대신 같은 단지 같은 전용면적 실거래 중간값(TradeRef), 경매 감정가.
+ * skip이 true를 돌려주는 정책대출(내 소득으로는 못 받는 것)은 신호등과 설명에서 뺀다.
  */
-export function loanView(l: Pick<ListingView, 'buildingType' | 'prices' | 'areaM2' | 'trade' | 'auction' | 'source'>): LoanView | null {
+export function loanView(
+  l: Pick<ListingView, 'buildingType' | 'prices' | 'areaM2' | 'trade' | 'auction' | 'source'>,
+  skip: (id: LoanLight['id']) => boolean = () => false,
+): LoanView | null {
   const kind = kindOf(l);
   if (kind === 'land' || kind === 'shop' || kind === 'etc') return null;
   const auction = l.source === 'courtauction' || l.source === 'onbid' || l.prices.some((p) => p.deal === 'auction');
@@ -103,22 +107,34 @@ export function loanView(l: Pick<ListingView, 'buildingType' | 'prices' | 'areaM
     return { id: 'bogeumjari', name: '보금자리', state: worst(states), why };
   }
 
-  const lights = [didimdol('didimdol', '디딤돌', 5 * EOK), didimdol('newborn', '신생아', 9 * EOK), bogeumjari()];
+  const lights = [didimdol('didimdol', '디딤돌', 5 * EOK), didimdol('newborn', '신생아', 9 * EOK), bogeumjari()].filter((x) => !skip(x.id));
 
   // 일반 주택담보대출(10.15): 시가 15억 이하 6억, 25억 이하 4억, 넘으면 2억. 오피스텔은 이 구간이 아니라 빼고 보인다.
   const market = median ?? appraisal ?? price;
   const marketBasis = median != null ? '실거래 중간값' : appraisal != null ? '감정가' : priceName;
   const cap = kind === 'officetel' ? null : market <= 15 * EOK ? 6 * EOK : market <= 25 * EOK ? 4 * EOK : 2 * EOK;
+  if (!lights.length && cap == null) return null;
 
+  /** 정책대출 한도(남은 것만) */
+  const LIMITS: Record<LoanLight['id'], string> = {
+    didimdol: '디딤돌 일반 2억(생애최초 2.4억, 신혼과 2자녀 3.2억)',
+    newborn: '신생아 특례 4억',
+    bogeumjari: '보금자리론 3.6억(생애최초 4.2억)',
+  };
+  const policy = lights.length
+    ? [
+        '정책대출(가격과 집 조건만 봄, 자산, 무주택 여부, 신용은 안 봄, 소득은 설정 탭 내 조건으로 거름)',
+        ...lights.map((x) => `${x.name === '신생아' ? '신생아 특례 디딤돌(9억, 85㎡)' : x.name === '디딤돌' ? '디딤돌(일반 5억, 신혼과 2자녀 6억, 85㎡)' : '보금자리론(시세, 감정가, 매매가 모두 6억 이하)'}: ${STATE_TEXT[x.state]}${x.why.length ? `\n  ${x.why.join(', ')}` : ''}`),
+        '',
+      ]
+    : [];
   const tip = [
-    '정책대출(가격과 집 조건만 봄, 소득, 자산, 무주택 여부, 신용은 안 봄)',
-    ...lights.map((x) => `${x.name === '신생아' ? '신생아 특례 디딤돌(9억, 85㎡)' : x.name === '디딤돌' ? '디딤돌(일반 5억, 신혼과 2자녀 6억, 85㎡)' : '보금자리론(시세, 감정가, 매매가 모두 6억 이하)'}: ${STATE_TEXT[x.state]}${x.why.length ? `\n  ${x.why.join(', ')}` : ''}`),
-    '',
+    ...policy,
     cap != null
       ? `일반 주택담보대출 한도 ${eok(cap)}: 시가(${marketBasis} ${money(market)}) 15억 이하 6억, 25억 이하 4억, 넘으면 2억(10.15 대책). 서울은 LTV 40%(생애최초 70%)도 같이 걸리고, 대출을 받으면 6개월 안에 전입해야 합니다.${auction ? ' 경락잔금대출에도 같다는 보도가 있습니다(공식 문답 없음).' : ''}`
       : '오피스텔은 주택담보대출 구간 한도가 아니라 비주택 담보대출 기준을 따릅니다.',
     '',
-    `정책대출 한도: 디딤돌 일반 2억(생애최초 2.4억, 신혼과 2자녀 3.2억), 신생아 특례 4억, 보금자리론 3.6억(생애최초 4.2억). 시세는 같은 단지 같은 면적 실거래 중간값으로 대신 봤습니다. ${LOANS_CHECKED.replace(/-/g, '.')} 확인(${LOAN_SOURCES}).`,
+    `${lights.length ? `정책대출 한도: ${lights.map((x) => LIMITS[x.id]).join(', ')}. ` : ''}시세는 같은 단지 같은 면적 실거래 중간값으로 대신 봤습니다. ${LOANS_CHECKED.replace(/-/g, '.')} 확인(${LOAN_SOURCES}).`,
   ].join('\n');
   return { lights, cap, tip };
 }

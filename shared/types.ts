@@ -469,6 +469,8 @@ export interface ListingView extends NormalizedListing {
     share: boolean;
     gu: string | null;
     dong: string | null;
+    /** 법원경매 물건의 배당 순위 확인(court-claims). 아직 안 봤거나 온비드면 null. */
+    claims: CourtClaims | null;
   } | null;
   /**
    * 옵션(가전, 가구). list는 사이트가 준 옵션 목록(집토스, 빈 배열이면 옵션 없음, 모르면 null),
@@ -483,6 +485,46 @@ export interface ListingView extends NormalizedListing {
   trade: TradeRef | null;
   /** 사는 매물(매매, 경매, 공매)의 좌표가 정비사업 구역(서울플랜+ 파일) 안이면 그 구역들과 파일의 작성일. 아니면 null. */
   redev: { hits: RedevHit[]; fileDate: string | null } | null;
+}
+
+/**
+ * 법원경매 물건에서 배당 때 대항력 임차인보다 먼저 받을 수 있는 청구와 대항력 임차인(court-claims). 날짜는 YYYY-MM-DD.
+ * checkedAt 사건 기록(이해관계인, 문건 처리 내역)을 본 날, demandEnd 배당요구종기.
+ * wage: 최우선 임금채권으로 보이는 것(가려진 이름이 근로복지공단 모양인 이해관계인, 임금, 퇴직금, 대지급금 문건). what은 역할과 문건 종류만(이름 없음).
+ * taxDocs 교부청구 문건 수, taxParties 교부권자와 압류권자 수, tenantParties 임차인, 임차권자, 전세권자 수,
+ * tenantDocs 임차인 쪽 권리신고나 배당요구 문건 수, waiver 대항력 포기 확약서를 낸 날(물건 비고에만 있으면 checkedAt).
+ * senior: 물건 상세의 최선순위 설정(말소기준권리). survey: 현황조사서(매각기일 2주 전부터 열람)의 임차인과 읽은 날. 둘 다 아직 못 봤으면 null.
+ */
+export interface CourtClaims {
+  checkedAt: string;
+  demandEnd: string | null;
+  wage: { date: string | null; what: string }[];
+  taxDocs: number;
+  taxParties: number;
+  tenantParties: number;
+  tenantDocs: number;
+  waiver: string | null;
+  senior: { date: string; right: string } | null;
+  survey: { at: string; tenants: SurveyTenant[] } | null;
+  /** 물건 비고, 명세서 비고, 소멸되지 않는 권리에 매수인에게 대항할 수 있는 임차인이나 임차권등기가 적혀 있음(이사 나간 등기 임차인은 현황조사서에 없음) */
+  remarkSenior?: boolean;
+}
+
+/**
+ * 법원 비고 글자에 매수인에게 대항할 수 있는 임차인이나 임차권등기가 적혀 있는지('매수인에게 대항할 수 있는 … 주택임차권 등기',
+ * '대항력 있는 임차인', '보증금이 … 매수인이 인수함', 소멸되지 않는 권리의 임차권). 이사 나간 등기 임차인은 현황조사서에 없어서 비고로 본다.
+ * '대항력 있는 임차인 없음'과 '공용부분 관리비는 매수인에게 인수될 수 있음'은 치지 않는다.
+ */
+export const seniorInRemarks = (text: string) =>
+  /매수인에게\s*대항할\s*수\s*있|대항력\s*(이\s*)?있(?![^.]{0,20}없)|(임차|보증금)(?:(?!관리비)[^.]){0,60}매수인(이|에게)\s*인수|소멸되지 않는 권리:.*임차/.test(text);
+
+/** 현황조사서 임차인 한 줄(이름과 주소는 뺌). moveIn 전입일, fixed 확정일자(YYYY-MM-DD, 모르면 null), deposit, rent, part는 조사서 글자 그대로. */
+export interface SurveyTenant {
+  moveIn: string | null;
+  fixed: string | null;
+  deposit: string | null;
+  rent: string | null;
+  part: string | null;
 }
 
 /** 경매 탭 칸(주거, 상가, 토지)에 맞춘 매각 결과 종류. other는 산업용, 용도복합용 등 세 칸에 들지 않는 것. */
@@ -855,6 +897,50 @@ export interface SourceRunInfo {
   error: string | null;
 }
 
+/** 사이트별 탭(GET /api/site-report): 소스마다 최근 조회 기록과, 크롬 확장 사이트가 화면에서 받은 것 요약 */
+export interface SiteReport {
+  /** 소스마다 그 소스가 들어간 조회(새것부터 12개까지). 크롬 확장 사이트는 하루치를 묶은 기록이다. */
+  history: Partial<Record<SourceId, SiteRunRow[]>>;
+  /** 크롬 확장 사이트(naver, dabang, zigbang, kbland, hogangnono, daangn)마다 받은 화면 데이터 요약 */
+  captures: Record<string, SiteCaptureReport>;
+}
+
+export interface SiteRunRow {
+  runId: number;
+  /** 조회가 끝난 시각(조회 중이면 시작 시각) */
+  at: string;
+  auto: boolean;
+  status: 'ok' | 'error';
+  /** 사이트에서 받은 수, 지역 안이라 남긴 수, 새로 들어온 수, 가격이 바뀐 수 */
+  fetched: number;
+  kept: number;
+  newCount: number;
+  priceChanged: number;
+  error: string | null;
+}
+
+/**
+ * 크롬 확장 사이트 하나가 받은 화면 데이터 요약. days: 최근 14일 한국 날짜('2026-10-21')마다 받은 응답 수(새것부터, 받은 날만).
+ * lines: 사이트 화면이 센 수와 매물 내용까지 받은 수 같은 줄(가장 최근 응답에서 읽음).
+ */
+export interface SiteCaptureReport {
+  lastAt: string | null;
+  days: { day: string; responses: number }[];
+  lines: SiteCaptureLine[];
+}
+
+export interface SiteCaptureLine {
+  /** 짧은 이름('지도 안 매물') */
+  label: string;
+  /** 보일 값('1,228건') */
+  value: string;
+  at: string;
+  /** 바로 뜨는 설명(무엇을 센 것인지, 고른 조건) */
+  tip: string;
+  /** 사이트에 있는 것보다 받은 것이 적은 줄(눈에 띄게 보인다) */
+  short?: boolean;
+}
+
 export interface RunDetail extends RunInfo {
   log: string[];
   screenshots: { source: string; label: string; file: string }[];
@@ -904,6 +990,8 @@ export interface AppState {
    * last 마지막으로 확인한 결과(at 시각, ok 성공, text '구역 확인 12곳: 정비구역 등 안 2곳, 없음 9곳, 응답 없음 1곳' 또는 오류).
    */
   zoneCheck: { key: boolean; last: { at: string; ok: boolean; text: string } | null };
+  /** 한국은행 기준금리(연 %)와 바뀐 날(YYYY-MM-DD). 받아 둔 표가 없으면 null */
+  baseRate: { value: number; date: string } | null;
 }
 
 // ---------- 시세 통계 탭 ----------
@@ -982,6 +1070,19 @@ export interface MarketTier {
   near: boolean;
   /** 법정동별(평당 중간값 높은 순) */
   dongs: { dong: string; count: number; pyeong: number }[];
+  /** 이 구의 전철역(이름순) */
+  stations: MarketStation[];
+}
+
+/**
+ * 구별 급지표의 역 하나. dongs는 그 역을 붙일 법정동이고 how는 맞춘 방법:
+ * listings 역 300m 안 모은 매물이 가장 많이 있는 동, name 역 이름이 붙은 동(그런 동이 하나일 때), null 못 맞춤.
+ */
+export interface MarketStation {
+  name: string;
+  lines: string[];
+  dongs: string[];
+  how: 'listings' | 'name' | null;
 }
 
 /** 시세 통계 탭 전체 */

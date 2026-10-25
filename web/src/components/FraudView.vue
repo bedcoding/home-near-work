@@ -3,7 +3,8 @@ import { computed, ref, watch } from 'vue';
 import { FRAUD_CASES, FRAUD_CHECKED, FRAUD_GROUPS, FRAUD_TOOLS, type FraudGroup } from '../frauds';
 
 // 사기 사례 탭: 부동산 사기 수법을 카드로 보인다(수법, 실제 사례, 서류에서 보이는 곳, 당하면 생기는 일, 근거 링크).
-// 위에 확인 도구 링크, 거르기(매매, 임대, 분양과 조합, 토지, 경매, 투자, 서류로 못 잡는 것)와 검색어. 고른 거르기는 이 브라우저에 기억한다.
+// 위에 확인 도구 링크, 거르기(FRAUD_GROUPS의 거래 유형과 서류로 못 잡는 것)와 검색어. 고른 거르기는 이 브라우저에 기억한다.
+// 카드 이름 옆 거래 유형 라벨을 누르면 그 유형으로 거른다.
 
 type Pick = FraudGroup | 'all' | 'blind';
 const KEY = 'hnw-fraud-group';
@@ -36,7 +37,8 @@ const shown = computed(() => {
     return words.every((w) => text.includes(w));
   });
 });
-const groupName = (id: FraudGroup) => FRAUD_GROUPS.find((g) => g.id === id)?.name ?? id;
+/** 사례의 거래 유형을 FRAUD_GROUPS 순서로 */
+const groupsOf = (c: (typeof FRAUD_CASES)[number]) => FRAUD_GROUPS.filter((g) => c.groups.includes(g.id));
 const dot = (iso: string) => iso.replace(/-/g, '.');
 </script>
 
@@ -52,7 +54,9 @@ const dot = (iso: string) => iso.replace(/-/g, '.');
     <div class="bar">
       <div class="picks" role="group" aria-label="사기 사례 거르기">
         <button type="button" :aria-pressed="pick === 'all'" @click="pick = 'all'">전체 <span class="num">{{ countOf('all') }}</span></button>
-        <button v-for="g in FRAUD_GROUPS" :key="g.id" type="button" :aria-pressed="pick === g.id" @click="pick = g.id">{{ g.name }} <span class="num">{{ countOf(g.id) }}</span></button>
+        <button v-for="g in FRAUD_GROUPS" :key="g.id" type="button" :aria-pressed="pick === g.id" :title="g.title" @click="pick = g.id">
+          {{ g.name }} <span class="num">{{ countOf(g.id) }}</span>
+        </button>
         <button type="button" :aria-pressed="pick === 'blind'" title="계약 당일 서류만으로는 못 잡는 수법(잔금 직전 재확인, 특약, 현장 확인이 필요)" @click="pick = 'blind'">
           서류로 못 잡음 <span class="num">{{ countOf('blind') }}</span>
         </button>
@@ -65,9 +69,21 @@ const dot = (iso: string) => iso.replace(/-/g, '.');
     <p v-if="!shown.length" class="muted empty">맞는 사례가 없습니다</p>
     <div class="cards">
       <article v-for="c in shown" :key="c.id" class="case">
-        <h3 class="case-name">{{ c.name }}</h3>
+        <div class="case-head">
+          <h3 class="case-name">{{ c.name }}</h3>
+          <span class="deals">
+            <button
+              v-for="g in groupsOf(c)"
+              :key="g.id"
+              type="button"
+              class="deal"
+              :class="g.id"
+              :title="`${g.title}. 누르면 ${g.name}만 보기`"
+              @click="pick = g.id"
+            >{{ g.name }}</button>
+          </span>
+        </div>
         <div class="case-tags">
-          <span v-for="g in c.groups" :key="g" class="chip chip-muted">{{ groupName(g) }}</span>
           <span v-for="d in c.docs" :key="d" class="chip doc">{{ d }}</span>
           <span v-if="c.blind" class="chip chip-warn" title="계약 당일 서류만으로는 못 잡습니다">{{ c.blind }}</span>
         </div>
@@ -115,10 +131,25 @@ const dot = (iso: string) => iso.replace(/-/g, '.');
   display: grid; align-content: start; gap: 8px; min-width: 0; padding: 12px 14px;
   border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
 }
+.case-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 10px; }
 .case-name { margin: 0; font-size: 16px; }
+.deals { display: flex; flex-wrap: wrap; gap: 4px; }
+.deal {
+  min-height: 22px; padding: 0 8px; border: 0; border-radius: 5px;
+  font-size: 12px; font-weight: 700; line-height: 22px; cursor: pointer;
+}
+.deal:hover { text-decoration: underline; text-underline-offset: 3px; }
+.deal.buy { background: #e8f0fb; color: #1f5fbf; }
+.deal.jeonse { background: #e1f2ef; color: #0f7a6c; }
+.deal.monthly { background: #ece8fa; color: #5b3cc4; }
+.deal.auction { background: #fbece2; color: #b3541e; }
+.deal.sale { background: #fae6ef; color: #a8326e; }
+.deal.shop { background: #f5eedd; color: #7a5a1f; }
+.deal.land { background: #eaf2df; color: #4d7a1f; }
+.deal.invest { background: #e7ebf0; color: #44546a; }
 .case-tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .case-tags .chip { font-size: 11px; padding: 1px 7px; }
-.doc { background: var(--accent-soft); color: var(--accent); }
+.doc { box-shadow: inset 0 0 0 1px var(--line); background: var(--surface); color: var(--ink-2); }
 .case-body { display: grid; gap: 4px; margin: 0; font-size: 13px; line-height: 1.6; }
 .case-body dt { margin-top: 2px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: var(--muted); }
 .case-body dd { margin: 0; color: var(--ink-2); }

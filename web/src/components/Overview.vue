@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { DEAL_LABEL, SOURCE_LABEL, type Area, type DealType, type ListingView, type PriceOption, type SourceId, type Verdict } from '../../../shared/types';
-import { bandIdOf, bandsFor, bandValue, EDGES, isRent, OVERVIEW_DEALS, orderFor, type Band } from '../bands';
+import { SOURCE_LABEL, type Area, type DealType, type ListingView, type PriceOption, type SourceId, type Verdict } from '../../../shared/types';
+import {
+  bandDeal, bandIdOf, bandsFor, bandValue, DEALS_OF, isRent, OVERVIEW_DEALS, OVERVIEW_LABEL, orderFor, overviewDealOf, type Band, type OverviewDeal,
+} from '../bands';
 import { DEFAULT_FILTERS, dealOptions, passes, type Filters } from '../filters';
 import type { CatalogStation } from '../areaActions';
 import { money, radiusText } from '../format';
@@ -69,20 +71,40 @@ const emit = defineEmits<{
 /** ''는 가격대만 펼친 상태(사이트별 건수만 보임). */
 type Pick = SourceId | 'all' | '';
 interface Saved {
-  deal: DealType;
-  /** 거래 유형별 가격대 순서(끌어서 바꾼 것) */
-  order: Partial<Record<DealType, string[]>>;
-  /** 거래 유형별로 펼친 가격대와 고른 사이트 */
-  open: Partial<Record<DealType, Record<string, Pick>>>;
+  deal: OverviewDeal;
+  /** 카드별 가격대 순서(끌어서 바꾼 것) */
+  order: Partial<Record<OverviewDeal, string[]>>;
+  /** 카드별로 펼친 가격대와 고른 사이트 */
+  open: Partial<Record<OverviewDeal, Record<string, Pick>>>;
 }
 
-// 다음에 열어도 고른 거래 유형, 펼친 가격대, 순서가 그대로 보이게 저장한다. 읽을 때는 이 세 값만 남긴다.
+/** 새 소식 줄의 id(가격대 id와 겹치지 않음) */
+const NEWS_ID = 'news';
+
+// 다음에 열어도 고른 카드, 펼친 가격대, 순서가 그대로 보이게 저장한다. 읽을 때는 이 세 값만 남긴다.
+// 예전 월세, 전세 카드를 골라 두었으면 전월세로 열고, 그 카드의 순서와 펼침은 전월세 카드의 월세, 전세 가격대로 옮긴다.
 const KEY = 'hnw-overview-v1';
 function load(): Saved {
-  const empty: Saved = { deal: 'monthly', order: {}, open: {} };
+  const empty: Saved = { deal: 'rent', order: {}, open: {} };
+  const known = <T,>(rec: Partial<Record<string, T>> | undefined) =>
+    Object.fromEntries(Object.entries(rec ?? {}).filter(([k]) => (OVERVIEW_DEALS as string[]).includes(k))) as Partial<Record<OverviewDeal, T>>;
+  const rentId = (d: 'monthly' | 'jeonse', id: string) => (id === 'unknown' || id === NEWS_ID ? id : `${d}:${id}`);
   try {
-    const s = JSON.parse(localStorage.getItem(KEY) ?? 'null') as Partial<Saved> | null;
-    return s ? { deal: s.deal ?? empty.deal, order: s.order ?? {}, open: s.open ?? {} } : empty;
+    const s = JSON.parse(localStorage.getItem(KEY) ?? 'null') as { deal?: string; order?: Record<string, string[]>; open?: Record<string, Record<string, Pick>> } | null;
+    if (!s) return empty;
+    const deal = (OVERVIEW_DEALS as string[]).includes(s.deal ?? '') ? (s.deal as OverviewDeal) : (overviewDealOf(s.deal as DealType) ?? empty.deal);
+    const order = known(s.order);
+    const open = known(s.open);
+    if (!order.rent && (s.order?.monthly || s.order?.jeonse)) {
+      order.rent = [...(s.order.monthly ?? []).map((id) => rentId('monthly', id)), ...(s.order.jeonse ?? []).map((id) => rentId('jeonse', id))];
+    }
+    if (!open.rent && (s.open?.monthly || s.open?.jeonse)) {
+      open.rent = Object.fromEntries([
+        ...Object.entries(s.open.monthly ?? {}).map(([id, v]) => [rentId('monthly', id), v]),
+        ...Object.entries(s.open.jeonse ?? {}).map(([id, v]) => [rentId('jeonse', id), v]),
+      ]);
+    }
+    return { deal, order, open };
   } catch {
     return empty;
   }
@@ -103,6 +125,7 @@ watch(
 const SOURCES = Object.keys(SOURCE_LABEL) as SourceId[];
 const hasNews = (l: ListingView) => l.isNew || !!l.priceChange;
 
+/** 가격대 줄의 매물 하나. 전월세 카드에서 월세와 전세를 다 내놓은 매물은 월세 가격대와 전세 가격대에 하나씩 든다. */
 interface Entry {
   listing: ListingView;
   /** 가격대를 정한 가격 선택지 */
@@ -110,12 +133,15 @@ interface Entry {
   value: number | null;
 }
 
-/** 가격 선택지가 여럿이면 가장 싼 것(같으면 보증금이 낮은 것)으로 가격대를 정한다. */
-function cheapest(deal: DealType, options: PriceOption[]): PriceOption {
-  const key = (p: PriceOption) => bandValue(deal, p) ?? Infinity;
+/** 같은 거래 유형의 가격 선택지가 여럿이면 가장 싼 것(같으면 보증금이 낮은 것)으로 가격대를 정한다. */
+function cheapest(options: PriceOption[]): PriceOption {
+  const key = (p: PriceOption) => bandValue(p) ?? Infinity;
   const deposit = (p: PriceOption) => p.deposit ?? Infinity;
   return options.reduce((a, b) => (key(b) < key(a) || (key(b) === key(a) && deposit(b) < deposit(a)) ? b : a));
 }
+
+/** 매물마다 하나만 남긴다(카드 건수, 지도, 새 소식 줄). */
+const uniq = (entries: Entry[]) => [...new Map(entries.map((e) => [e.listing.id, e])).values()];
 
 // ---------- 지역 ----------
 // 켜진 지역이 둘 이상이면 지역마다 따로 볼 수 있다.
@@ -146,20 +172,24 @@ function pickArea(event: Event) {
 /** 거래 유형 필터를 뺀 필터 */
 const anyDeal = computed<Filters>(() => ({ ...props.filters, deals: [] }));
 
-const byDeal = computed(() => {
-  const map = new Map<DealType, Entry[]>();
-  for (const deal of OVERVIEW_DEALS) {
-    const entries: Entry[] = [];
-    for (const listing of props.listings) {
-      const options = dealOptions(listing, deal, anyDeal.value, props.areas);
+/** 카드에 드는 가격 선택지(전월세는 월세와 전세를 함께) */
+const cardOptions = (listing: ListingView, deal: OverviewDeal, f: Filters) => DEALS_OF[deal].flatMap((d) => dealOptions(listing, d, f, props.areas));
+
+/** 카드의 가격대 줄에 드는 매물들: 카드의 거래 유형마다(전월세는 월세와 전세 따로) 가장 싼 선택지 하나 */
+function entriesOf(deal: OverviewDeal, f: Filters): Entry[] {
+  const entries: Entry[] = [];
+  for (const listing of props.listings) {
+    for (const d of DEALS_OF[deal]) {
+      const options = dealOptions(listing, d, f, props.areas);
       if (!options.length) continue;
-      const option = cheapest(deal, options);
-      entries.push({ listing, option, value: bandValue(deal, option) });
+      const option = cheapest(options);
+      entries.push({ listing, option, value: bandValue(option) });
     }
-    map.set(deal, entries);
   }
-  return map;
-});
+  return entries;
+}
+
+const byDeal = computed(() => new Map(OVERVIEW_DEALS.map((deal) => [deal, entriesOf(deal, anyDeal.value)])));
 
 const counts = (entries: Entry[]) => ({
   total: entries.length,
@@ -172,33 +202,33 @@ const counts = (entries: Entry[]) => ({
  * 반경 밖이라 안 보이는 매물이 있다는 것을 알린다.
  */
 const outsideByDeal = computed(() => {
-  const out = new Map<DealType, number>();
+  const out = new Map<OverviewDeal, number>();
   if (!props.filters.insideAreas) return out;
   const loose = { ...anyDeal.value, insideAreas: false };
   for (const deal of OVERVIEW_DEALS) {
     let n = 0;
-    for (const l of props.listings) if (dealOptions(l, deal, loose, props.areas).length && !dealOptions(l, deal, anyDeal.value, props.areas).length) n++;
+    for (const l of props.listings) if (cardOptions(l, deal, loose).length && !cardOptions(l, deal, anyDeal.value).length) n++;
     out.set(deal, n);
   }
   return out;
 });
 
-/** 월세, 전세, 매매는 늘 보이고, 단기는 매물이 있을 때(반경 밖 포함)나 골라 둔 때만 보인다. */
+/** 전월세와 매매는 늘 보이고, 단기는 매물이 있을 때(반경 밖 포함)나 골라 둔 때만 보인다. */
 const dealCards = computed(() =>
   OVERVIEW_DEALS.map((deal) => ({
     deal,
-    label: DEAL_LABEL[deal],
-    ...counts(byDeal.value.get(deal) ?? []),
+    label: OVERVIEW_LABEL[deal],
+    ...counts(uniq(byDeal.value.get(deal) ?? [])),
     outside: outsideByDeal.value.get(deal) ?? 0,
   })).filter((c) => c.total > 0 || c.outside > 0 || c.deal !== 'short' || c.deal === saved.deal),
 );
 
-const deal = computed<DealType>(() => (dealCards.value.some((c) => c.deal === saved.deal) ? saved.deal : 'monthly'));
+const deal = computed<OverviewDeal>(() => (dealCards.value.some((c) => c.deal === saved.deal) ? saved.deal : 'rent'));
 
-/** 카드(또는 숫자 키)로 거래 유형을 고른다. 왼쪽 필터도 그 하나로 바뀐다. */
-function pickCard(d: DealType) {
+/** 카드(또는 숫자 키)로 거래 유형을 고른다. 왼쪽 필터도 그 카드의 거래 유형(전월세면 월세와 전세)으로 바뀐다. */
+function pickCard(d: OverviewDeal) {
   saved.deal = d;
-  emit('deals', [d]);
+  emit('deals', [...DEALS_OF[d]]);
 }
 
 function pickDeal(index: number) {
@@ -207,18 +237,22 @@ function pickDeal(index: number) {
 }
 
 // 왼쪽 필터에서 거래 유형을 새로 켜면 그 카드로, 지금 카드가 필터에서 빠지면 남은 것 중 첫 카드로 옮긴다. '전체'면 그대로 둔다.
+// 필터 거래 유형은 고른 카드의 거래 유형과 같게 맞춘다(예전에 월세만 골라 두었으면 월세와 전세로).
 watch(
-  () => props.filters.deals.filter((d) => OVERVIEW_DEALS.includes(d)),
+  () => [...new Set(props.filters.deals.map(overviewDealOf).filter((d): d is OverviewDeal => d != null))],
   (now, before) => {
     const added = before ? now.find((d) => !before.includes(d)) : undefined;
     if (added) saved.deal = added;
     else if (now.length && !now.includes(saved.deal)) saved.deal = OVERVIEW_DEALS.find((d) => now.includes(d)) ?? saved.deal;
+    const want = DEALS_OF[saved.deal];
+    const deals = props.filters.deals;
+    if (deals.length && (deals.length !== want.length || !want.every((d) => deals.includes(d)))) emit('deals', [...want]);
   },
   { immediate: true },
 );
 defineExpose({ pickDeal, openNews });
 
-/** 새 소식이 먼저, 그다음 싼 순서(월세는 월세 → 보증금). 가장 싼 칸에서는 반전세가 위로 온다. */
+/** 새 소식이 먼저, 그다음 싼 순서(전월세는 환산 월세 → 보증금). */
 function sortEntries(a: Entry, b: Entry) {
   return (
     Number(hasNews(b.listing)) - Number(hasNews(a.listing)) ||
@@ -228,8 +262,6 @@ function sortEntries(a: Entry, b: Entry) {
   );
 }
 
-const edges = computed(() => EDGES[deal.value]);
-
 /** 왼쪽 필터에서 지역 칸만 남긴 것(가격, 매물 유형, 면적, 층, 검색어를 뺌). 가격대마다 필터로 가린 수를 셀 때 쓴다. */
 const looseFilters = computed<Filters>(() => ({
   ...DEFAULT_FILTERS,
@@ -238,14 +270,12 @@ const looseFilters = computed<Filters>(() => ({
   distanceMax: props.filters.distanceMax,
 }));
 
-/** 고른 거래 유형의 가격대별 매물 수(지역 칸만 적용). 필터를 통과한 수와의 차이가 '필터로 가림'이다. */
+/** 고른 카드의 가격대별 매물 수(지역 칸만 적용). 필터를 통과한 수와의 차이가 '필터로 가림'이다. */
 const looseByBand = computed(() => {
   const d = deal.value;
   const counts = new Map<string, number>();
-  for (const listing of props.listings) {
-    const options = dealOptions(listing, d, looseFilters.value, props.areas);
-    if (!options.length) continue;
-    const id = bandIdOf(bandValue(d, cheapest(d, options)), edges.value);
+  for (const e of entriesOf(d, looseFilters.value)) {
+    const id = bandIdOf(d, e.option);
     counts.set(id, (counts.get(id) ?? 0) + 1);
   }
   return counts;
@@ -255,14 +285,14 @@ const rows = computed(() => {
   const d = deal.value;
   const groups = new Map<string, Entry[]>();
   for (const e of byDeal.value.get(d) ?? []) {
-    const id = bandIdOf(e.value, edges.value);
+    const id = bandIdOf(d, e.option);
     const list = groups.get(id);
     if (list) list.push(e);
     else groups.set(id, [e]);
   }
-  const defs = new Map(bandsFor(d, edges.value).map((b) => [b.id, b]));
+  const defs = new Map(bandsFor(d).map((b) => [b.id, b]));
   const open = saved.open[d] ?? {};
-  return orderFor(d, saved.order[d], edges.value)
+  return orderFor(d, saved.order[d])
     .map((id) => {
       const entries = (groups.get(id) ?? []).sort(sortEntries);
       return rowOf(defs.get(id)!, entries, open, Math.max(0, (looseByBand.value.get(id) ?? 0) - entries.length));
@@ -274,7 +304,8 @@ type Row = ReturnType<typeof rowOf>;
 /** 가격대 줄 하나(또는 맨 위 새 소식 줄): 건수, 사이트별 건수, 월세 보증금 범위, 펼침과 고른 사이트, 펼쳐 보이는 매물. hidden은 필터로 가린 수. */
 function rowOf(band: Band, entries: Entry[], open: Record<string, Pick>, hidden: number) {
   const platforms = SOURCES.map((s) => ({ id: s, label: SOURCE_LABEL[s], ...counts(entries.filter((e) => e.listing.source === s)) })).filter((p) => p.total > 0);
-  const deposits = isRent(deal.value) && band.id !== NEWS_BAND.id ? entries.map((e) => e.option.deposit).filter((v): v is number => v != null) : [];
+  const bd = bandDeal(deal.value, band.id);
+  const deposits = bd && isRent(bd) && band.id !== NEWS_ID ? entries.map((e) => e.option.deposit).filter((v): v is number => v != null) : [];
   const pick = open[band.id];
   const shown = !pick ? [] : pick === 'all' ? entries : entries.filter((e) => e.listing.source === pick);
   return {
@@ -290,10 +321,10 @@ function rowOf(band: Band, entries: Entry[], open: Record<string, Pick>, hidden:
 }
 
 /** 가격대 줄 위에 고정해 두는 새 소식 줄(끌어서 옮기지 않음) */
-const NEWS_BAND: Band = { id: 'news', label: '새 소식', range: '가격대와 상관없이 신규나 가격 변동이 있는 매물(신규 먼저, 그다음 최근에 처음 본 순서)' };
-/** 고른 거래 유형에서 신규나 가격 변동이 있는 매물을 모은 줄. 없으면 null. */
+const NEWS_BAND: Band = { id: NEWS_ID, label: '새 소식', range: '가격대와 상관없이 신규나 가격 변동이 있는 매물(신규 먼저, 그다음 최근에 처음 본 순서)' };
+/** 고른 거래 유형에서 신규나 가격 변동이 있는 매물을 모은 줄(매물마다 하나). 없으면 null. */
 const newsRow = computed(() => {
-  const entries = (byDeal.value.get(deal.value) ?? [])
+  const entries = uniq(byDeal.value.get(deal.value) ?? [])
     .filter((e) => hasNews(e.listing))
     .sort((a, b) => Number(b.listing.isNew) - Number(a.listing.isNew) || b.listing.firstSeenAt.localeCompare(a.listing.firstSeenAt));
   return entries.length ? rowOf(NEWS_BAND, entries, saved.open[deal.value] ?? {}, 0) : null;
@@ -319,7 +350,7 @@ const listMoves = ref(0);
 /** 지도를 매물에 다시 맞추는 기준: 거래 유형, 목록 쪽에서 바꾼 펼침, 고른 지역. 매물만 바뀌거나 지도에서 누른 매물을 펼치면 지도는 보던 그대로 둔다. */
 const mapFitKey = computed(() => `${deal.value}|${listMoves.value}|${props.filters.areaIds.join(',')}`);
 /** 지도: 펼친 목록이 없으면 고른 거래 유형의 매물을 작게 보여 준다. */
-const mapBackground = computed(() => (byDeal.value.get(deal.value) ?? []).map((e) => e.listing));
+const mapBackground = computed(() => uniq(byDeal.value.get(deal.value) ?? []).map((e) => e.listing));
 watch(visible, (v) => emit('visible', v), { immediate: true });
 
 function openMap(): Record<string, Pick> {
@@ -359,7 +390,7 @@ async function reveal(items: ListingView[], focus: ListingView = items[0]) {
   for (const l of items) {
     const e = entries.find((x) => x.listing.id === l.id);
     if (!e) continue;
-    const id = bandIdOf(e.value, edges.value);
+    const id = bandIdOf(deal.value, e.option);
     need.set(id, (need.get(id) ?? new Set()).add(l.source));
   }
   const open = openMap();
@@ -380,7 +411,7 @@ const dropAt = ref<{ id: string; after: boolean } | null>(null);
 /** 보이는 가격대의 새 순서를 저장한다. 숨은 가격대(매물 없는 '금액 모름')는 뒤에 둔다. */
 function reorder(ids: string[]) {
   const d = deal.value;
-  saved.order[d] = [...ids, ...orderFor(d, saved.order[d], edges.value).filter((id) => !ids.includes(id))];
+  saved.order[d] = [...ids, ...orderFor(d, saved.order[d]).filter((id) => !ids.includes(id))];
 }
 
 function onDragStart(e: DragEvent, id: string) {

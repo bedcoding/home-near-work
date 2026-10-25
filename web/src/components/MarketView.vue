@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import type { MarketLine, MarketTier, MarketView, PeakSeries } from '../../../shared/types';
+import type { MarketLine, MarketStation, MarketTier, MarketView, PeakSeries } from '../../../shared/types';
 import { manwon } from '../../../shared/format';
 import { changeOf, LINE_COLORS, MARKET_CHECKED, MARKET_LINKS, MARKET_NOTES, pct, STAT_TIPS, TIER_NAMES } from '../market';
 import CountTooltip from './CountTooltip.vue';
@@ -616,6 +616,13 @@ watch(changeSpan, (c) => save('hnw-market-tier-change', c));
 const changeLabel = computed(() => CHANGE_SPANS.find((c) => c.id === changeSpan.value)!.label);
 const openGu = ref<string | null>(null);
 const toggleGu = (gu: string) => (openGu.value = openGu.value === gu ? null : gu);
+/** 그 동에 붙인 역 */
+const stationsIn = (t: MarketTier, dong: string) => t.stations.filter((s) => s.dongs.includes(dong));
+/** 동 줄에 붙지 않은 역(동을 못 맞췄거나 맞춘 동에 최근 1년 아파트 거래가 없음) */
+const otherStations = (t: MarketTier) => t.stations.filter((s) => !s.dongs.some((d) => t.dongs.some((x) => x.dong === d)));
+const stationTitle = (s: MarketStation) =>
+  `${s.lines.join(', ')}. ${s.how === 'listings' ? '역 300m 안 모은 매물이 가장 많이 있는 동' : s.how === 'name' ? '역 이름이 붙은 동' : '어느 동인지 못 맞춤'}${s.dongs.length ? `: ${s.dongs.join(', ')}` : ''}`;
+const stationsTip = (t: MarketTier) => `${t.gu} 역 ${t.stations.length}곳: ${t.stations.map((s) => s.name).join(', ')}\n구를 누르면 동별 줄에 역이 붙습니다.`;
 /** 급지 묶음마다 구들(순위 순) */
 const tierGroups = computed(() => {
   const out: { tier: number; rows: MarketTier[] }[] = [];
@@ -919,7 +926,10 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
               <template v-for="t in g.rows" :key="t.gu">
                 <tr class="gu" :class="{ near: t.near }" :title="`누르면 ${t.gu} 동별로 봅니다`" @click="toggleGu(t.gu)">
                   <td class="num r wide">{{ t.rank }}</td>
-                  <th scope="row"><span class="mark">{{ openGu === t.gu ? '▾' : '▸' }}</span>{{ t.gu }}<span v-if="t.near" class="chip chip-near near-chip">근처</span></th>
+                  <th scope="row">
+                    <span class="mark">{{ openGu === t.gu ? '▾' : '▸' }}</span>{{ t.gu }}<span v-if="t.near" class="chip chip-near near-chip">근처</span>
+                    <CountTooltip v-if="t.stations.length" :text="stationsTip(t)" :max-width="420"><span class="stn-count">역 {{ t.stations.length }}</span></CountTooltip>
+                  </th>
                   <td class="num r strong">{{ manwon(t.pyeong) }}</td>
                   <td v-if="t.median84 != null" class="num r" :title="`전용 84㎡대 ${count(t.count84)}건 중간값 ${manwon(t.median84)}`">{{ eok(t.median84) }}</td>
                   <td v-else class="num r muted" title="최근 1년 전용 84㎡대 거래 없음">-</td>
@@ -930,12 +940,22 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
                 <template v-if="openGu === t.gu">
                   <tr v-for="d in t.dongs" :key="`${t.gu}-${d.dong}`" class="dong">
                     <td class="wide" />
-                    <th scope="row">{{ d.dong }} <span class="muted dong-count num">{{ count(d.count) }}건</span></th>
+                    <th scope="row">
+                      {{ d.dong }} <span class="muted dong-count num">{{ count(d.count) }}건</span>
+                      <span v-for="s in stationsIn(t, d.dong)" :key="s.name" class="stn" :title="stationTitle(s)">{{ s.name }}</span>
+                    </th>
                     <td class="num r">{{ manwon(d.pyeong) }}</td>
                     <td />
                     <td class="wide" />
                     <td />
                     <td class="wide" />
+                  </tr>
+                  <tr v-if="otherStations(t).length" class="dong">
+                    <td class="wide" />
+                    <th scope="row" colspan="6" class="other-stn">
+                      <span class="muted" title="어느 동인지 못 맞췄거나, 맞춘 동에 최근 1년 아파트 거래가 없는 역">그 밖의 역</span>
+                      <span v-for="s in otherStations(t)" :key="s.name" class="stn" :title="stationTitle(s)">{{ s.name }}</span>
+                    </th>
                   </tr>
                 </template>
               </template>
@@ -1063,6 +1083,13 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
 .tiers td.down { color: var(--down); }
 .mark { display: inline-block; width: 14px; color: var(--muted); }
 .near-chip { margin-left: 6px; font-size: 11px; }
+.stn-count { margin-left: 6px; font-size: 11px; font-weight: 500; color: var(--muted); }
+.stn {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--surface); font-size: 11px; font-weight: 600; color: var(--ink-2);
+}
+.tiers th.other-stn { white-space: normal; font-weight: 500; }
+.other-stn .stn { margin-top: 2px; margin-bottom: 2px; }
 .tier-chip { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 12px; font-weight: 800; }
 .tier-chip.tier-1 { background: #e7eefb; color: #23498a; }
 .tier-chip.tier-2 { background: #eaf3f6; color: #1f6377; }

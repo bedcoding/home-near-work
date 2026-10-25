@@ -7,6 +7,7 @@ import type {
   AptRegistry,
   Area,
   AuctionResultKind,
+  CourtClaims,
   CourtRegionStat,
   ExcludedRow,
   LandZone,
@@ -298,6 +299,15 @@ CREATE TABLE IF NOT EXISTS auction_results (
   PRIMARY KEY (key, sale_date)
 );
 CREATE INDEX IF NOT EXISTS auction_results_gu ON auction_results (gu, sale_date);
+`);
+
+// 법원경매 물건의 배당 순위 확인(court-claims). key: 법원 코드-사건 번호-물건번호(매각 결과와 같은 모양), data는 CourtClaims JSON.
+db.exec(`
+CREATE TABLE IF NOT EXISTS court_claims (
+  key TEXT PRIMARY KEY,
+  checked_at TEXT NOT NULL,
+  data TEXT NOT NULL
+);
 `);
 
 // 법원 지역별 매각통계(구 하나, 검색 기간 하나). 같은 구와 기간을 다시 읽으면 새 값으로 바꾸고, 다른 기간은 그대로 남는다.
@@ -1181,6 +1191,19 @@ export function auctionResultKeys(): Set<string> {
   return new Set(rows.map((r) => `${r.key}|${r.sale_date}`));
 }
 
+// ---------- 법원경매 배당 순위 확인 ----------
+
+/** 저장된 배당 순위 확인 전부(key → CourtClaims) */
+export function courtClaimsAll(): Map<string, CourtClaims> {
+  const rows = db.prepare('SELECT key, data FROM court_claims').all() as { key: string; data: string }[];
+  return new Map(rows.map((r) => [r.key, JSON.parse(r.data) as CourtClaims]));
+}
+
+/** 물건 하나의 배당 순위 확인을 저장한다(같은 key는 바꿈). */
+export function saveCourtClaims(key: string, claims: CourtClaims) {
+  db.prepare('INSERT OR REPLACE INTO court_claims (key, checked_at, data) VALUES (?, ?, ?)').run(key, claims.checkedAt, JSON.stringify(claims));
+}
+
 // ---------- 법원 지역별 매각통계 ----------
 
 /** 지역별 매각통계 한 번을 저장한다. 같은 구와 기간이 이미 있으면 새 값으로 바꾼다. */
@@ -1494,6 +1517,43 @@ export function addNaverCaptures(rows: NaverCaptureRow[]) {
 /** 남아 있는 화면 데이터 중 그 사이트의 주소가 like(SQL LIKE)에 맞는 것(오래된 것부터). */
 export function capturesMatching(site: string, like: string): { url: string; body: string }[] {
   return db.prepare('SELECT url, body FROM naver_captures WHERE site = ? AND url LIKE ? ORDER BY id').all(site, like) as { url: string; body: string }[];
+}
+
+/** 그 사이트 화면 데이터를 받은 시각들(since 이후, ISO). */
+export function captureTimes(site: string, since: string): string[] {
+  return (db.prepare('SELECT at FROM naver_captures WHERE site = ? AND at >= ?').all(site, since) as { at: string }[]).map((r) => r.at);
+}
+
+export interface CaptureBody {
+  at: string;
+  url: string;
+  requestBody: string | null;
+  body: string;
+}
+
+/** 그 사이트의 주소가 like에 맞는 화면 데이터 중 가장 최근 것. 없으면 undefined. */
+export function latestCapture(site: string, like: string): CaptureBody | undefined {
+  return db.prepare('SELECT at, url, request_body AS requestBody, body FROM naver_captures WHERE site = ? AND url LIKE ? ORDER BY id DESC LIMIT 1').get(site, like) as
+    | CaptureBody
+    | undefined;
+}
+
+/** 그 사이트의 주소가 like에 맞는 화면 데이터 중 since 이후 것(오래된 것부터). */
+export function capturesSince(site: string, like: string, since: string): CaptureBody[] {
+  return db.prepare('SELECT at, url, request_body AS requestBody, body FROM naver_captures WHERE site = ? AND url LIKE ? AND at >= ? ORDER BY id').all(site, like, since) as CaptureBody[];
+}
+
+/** before(ISO)보다 앞서 네이버 매물 목록(동그라미 목록, 화면 안 매물 목록)을 받은 마지막 시각. 없으면 null. */
+export function lastNaverListAt(before: string): string | null {
+  const row = db
+    .prepare("SELECT MAX(at) AS at FROM naver_captures WHERE site = 'naver' AND (url LIKE '%/clusteredArticles' OR url LIKE '%/boundedArticles') AND at < ?")
+    .get(before) as { at: string | null };
+  return row.at;
+}
+
+/** 그 소스 매물의 사이트 번호들(사라진 매물 포함). */
+export function sourceIdsOf(source: string): Set<string> {
+  return new Set((db.prepare('SELECT source_id FROM listings WHERE source = ?').all(source) as { source_id: string }[]).map((r) => r.source_id));
 }
 
 /** 크롬 확장이 보낸 화면 데이터 수(사이트별). */

@@ -5,6 +5,7 @@
   "description": "회사근처 내집마련 — 설정한 지역의 매물을 조회해서 신규·가격 변동만 알려 주는 개인용 도구",
   "type": "module",
   "scripts": {
+    "test": "node --import tsx --test scripts/*.test.mjs",
     "dev": "concurrently -k -n server,web -c blue,green \"tsx watch server/index.ts\" \"vite\"",
     "build": "vite build",
     "start": "vite build && tsx server/index.ts --open",

@@ -6,12 +6,14 @@ import { zonesAt } from './redev-zones.js';
 import { compareTrades, type TradeMatch } from './trade-compare.js';
 import { manwon } from '../shared/format.js';
 import {
-  isApartmentType, isDetachedHouseType, listingSection, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seoulGuOf, type AptInfo, type AptRegistry, type AuctionResultSummary,
-  type AuctionResultView, type AuctionSummaryKind, type LandZoneCheck, type ListingView, type NormalizedListing, type NoticeFacts, type NoticeView, type PlotZone,
+  isApartmentType, isDetachedHouseType, listingSection, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seniorInRemarks, seoulGuOf, type AptInfo, type AptRegistry, type AuctionResultSummary,
+  type AuctionResultView, type AuctionSummaryKind, type CourtClaims, type LandZoneCheck, type ListingView, type NormalizedListing, type NoticeFacts, type NoticeView, type PlotZone,
   type PriceChangeType, type PriceOption, type RatioStats, type SourceId, type TradeRef, type TrustDocRound, type TrustDocView,
 } from '../shared/types.js';
 
 type CourtRow = {
+  boCd?: unknown;
+  saNo?: unknown;
   jiwonNm?: unknown;
   srnSaNo?: unknown;
   maemulSer?: unknown;
@@ -44,8 +46,11 @@ export function mgmtNote(remark: unknown): { label: string; text: string } | nul
   };
 }
 
-/** 법원경매 원본(물건 묶음이면 목록 행 배열, 첫 행 기준)에서 법원, 사건번호, 물건번호, 감정가, 유찰 횟수, 목록 수, 비고의 관리단 이야기, 소재지 구와 법정동을 읽는다. */
-function auctionRef(raw: unknown): ListingView['auction'] {
+/**
+ * 법원경매 원본(물건 묶음이면 목록 행 배열, 첫 행 기준)에서 법원, 사건번호, 물건번호, 감정가, 유찰 횟수, 목록 수, 비고의 관리단 이야기, 소재지 구와 법정동을 읽는다.
+ * claims는 저장된 배당 순위 확인(key: 법원 코드-사건 번호-물건번호).
+ */
+function auctionRef(raw: unknown, claims: Map<string, CourtClaims>): ListingView['auction'] {
   const rows = (Array.isArray(raw) ? raw : [raw]) as CourtRow[];
   const row = rows[0];
   if (!row || typeof row.jiwonNm !== 'string' || typeof row.srnSaNo !== 'string') return null;
@@ -67,7 +72,14 @@ function auctionRef(raw: unknown): ListingView['auction'] {
       }) || /지분\s*매각|공유자\s*우선\s*매수/.test(String(row.mulBigo ?? '')),
     gu: typeof row.hjguSigu === 'string' && row.hjguSigu ? row.hjguSigu : null,
     dong: typeof row.hjguDong === 'string' && row.hjguDong ? row.hjguDong : null,
+    claims: withRemark(claims.get(`${row.boCd}-${row.saNo}-${row.maemulSer ?? '1'}`) ?? null, String(row.mulBigo ?? '')),
   };
+}
+
+/** 저장된 배당 순위 확인에 지금 물건 비고의 대항력 문구를 더한다(비고는 조회마다 새로 받음). */
+function withRemark(claims: CourtClaims | null, remark: string): CourtClaims | null {
+  if (!claims || claims.remarkSenior || !seniorInRemarks(remark)) return claims;
+  return { ...claims, remarkSenior: true };
 }
 
 type OnbidRow = { scrnIndctCltrMngNo?: unknown; cltrApslEvlAvgAmt?: unknown; uscbdCnt?: unknown; onbidCltrNm?: unknown } | null | undefined;
@@ -89,6 +101,7 @@ function onbidRef(raw: unknown): ListingView['auction'] {
     share: /지분/.test(String(row.onbidCltrNm ?? '')),
     gu: null,
     dong: null,
+    claims: null,
   };
 }
 
@@ -291,6 +304,7 @@ export function buildListingViews(): ListingView[] {
   const rows = store.allListings();
   const courtRaw = store.rawBySource('courtauction');
   const onbidRaw = store.rawBySource('onbid');
+  const courtClaims = store.courtClaimsAll();
   /** 옵션을 읽는 원본(집토스 옵션 목록, 피터팬 풀옵션 표시, 네이버 소개 글과 단지 번호) */
   const optionRaw = new Map([...store.rawBySource('ziptoss'), ...store.rawBySource('peterpanz'), ...store.rawBySource('naver')]);
   const households = store.complexHouseholds();
@@ -330,7 +344,7 @@ export function buildListingViews(): ListingView[] {
       relistedOf: reason?.startsWith('relisted:') ? reason.slice('relisted:'.length) : null,
       similarToDiscarded: !verdict && discarded.some((d) => d.row.id !== row.id && looksSimilar(data, d.data)),
       seenRef: row.seen_ref ? JSON.parse(row.seen_ref) : null,
-      auction: row.source === 'courtauction' ? auctionRef(courtRaw.get(row.id)) : row.source === 'onbid' ? onbidRef(onbidRaw.get(row.id)) : null,
+      auction: row.source === 'courtauction' ? auctionRef(courtRaw.get(row.id), courtClaims) : row.source === 'onbid' ? onbidRef(onbidRaw.get(row.id)) : null,
       options: optionsRef(row.source, optionRaw.get(row.id), data.title ?? ''),
       apt: aptRef(row.id, row.source, data, raw, households, registry),
       zone: zoneRef(row.source, data, raw, zones, points),

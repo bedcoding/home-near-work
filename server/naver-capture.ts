@@ -64,7 +64,7 @@ function capturedAt(value: unknown): string {
 }
 
 /** 받은 응답 중 켤 수 있는 사이트의 데이터 주소에서 온 것만 가려 저장하고, 저장한 개수를 돌려준다. */
-export function acceptCaptures(list: CaptureInput[]): number {
+export function acceptCaptures(list: CaptureInput[], scheduleSession = true): number {
   const rows: store.NaverCaptureRow[] = [];
   for (const c of list) {
     if (typeof c?.url !== 'string' || typeof c.body !== 'string' || c.body.length > MAX_BODY) continue;
@@ -94,7 +94,7 @@ export function acceptCaptures(list: CaptureInput[]): number {
     store.addNaverCaptures(rows);
     for (const r of rows) learnLinkHints(r.site, r.url, r.body);
     processPendingNaverCaptures();
-    if (rows.some((r) => SESSION_SITES.includes(r.site))) scheduleCaptureSession();
+    if (scheduleSession && rows.some((r) => SESSION_SITES.includes(r.site))) scheduleCaptureSession();
   }
   return rows.length;
 }
@@ -134,6 +134,103 @@ function addToCaptureRun(runId: number, s: RunSourceSummary, note: string) {
     null,
     [...(run?.log ?? []), `${time} ${note}`],
   );
+  if (browseReceiptInProgress) {
+    browseReceiptInProgress.listings += s.kept;
+    browseReceiptInProgress.newCount += s.newCount;
+    browseReceiptInProgress.changedCount += s.priceChanged;
+  }
+}
+
+/** 서버 처리 결과. listings는 같은 매물을 다른 응답으로 갱신한 건수도 포함한다. */
+export interface BrowseReceipt {
+  responses: number;
+  listings: number;
+  newCount: number;
+  changedCount: number;
+}
+interface BrowseReceiptEntry {
+  jobId: string;
+  at: number;
+  receipt: BrowseReceipt;
+  batches: string[];
+  zigbangFresh?: number[];
+  dabangMax?: number | null;
+}
+const BROWSE_RECEIPTS_KEY = 'browse_receipts';
+const BROWSE_RECEIPT_DAYS = 7 * 24 * 60 * 60 * 1000;
+const BROWSE_RECEIPT_LIMIT = 2048;
+const BROWSE_BATCH_LIMIT = 512;
+let browseReceiptInProgress: BrowseReceipt | null = null;
+// 역 ID 응답과 상세 응답이 서로 다른 전송 묶음이어도 이번 지역의 신규 판정을 유지한다.
+let browseZigbangFresh: Set<number> | null = null;
+// 페이지마다 현재 최댓값을 다시 읽으면 뒤쪽 페이지의 새 방을 기준 매물로 오판한다.
+let browseDabangMax: number | null | undefined;
+const browseInputError = (message: string) => Object.assign(new Error(message), { statusCode: 400 });
+
+function browseId(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9._:-]{1,120}$/.test(value)) throw browseInputError('조회 또는 응답 묶음 번호가 올바르지 않습니다.');
+  return value;
+}
+
+function browseReceiptEntries(): BrowseReceiptEntry[] {
+  try {
+    const entries = JSON.parse(store.getSetting(BROWSE_RECEIPTS_KEY) ?? '[]');
+    return Array.isArray(entries) ? entries.filter((e) =>
+      e && typeof e.jobId === 'string' && Number.isFinite(e.at) && e.at > Date.now() - BROWSE_RECEIPT_DAYS &&
+      Array.isArray(e.batches) && e.batches.every((b: unknown) => typeof b === 'string') && e.receipt &&
+      ['responses', 'listings', 'newCount', 'changedCount'].every((k) => Number.isFinite(e.receipt[k]) && e.receipt[k] >= 0),
+    ).slice(-BROWSE_RECEIPT_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function browseReceipt(jobId: unknown): BrowseReceipt | null {
+  const id = browseId(jobId);
+  return browseReceiptEntries().find((e) => e.jobId === id)?.receipt ?? null;
+}
+
+/**
+ * 지역 순회 응답을 즉시 처리하고 서버가 실제 저장한 결과를 확인한다.
+ * 수동 탐색의 미처리 응답을 먼저 끝내므로 다른 탭의 저장 건수가 섞이지 않는다.
+ * 배치 번호와 DB 변경을 같은 transaction에 기록하여 응답을 잃어 재전송해도 중복 처리하지 않는다.
+ */
+export function acceptBrowseCaptures(input: { jobId?: unknown; batchId?: unknown; captures?: unknown }): BrowseReceipt {
+  const jobId = browseId(input.jobId);
+  const batchId = browseId(input.batchId);
+  if (!Array.isArray(input.captures) || input.captures.length > 200) throw browseInputError('응답 묶음은 200개 이하의 목록이어야 합니다.');
+  const entries = browseReceiptEntries();
+  const previous = entries.find((e) => e.jobId === jobId);
+  if (previous?.batches.includes(batchId)) return { ...previous.receipt };
+  if (previous && previous.batches.length >= BROWSE_BATCH_LIMIT) throw browseInputError('이 조회의 응답 묶음이 너무 많습니다. 새 조회를 시작해 주세요.');
+  const captures = input.captures as CaptureInput[];
+
+  if (sessionTimer) clearTimeout(sessionTimer);
+  sessionTimer = null;
+  processPendingNaverCaptures();
+  finishCaptureSession();
+  const receipt: BrowseReceipt = previous ? { ...previous.receipt } : { responses: 0, listings: 0, newCount: 0, changedCount: 0 };
+  const beforeSession = { ...naverSession, compared: new Set(naverSession.compared) };
+  try {
+    return store.db.transaction(() => {
+      browseReceiptInProgress = receipt;
+      browseZigbangFresh = new Set(previous?.zigbangFresh ?? []);
+      browseDabangMax = previous?.dabangMax === undefined ? store.maxNumericSourceId('dabang') : previous.dabangMax;
+      receipt.responses += acceptCaptures(captures, false);
+      // 순회 도중의 작은 응답 묶음마다 데스크톱 알림을 띄우지 않는다. 수동 탐색 알림은 위에서 처리한다.
+      finishCaptureSession(false);
+      const entry = { jobId, at: Date.now(), receipt, batches: [...(previous?.batches ?? []), batchId], zigbangFresh: [...browseZigbangFresh].slice(-20000), dabangMax: browseDabangMax };
+      store.setSetting(BROWSE_RECEIPTS_KEY, JSON.stringify([...entries.filter((e) => e.jobId !== jobId), entry].slice(-BROWSE_RECEIPT_LIMIT)));
+      return { ...receipt };
+    })();
+  } catch (error) {
+    naverSession = beforeSession;
+    throw error;
+  } finally {
+    browseReceiptInProgress = null;
+    browseZigbangFresh = null;
+    browseDabangMax = undefined;
+  }
 }
 
 /** 한 번의 확인(사이트를 열어 응답이 이어서 들어오는 동안)으로 묶어 읽는 사이트 */
@@ -164,7 +261,7 @@ function processZigbang(): { stations: { subwayId: string; pageUrl: string | nul
   } catch {
     /* 못 읽으면 처음부터 */
   }
-  const fresh = new Set<number>();
+  const fresh = browseZigbangFresh ?? new Set<number>();
   const stations = [...latest].map(([key, s]) => {
     const prev = seen[key] ? new Set(seen[key]) : null;
     const added = prev ? s.ids.filter((id) => !prev.has(id)) : [];
@@ -228,7 +325,7 @@ function processKbCounts(at: string): { dong: string; count: number; delta: numb
  * 다방은 새 방 중 켜 둔 매물 알림 줄에 맞는 수, KB, 네이버는 늘어난 매물 수(가격 조건으로 거르지 못함)를 센다.
  * 돌려주는 값: 새 것이 있으면 알림 내용(설정이 꺼져 있어도), 없으면 null.
  */
-export function finishCaptureSession(): { title: string; message: string; url: string } | null {
+export function finishCaptureSession(notifyUser = true): { title: string; message: string; url: string } | null {
   const at = new Date().toISOString();
   const settings = alertSettings();
   const areas = store.enabledAreas();
@@ -297,7 +394,7 @@ export function finishCaptureSession(): { title: string; message: string; url: s
 
   if (!parts.length) return null;
   const alert = { title: `새 매물: ${parts.join(', ')}`, message: lines.join('\n'), url: url ?? `${DASHBOARD_URL}/?tab=sites` };
-  if (settings.captureSites) notify(alert.title, alert.message, alert.url);
+  if (notifyUser && settings.captureSites) notify(alert.title, alert.message, alert.url);
   return alert;
 }
 
@@ -318,7 +415,7 @@ export function processPendingDabangCaptures(): { fetched: number; newCount: num
   }
   let result: ReturnType<typeof processPendingDabangCaptures> = { fetched: 0, newCount: 0, baseline: false, news: [] };
   if (byId.size && areas.length) {
-    const maxSeq = store.maxNumericSourceId('dabang');
+    const maxSeq = browseDabangMax === undefined ? store.maxNumericSourceId('dabang') : browseDabangMax;
     const news: NewsItem[] = [];
     const runId = captureRunId();
     const summary = applyResults(runId, 'dabang', [...byId.values()], areas, false, undefined, {
@@ -347,11 +444,42 @@ function naverAptGu(listing: NormalizedListing, aptGus: string[]): string | unde
   return gu && aptGus.includes(gu) ? gu : undefined;
 }
 
+/** 네이버 매물 목록을 받은 한국 날짜: last 가장 최근 날, prev 그 앞에 받은 날(없으면 null) */
+const LIST_DAYS_KEY = 'naver_list_days';
+const kstDay = (iso: string) => new Date(new Date(iso).getTime() + 9 * 3600e3).toISOString().slice(0, 10);
+
+/**
+ * 그 날(한국 날짜)에 목록을 받았다고 적고, 그날보다 앞서 목록을 받은 마지막 날을 돌려준다(처음이면 null).
+ * 적어 둔 것이 없으면 남아 있는 화면 데이터에서 그날 전에 목록을 받은 마지막 날을 찾는다. 그보다 앞선 날의 응답이면 null.
+ */
+function previousListDay(day: string): string | null {
+  let days: { last: string | null; prev: string | null } | null = null;
+  try {
+    days = JSON.parse(store.getSetting(LIST_DAYS_KEY) ?? 'null');
+  } catch {
+    days = null;
+  }
+  if (!days) {
+    const before = store.lastNaverListAt(new Date(`${day}T00:00:00+09:00`).toISOString());
+    days = { last: before ? kstDay(before) : null, prev: null };
+  }
+  if (days.last && day < days.last) return null;
+  if (day !== days.last) days = { last: day, prev: days.last };
+  store.setSetting(LIST_DAYS_KEY, JSON.stringify(days));
+  return days.prev;
+}
+
+/** 네이버 매물 한 줄이 네이버에 올라온 날(verificationInfo.exposureStartDate, 'YYYY-MM-DD'). 모르면 null. */
+const exposedOn = (raw: unknown): string | null => {
+  const day = (raw as { representativeArticleInfo?: { verificationInfo?: { exposureStartDate?: unknown } } })?.representativeArticleInfo?.verificationInfo?.exposureStartDate;
+  return typeof day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null;
+};
+
 /**
  * 아직 읽지 않은 네이버 응답 중 매물 목록을 매물로 바꿔 저장한다.
- * 동그라미(묶음)를 누르면 그 묶음 번호(clusterId)와 안의 매물 목록이 함께 온다.
- * '신규'는 전에 눌러 본 동그라미에 새로 생긴 매물만 친다. 처음 눌러 본 동그라미의 매물은 기준으로만 저장한다
- * (보는 만큼씩 들어오니, 처음 본 매물을 모두 신규로 치면 신규가 쏟아진다).
+ * 동그라미(묶음)를 누르면 그 묶음 번호(clusterId)와 안의 매물 목록이, 지도 아래 '매물 N'을 누르면 화면 안 매물 목록(boundedArticles, 묶음 번호 없음)이 30개씩 온다.
+ * 처음 받은 매물 중 '신규'는 전에 눌러 본 동그라미에 새로 생긴 매물과, 네이버에 올라온 날이 지난번에 목록을 받은 날 이후인 매물이다.
+ * 나머지는 기준으로만 저장한다(보는 만큼씩 들어오니, 처음 본 매물을 모두 신규로 치면 신규가 쏟아진다).
  */
 export function processPendingNaverCaptures() {
   const pending = store.pendingNaverCaptures();
@@ -388,19 +516,26 @@ export function processPendingNaverCaptures() {
       /* 요청 본문이 JSON이 아니면 묶음 번호 없이 저장한다 */
     }
     const seenBefore = clusterId ? store.naverCluster(clusterId) : null;
+    const since = previousListDay(kstDay(row.at));
+    const exposed = new Map(parsed.items.map((i) => [i.listing.sourceId, exposedOn(i.raw)]));
+    const fresh = (listing: NormalizedListing) => {
+      const day = exposed.get(listing.sourceId);
+      return !!since && !!day && day >= since;
+    };
     const items: CollectedItem[] = parsed.items.map((i) => ({ listing: i.listing, raw: i.raw, pageUrl: row.pageUrl, screenshot: null, aptGu: naverAptGu(i.listing, aptGus) }));
     const runId = captureRunId();
     const summary = applyResults(runId, 'naver', items, areas, false, undefined, {
       status: 'ok',
-      // 전에 눌러 본 동그라미에서 새로 보인 매물만 신규로 친다.
-      isBaseline: () => !seenBefore,
+      // 전에 눌러 본 동그라미에서 새로 보인 매물과, 지난번에 목록을 받은 날 이후 네이버에 올라온 매물만 신규로 친다.
+      isBaseline: (listing) => !seenBefore && !fresh(listing),
       // 층 숫자를 모르면(고, 중, 저) 다른 집일 수 있어 재등록으로 숨기지 않는다.
       allowRelistHide: (listing) => listing.floor != null,
       seenAt: row.at,
     });
     if (clusterId) store.saveNaverCluster(clusterId, parsed.totalCount ?? parsed.items.length, parsed.items.flatMap((i) => i.numbers));
-    const where = clusterId ? `동그라미 ${clusterId}` : pathname;
-    addToCaptureRun(runId, summary, `${where}: 매물 ${summary.fetched}건(지역 안 ${summary.kept}건), 신규 ${summary.newCount}, 가격 변동 ${summary.priceChanged}${seenBefore ? '' : ', 처음 본 동그라미라 기준으로만 저장'}`);
+    const where = clusterId ? `동그라미 ${clusterId}` : pathname.endsWith('/boundedArticles') ? '화면 안 매물 목록' : pathname;
+    const rule = seenBefore ? '' : since ? `, ${since} 이후 네이버에 올라온 것만 신규` : ', 처음 받은 목록이라 기준으로만 저장';
+    addToCaptureRun(runId, summary, `${where}: 매물 ${summary.fetched}건(지역 안 ${summary.kept}건), 신규 ${summary.newCount}, 가격 변동 ${summary.priceChanged}${rule}`);
   }
   if (marked) {
     writeMarks(marks);

@@ -12,6 +12,7 @@ import AlertsTab from './components/AlertsTab.vue';
 import AptView from './components/AptView.vue';
 import AreaSettings from './components/AreaSettings.vue';
 import AuctionView from './components/AuctionView.vue';
+import BrowseQueue from './components/BrowseQueue.vue';
 import FilterPanel from './components/FilterPanel.vue';
 import ListingCard from './components/ListingCard.vue';
 import ListingDetail from './components/ListingDetail.vue';
@@ -25,6 +26,7 @@ import SitesTab from './components/SitesTab.vue';
 import SubscriptionsView from './components/SubscriptionsView.vue';
 import SupportView from './components/SupportView.vue';
 import FraudView from './components/FraudView.vue';
+import ChecklistView from './components/ChecklistView.vue';
 import ZoneBanner from './components/ZoneBanner.vue';
 import { loadCatalog, setAreaEnabled, toggleStationArea, type CatalogStation } from './areaActions';
 import { aptKindOf } from './apt';
@@ -33,10 +35,11 @@ import { kindOf } from './kinds';
 import { MODULAR_LINKS } from './modular';
 import { isPastNotice } from './notices';
 import { isRoomStay, sortRooms } from './rooms';
+import { updateRentRate } from './rentRate';
 import { siteLinks } from './siteLinks';
 
-type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'apt' | 'line' | 'market' | 'subs' | 'rooms' | 'notices' | 'support' | 'fraud' | 'sites' | 'runs' | 'areas' | 'alerts';
-const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'apt', 'line', 'market', 'subs', 'rooms', 'notices', 'support', 'fraud', 'sites', 'runs', 'areas', 'alerts'];
+type Tab = 'overview' | 'star' | 'hidden' | 'auction' | 'plot' | 'apt' | 'line' | 'market' | 'subs' | 'rooms' | 'notices' | 'support' | 'fraud' | 'checklist' | 'sites' | 'runs' | 'areas' | 'alerts';
+const TABS: Tab[] = ['overview', 'star', 'hidden', 'auction', 'plot', 'apt', 'line', 'market', 'subs', 'rooms', 'notices', 'support', 'fraud', 'checklist', 'sites', 'runs', 'areas', 'alerts'];
 
 /** 머리 줄 높이(px). 필터 칸이 그 아래에 붙어 따라 내려온다(--app-header-height). */
 const headerEl = ref<HTMLElement | null>(null);
@@ -491,6 +494,13 @@ async function refreshListings() {
   listings.value = await api.listings();
 }
 
+/** 카드의 환산 월세가 쓰는 전환율: 매물이나 기준금리가 바뀔 때만 다시 낸다(상태는 10초마다 새 객체로 온다). */
+const baseRateKey = computed(() => {
+  const b = state.value?.baseRate;
+  return b ? `${b.value}|${b.date}` : '';
+});
+watch([listings, baseRateKey], () => updateRentRate(listings.value, state.value?.baseRate ?? null, isRoomStay), { immediate: true });
+
 let timer: number | undefined;
 function schedule() {
   window.clearTimeout(timer);
@@ -657,7 +667,8 @@ const SITE_NAMES: Record<string, string> = {
 // ---------- 한 번에 열기 ----------
 // 웹 페이지는 창을 여러 개 한꺼번에 열 수 없어서(팝업 차단), 크롬 확장이 대시보드 안에 넣는 작은 스크립트(extension/dashboard.js)에 부탁한다.
 // 확장은 확장에서 켜 둔 사이트만 새 창 하나에 연다. 피터팬, 집토스, 법원경매는 '조회하기'가 모으므로 기본으로 빠진다.
-const ext = ref<{ version: string; sites: string[] } | null>(null);
+const ext = ref<{ version: string; sites: string[]; browse?: boolean; browseError?: string } | null>(null);
+const browseOpen = ref(false);
 const openNote = ref<{ text: string; ok: boolean } | null>(null);
 let openNoteTimer: number | undefined;
 let openWait: number | undefined;
@@ -678,8 +689,8 @@ function showOpenNote(text: string, ok: boolean) {
 }
 
 function onExtMessage(e: MessageEvent) {
-  if (e.source !== window || e.data?.source !== 'hnw-extension') return;
-  if (e.data.type === 'hello') ext.value = { version: String(e.data.version), sites: Array.isArray(e.data.sites) ? e.data.sites : [] };
+  if (e.source !== window || e.origin !== location.origin || e.data?.source !== 'hnw-extension') return;
+  if (e.data.type === 'hello') ext.value = { version: String(e.data.version), sites: Array.isArray(e.data.sites) ? e.data.sites : [], browse: e.data.browse === true, browseError: typeof e.data.browseError === 'string' ? e.data.browseError : undefined };
   if (e.data.type === 'opened') {
     window.clearTimeout(openWait);
     showOpenNote(e.data.ok ? `새 창에 ${e.data.names.length}곳을 열었습니다.` : String(e.data.error), !!e.data.ok);
@@ -870,9 +881,10 @@ const tabs = computed<{ id: Tab; label: string; count: number | null; news?: num
   },
   { id: 'support', label: '지원 제도', count: null, title: '전세 대출, 전세보증금 반환보증, 월세 지원 같은 국가와 서울시 제도', main: true },
   { id: 'fraud', label: '사기 사례', count: null, title: '부동산 사기 수법과 실제 사례, 서류에서 보이는 곳, 당하면 생기는 일', main: true },
+  { id: 'checklist', label: '체크리스트', count: null, title: '집을 볼 때 확인할 하자와 계약 전에 확인할 것(전세, 월세, 매매, 경매마다)', main: true },
+  { id: 'sites', label: '사이트별', count: null, title: '사이트마다 모은 매물 수, 마지막으로 받은 때, 사이트 화면에 있던 수와 받은 수, 조회 기록', main: true },
   { id: 'hidden', label: '숨김함', count: hidden.value.length },
   { id: 'runs', label: '조회 기록', count: null },
-  { id: 'sites', label: '사이트', count: null, title: '수집처 체크리스트' },
   { id: 'areas', label: '지역', count: null },
   { id: 'alerts', label: '설정', count: null, title: '조회 방식과 조회가 끝나면 띄울 알림' },
 ]);
@@ -894,6 +906,7 @@ const filterUse = computed<string[] | 'all'>(() => {
     case 'market':
     case 'support':
     case 'fraud':
+    case 'checklist':
     case 'runs':
     case 'sites':
     case 'areas':
@@ -944,6 +957,7 @@ const emptyText: Partial<Record<Tab, string>> = {
         v-if="state?.autoCheck.missed && !running" class="btn btn-sm missed"
         title="마지막 자동 확인 시각에 대시보드가 꺼져 있었고 그 뒤로 조회하지 않았습니다" @click="startRun()"
       >자동 확인 놓침, 지금 확인</button>
+      <button class="btn" :aria-expanded="browseOpen" aria-controls="browse-queue" title="선택한 지역과 사이트를 차례로 방문하고 수집 결과를 확인합니다" @click="browseOpen = !browseOpen">지역 순차 조회</button>
       <div ref="openMenuEl" class="openall">
         <button class="open-main" :title="openAllTitle" @click="openAll">
           한 번에 열기<span v-if="ext" class="open-count">{{ ext.sites.length }}곳</span>
@@ -1008,6 +1022,8 @@ const emptyText: Partial<Record<Tab, string>> = {
       </div>
     </div>
   </header>
+
+  <BrowseQueue v-if="browseOpen" :areas="areas" :extension="ext" @close="browseOpen = false" />
 
   <div v-if="running" class="progress">
     <div class="spinner" aria-hidden="true"></div>
@@ -1146,9 +1162,10 @@ const emptyText: Partial<Record<Tab, string>> = {
       />
       <SupportView v-else-if="tab === 'support'" @notices="tab = 'notices'" />
       <FraudView v-else-if="tab === 'fraud'" />
+      <ChecklistView v-else-if="tab === 'checklist'" @goto="(t) => (tab = t)" />
       <RunHistory v-else-if="tab === 'runs'" :refresh-key="runsKey" />
       <SitesTab
-        v-else-if="tab === 'sites' && state" :state="state" :links="links" :ext-ready="!!ext" :notices="notices" :notice-status="noticeStatus"
+        v-else-if="tab === 'sites' && state" :state="state" :links="links" :ext-ready="!!ext" :listings="listings" :notices="notices" :notice-status="noticeStatus"
         @open-all="openAll()"
       />
       <AreaSettings v-else-if="tab === 'areas' && state" :areas="state.areas" :restore="state.areaRestore" @changed="refreshState" />

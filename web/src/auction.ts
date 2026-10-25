@@ -153,3 +153,111 @@ export function saleDay(date: string | null): { day: string; when: string; past:
   const weekday = WEEKDAY[new Date(target).getUTCDay()];
   return { day: `${m}월 ${d}일 (${weekday})`, when: days > 0 ? `D-${days}` : days === 0 ? '오늘' : '지남', past: days < 0 };
 }
+
+/** 배당 순위 표시: danger 매우 주의(대항력 임차인과 앞 순위 청구), warn 대항력 임차인이나 임금채권(임차인 확인 전), muted 대항력 포기. */
+export interface ClaimsChip {
+  tone: 'danger' | 'warn' | 'muted';
+  label: string;
+  tip: string;
+}
+
+const dotDay = (d: string | null) => (d ? d.replace(/-/g, '.') : '모름');
+
+/** 최우선 임금채권이 먼저인 경우의 조건 */
+const WAGE_NOTE =
+  '집주인(채무자)이 그 근로자의 사업주일 때만 해당합니다. 근로복지공단이 대지급금을 줬으면 공단이 그 순위를 이어받습니다(임금채권보장법 제8조, 대법원 2022. 12. 1. 선고 2018다300586).';
+
+/**
+ * 법원경매 물건의 배당 순위 표시. 볼 것이 없으면 null.
+ * 대항력 임차인은 현황조사서 전입일이 최선순위 설정일보다 앞선 임차인이다(같은 날이면 설정이 먼저). 이사 나간 등기 임차인은
+ * 조사서에 없어서 법원 비고의 대항력 문구(remarkSenior)로 본다. 그런 임차인이 있고 최우선 임금채권이나 세금 청구(당해세일 수 있음)가
+ * 보이면 매우 주의, 없으면 대항력 임차인만 알린다. 대항력 포기 확약서가 들어왔으면 그것을 알린다.
+ */
+export function claimsChip(l: Pick<ListingView, 'auction'>): ClaimsChip | null {
+  const c = l.auction?.claims;
+  if (!c) return null;
+  const known = !!(c.senior && c.survey);
+  const seniorTenants = known ? c.survey!.tenants.filter((t) => t.moveIn != null && t.moveIn < c.senior!.date) : [];
+  const others = known ? c.survey!.tenants.length - seniorTenants.length : 0;
+  const remark = !!c.remarkSenior;
+  const wageDocs = c.wage.filter((w) => w.date);
+  const wageLines = (wageDocs.length ? wageDocs : c.wage).map((w) => `${w.what}${w.date ? ` ${dotDay(w.date)}` : ''}`);
+  const taxText = [c.taxDocs ? `교부청구 ${c.taxDocs}건` : '', c.taxParties ? `교부권자와 압류권자 ${c.taxParties}곳` : ''].filter(Boolean).join(', ');
+  const tenantLines = seniorTenants.map(
+    (t) => `임차인: 전입 ${dotDay(t.moveIn)}, 확정일자 ${dotDay(t.fixed)}, 보증금 ${t.deposit ?? '모름'}${t.rent ? `, 차임 ${t.rent}` : ''}${t.part ? `, ${t.part}` : ''}`,
+  );
+  if (remark) tenantLines.push('법원 비고: 매수인에게 대항할 수 있는 임차인이나 임차권등기가 있다고 적혀 있음');
+  // 일괄매각은 목록마다 날짜가 든 글 전체(right)가 오고, 대항력은 그중 가장 늦은 날(date)로 가린다.
+  const seniorLine = c.senior ? `최선순위 설정: ${/\d{4}\./.test(c.senior.right) ? `${c.senior.right}(대항력은 ${dotDay(c.senior.date)} 기준)` : `${dotDay(c.senior.date)} ${c.senior.right}`}` : '';
+  const footer = [`배당요구종기 ${dotDay(c.demandEnd)}, 사건 기록 ${dotDay(c.checkedAt)}${c.survey ? `, 현황조사서 ${dotDay(c.survey.at)}` : ''} 확인`];
+
+  if (c.waiver) {
+    return {
+      tone: 'muted',
+      label: '대항력 포기',
+      tip: [
+        `${dotDay(c.waiver)}에 대항력 포기 확약서가 들어왔습니다(보증기관이 임차인 보증금을 넘겨받은 사건에 흔함).`,
+        '확약서를 낸 쪽이 낙찰자에게 남은 보증금을 청구하지 않겠다는 뜻이라, 누가 어느 보증금에 대해 냈는지 매각물건명세서와 문건으로 확인하세요.',
+        ...(tenantLines.length ? ['', ...tenantLines, seniorLine] : []),
+        '',
+        ...footer,
+      ].join('\n'),
+    };
+  }
+  if (!known && !remark) {
+    if (!c.wage.length || !c.tenantParties) return null;
+    return {
+      tone: 'warn',
+      label: '임금채권',
+      tip: [
+        '최우선 임금채권으로 보이는 청구가 있습니다. 최종 3개월 임금과 최종 3년 퇴직금은 확정일자 임차인, 저당권, 세금보다 먼저 배당받습니다(근로기준법 제38조 제2항, 근로자퇴직급여 보장법 제12조 제2항).',
+        WAGE_NOTE,
+        ...wageLines,
+        '',
+        '대항력 있는 임차인이 있으면 그 임차인이 배당에서 덜 받고, 못 받은 보증금은 낙찰자가 떠안습니다.',
+        `현황조사서는 매각기일 2주 전부터 열려 대항력은 아직 못 가렸습니다(이해관계인 중 임차인 ${c.tenantParties}명).`,
+        '',
+        ...footer,
+      ].join('\n'),
+    };
+  }
+  if (!seniorTenants.length && !remark) return null;
+  const ahead: string[] = [];
+  if (c.wage.length) ahead.push('최우선 임금채권(최종 3개월 임금, 최종 3년 퇴직금): 확정일자 임차인과 세금보다 먼저', `  ${WAGE_NOTE}`, ...wageLines.map((x) => `  ${x}`));
+  if (taxText) {
+    ahead.push(
+      `세금과 공과금: ${taxText}`,
+      '  법정기일이 임차인 확정일자보다 앞선 세금은 임차인보다 먼저입니다(국세기본법 제35조 제1항 제3호, 지방세기본법 제71조 제1항 제3호).',
+      '  그 집에 매긴 당해세(재산세, 종합부동산세, 상속세, 증여세 등)는 법정기일이 더 늦어도 먼저입니다(국세기본법 제35조 제3항, 지방세기본법 제71조 제5항).',
+      '  다만 주택 임차인은 2023년 개정으로 확정일자보다 법정기일이 늦은 당해세보다는 먼저 받습니다(국세기본법 제35조 제7항, 지방세기본법 제71조 제6항).',
+    );
+  }
+  // 대항력은 있어도 확정일자가 최선순위 담보권(근저당 등)보다 늦으면 배당에서는 그 담보권이 먼저다.
+  const late = c.senior && /저당|전세권|담보/.test(c.senior.right) ? seniorTenants.filter((t) => t.fixed && t.fixed > c.senior!.date) : [];
+  if (late.length) {
+    ahead.push(
+      `최선순위 설정(${dotDay(c.senior!.date)}): 임차인 확정일자 ${late.map((t) => dotDay(t.fixed)).join(', ')}보다 앞서 먼저 배당받음(주택임대차보호법 제3조의2 제2항)`,
+    );
+  }
+  if (others > 0) ahead.push(`다른 임차인 ${others}명: 소액임차인이면 보증금 중 일정액을 최우선변제로 먼저 받음(주택임대차보호법 제8조)`);
+  const unpaid =
+    seniorTenants.length && !c.tenantDocs
+      ? ['임차인 쪽 배당요구 문건이 없습니다. 배당요구를 안 한 임차인은 배당을 받지 않아 보증금 전액을 떠안습니다(임차권등기를 한 임차인은 배당요구 없이도 배당받음).']
+      : [];
+  const danger = c.wage.length > 0 || !!taxText || late.length > 0;
+  return {
+    tone: danger ? 'danger' : 'warn',
+    label: danger ? '매우 주의' : '대항력 임차인',
+    tip: [
+      '대항력 있는 임차인이 배당에서 보증금을 다 못 받으면 남은 돈은 낙찰자가 떠안습니다(주택임대차보호법 제3조의5, 상가건물 임대차보호법 제8조).',
+      ...tenantLines,
+      seniorLine,
+      ...(ahead.length ? ['', '임차인보다 먼저 배당받을 수 있는 것', ...ahead] : []),
+      '',
+      '금액은 사건 기록에 없어 배당표가 나와야 압니다. 보증금을 다 떠안는다고 보고 값을 정하세요.',
+      ...unpaid,
+      '',
+      ...footer,
+    ].join('\n'),
+  };
+}

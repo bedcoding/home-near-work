@@ -3,6 +3,9 @@ import { ref } from 'vue';
 import { REST_CHOICES, type AlertSettings } from '../../../shared/types';
 import { manwon } from '../../../shared/format';
 import { api } from '../api';
+import { profile } from '../profile';
+import { M2_PER_PYEONG } from '../format';
+import { LOAN_RATE, LOAN_RATIO } from '../rentRate';
 
 // 설정 탭: 조회 방식(창 띄우기, 자동 확인 요일과 시각)과 조회가 끝나면 띄울 알림. 바꾸면 바로 저장한다. 금액은 만원, 빈칸은 제한 없음.
 // 전월세 줄과 매매 목적 줄은 알림이 따로 뜬다. 조회 방식은 App이 저장한다(visible, autoTime, autoDay 이벤트).
@@ -43,8 +46,8 @@ type AmountRow = 'monthly' | 'jeonse' | 'short' | 'sale' | 'rooms' | 'auction' |
 type Flag = 'rentNotices' | 'trustNotices' | 'subscriptions' | 'shopNotices' | 'landNotices' | 'priceChanges' | 'failures' | 'insideAreas' | 'captureSites';
 type Group = 'rent' | 'buy' | 'common';
 
-/** 매물 줄: 켜기와 상한 칸(key는 그 줄 설정의 값 이름, unit 없으면 만원) */
-const AMOUNT_ROWS: { row: AmountRow; name: string; group: Group; title?: string; fields: { key: string; label: string; step: number; unit?: '㎡' }[] }[] = [
+/** 매물 줄: 켜기와 상한 칸(key는 그 줄 설정의 값 이름). unit '평'은 평으로 넣고 보이지만 설정에는 ㎡로 저장한다. 없으면 만원. */
+const AMOUNT_ROWS: { row: AmountRow; name: string; group: Group; title?: string; fields: { key: string; label: string; step: number; unit?: '평' }[] }[] = [
   { row: 'monthly', name: '월세', group: 'rent', fields: [{ key: 'monthlyMax', label: '월세', step: 5 }, { key: 'depositMax', label: '보증금', step: 100 }] },
   { row: 'jeonse', name: '전세', group: 'rent', fields: [{ key: 'depositMax', label: '전세금', step: 1000 }] },
   { row: 'short', name: '단기', group: 'rent', fields: [{ key: 'monthlyMax', label: '월세', step: 5 }] },
@@ -57,11 +60,11 @@ const AMOUNT_ROWS: { row: AmountRow; name: string; group: Group; title?: string;
   },
   {
     row: 'shopAuction', name: '상가 경매', group: 'buy',
-    fields: [{ key: 'priceMax', label: '최저가', step: 1000 }, { key: 'areaMax', label: '면적', step: 0.1, unit: '㎡' }],
+    fields: [{ key: 'priceMax', label: '최저가', step: 1000 }, { key: 'areaMax', label: '면적', step: 1, unit: '평' }],
   },
   {
     row: 'landAuction', name: '토지 경매', group: 'buy',
-    fields: [{ key: 'priceMax', label: '최저가', step: 1000 }, { key: 'areaMax', label: '면적', step: 0.1, unit: '㎡' }],
+    fields: [{ key: 'priceMax', label: '최저가', step: 1000 }, { key: 'areaMax', label: '면적', step: 1, unit: '평' }],
   },
 ];
 
@@ -91,6 +94,30 @@ const amountOf = (row: AmountRow, key: string) => (props.settings[row] as unknow
 /** 1억 이상이면 읽기 쉬운 금액('2억 5,000만') */
 const hint = (v: number | null) => (v != null && v >= 10000 ? manwon(v) : '');
 
+/** 내 조건의 연소득(만원). 빈칸이면 거르지 않고, 잘못된 값이면 칸을 되돌린다. */
+function setIncome(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const text = input.value.trim();
+  const v = text === '' ? null : Number(text);
+  if (v != null && !(Number.isFinite(v) && v > 0)) {
+    input.value = profile.value.income == null ? '' : String(profile.value.income);
+    return;
+  }
+  profile.value.income = v == null ? null : Math.round(v);
+}
+
+/** 내 조건의 전세대출 금리(연 %)나 대출 비율(%). 빈칸이면 기본값, 0 이하나 max를 넘으면 칸을 되돌린다. */
+function setLoan(key: 'loanRate' | 'loanRatio', max: number, event: Event) {
+  const input = event.target as HTMLInputElement;
+  const text = input.value.trim();
+  const v = text === '' ? null : Number(text);
+  if (v != null && !(Number.isFinite(v) && v > 0 && v <= max)) {
+    input.value = profile.value[key] == null ? '' : String(profile.value[key]);
+    return;
+  }
+  profile.value[key] = v == null ? null : Math.round(v * 100) / 100;
+}
+
 async function save(patch: Partial<AlertSettings>): Promise<boolean> {
   error.value = null;
   try {
@@ -108,10 +135,17 @@ async function toggleRow(row: AmountRow, event: Event) {
   if (!(await save({ [row]: { ...props.settings[row], on: input.checked } }))) input.checked = props.settings[row].on;
 }
 
-async function setAmount(row: AmountRow, key: string, event: Event) {
+/** 칸에 보일 값: 평 칸은 저장된 ㎡를 평으로(소수 한 자리) */
+const shownAmount = (row: AmountRow, key: string, unit?: '평') => {
+  const v = amountOf(row, key);
+  return v == null ? '' : unit === '평' ? String(Math.round((v / M2_PER_PYEONG) * 10) / 10) : String(v);
+};
+
+async function setAmount(row: AmountRow, key: string, event: Event, unit?: '평') {
   const input = event.target as HTMLInputElement;
   const raw = input.value.trim();
-  if (!(await save({ [row]: { ...props.settings[row], [key]: raw === '' ? null : Number(raw) } }))) input.value = String(amountOf(row, key) ?? '');
+  const value = raw === '' ? null : unit === '평' ? Math.round(Number(raw) * M2_PER_PYEONG * 100) / 100 : Number(raw);
+  if (!(await save({ [row]: { ...props.settings[row], [key]: value } }))) input.value = shownAmount(row, key, unit);
 }
 
 async function toggleFlag(key: Flag, event: Event) {
@@ -191,8 +225,8 @@ async function toggleFlag(key: Flag, event: Event) {
             <label v-for="f in r.fields" :key="f.key" class="field">
               {{ f.label }}
               <input
-                type="number" min="1" :step="f.step" placeholder="제한 없음" :value="amountOf(r.row, f.key) ?? ''"
-                @change="setAmount(r.row, f.key, $event)"
+                type="number" min="1" :step="f.step" placeholder="제한 없음" :value="shownAmount(r.row, f.key, f.unit)"
+                @change="setAmount(r.row, f.key, $event, f.unit)"
               />
               {{ f.unit ?? '만' }} 이하<span v-if="!f.unit && hint(amountOf(r.row, f.key))" class="muted hint">{{ hint(amountOf(r.row, f.key)) }}</span>
             </label>
@@ -203,6 +237,51 @@ async function toggleFlag(key: Flag, event: Event) {
             <input type="checkbox" :checked="settings[f.key]" @change="toggleFlag(f.key, $event)" />
             <strong>{{ f.name }}</strong>
           </label>
+        </li>
+      </ul>
+    </div>
+
+    <div class="group">
+      <h3 title="연소득을 넣으면 소득 기준을 넘어 받을 수 없는 정책대출과 지원을 지원 제도 탭과 매물 카드 대출 표시에서 뺍니다. 전세대출 금리와 비율은 매물 카드의 '대출 시 월'에 씁니다. 이 브라우저에만 저장합니다.">내 조건</h3>
+      <ul class="list">
+        <li class="row" :class="{ off: profile.income == null }" title="세전 연소득, 결혼했으면 부부 합산. 비우면 거르지 않습니다.">
+          <strong class="name">연소득</strong>
+          <span class="fields">
+            <label class="field">
+              <input type="number" min="1" step="100" placeholder="안 넣음" :value="profile.income ?? ''" aria-label="연소득(만원)" @change="setIncome" />
+              만<span v-if="hint(profile.income)" class="muted hint">{{ hint(profile.income) }}</span>
+            </label>
+          </span>
+        </li>
+        <li class="row" title="신혼, 출산, 자녀 수에 따라 소득 기준이 달라지는 대출이 있습니다.">
+          <strong class="name">가구</strong>
+          <span class="fields">
+            <label class="check"><input v-model="profile.newlywed" type="checkbox" /> 신혼(혼인 7년 안)이나 결혼 예정</label>
+            <label class="check"><input v-model="profile.newborn" type="checkbox" /> 2년 안에 출산</label>
+            <label class="field">
+              자녀
+              <select v-model.number="profile.kids" class="time" aria-label="미성년 자녀 수">
+                <option :value="0">없음</option>
+                <option :value="1">1명</option>
+                <option :value="2">2명 이상</option>
+              </select>
+            </label>
+          </span>
+        </li>
+        <li class="row" :title="`매물 카드의 '대출 시 월'(월세 + 대출 이자)에 씁니다. 비우면 금리 ${LOAN_RATE.rate}%(${LOAN_RATE.basis}), 대출 비율 ${LOAN_RATIO}%.`">
+          <strong class="name">전세대출</strong>
+          <span class="fields">
+            <label class="field">
+              금리
+              <input type="number" min="0.1" step="0.1" :placeholder="String(LOAN_RATE.rate)" :value="profile.loanRate ?? ''" aria-label="전세대출 금리(연 %)" @change="setLoan('loanRate', 30, $event)" />
+              %
+            </label>
+            <label class="field">
+              대출 비율
+              <input type="number" min="1" step="5" :placeholder="String(LOAN_RATIO)" :value="profile.loanRatio ?? ''" aria-label="보증금 중 대출로 낼 몫(%)" @change="setLoan('loanRatio', 100, $event)" />
+              %
+            </label>
+          </span>
         </li>
       </ul>
     </div>

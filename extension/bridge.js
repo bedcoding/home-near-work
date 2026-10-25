@@ -6,6 +6,13 @@
 const HNW_SITE = hnwSiteFor(location.hostname);
 /** 사이트별 표시 스크립트가 여기에 자기를 등록한다: HNW_ADAPTERS[siteId] = { onCapture(capture) } */
 const HNW_ADAPTERS = {};
+// 이동 전 문서에서 늦게 온 응답이 다른 지역에 섞이지 않도록 문서마다 식별한다.
+const HNW_DOCUMENT_TOKEN = crypto.randomUUID();
+// null 응답만 일반 탭을 뜻한다. 연결 오류나 순회 전용 탭의 미연결 문서를 일반 수집으로 돌리지 않는다.
+const HNW_BROWSE_CONTEXT = Promise.resolve()
+  .then(() => chrome.runtime.sendMessage({ type: 'browse-context', documentToken: HNW_DOCUMENT_TOKEN }))
+  .then((context) => context === null || context?.owned === true ? context : { owned: true, jobId: null })
+  .catch(() => ({ owned: true, jobId: null }));
 
 let reloadNoticeShown = false;
 
@@ -78,8 +85,14 @@ window.addEventListener('message', (event) => {
       showReloadNotice();
       return;
     }
-    chrome.runtime.sendMessage({ type: 'capture', capture }).catch(() => {});
-    maybeAutoSnapshot(url);
+    void HNW_BROWSE_CONTEXT.then((context) => {
+      if (context?.owned && !context.jobId) return;
+      maybeAutoSnapshot(url);
+      return chrome.runtime.sendMessage({
+        type: 'capture', capture,
+        ...(context?.jobId ? { browseJobId: context.jobId, documentToken: HNW_DOCUMENT_TOKEN } : {}),
+      });
+    }).catch(() => {});
   } catch {
     showReloadNotice();
   }

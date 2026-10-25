@@ -4,9 +4,14 @@ import { kbStatsState, RATE_SERIES, type SeriesId } from './kb-stats.js';
 import { tradeSignalMonths } from './trade-signals.js';
 import { peakSourcesState } from './peak-sources.js';
 import { buildRegionVolume } from './region-volume.js';
-import { guCode } from './lots.js';
+import { dongsOfGu, guCode } from './lots.js';
 import { yearRange, ymd } from './rt-csv.js';
-import { SEOUL_GUS, type MarketChanges, type MarketChart, type MarketLine, type MarketNow, type MarketTier, type MarketView, type MarketYearly, type PeakSeries, type TradePeakSignals } from '../shared/types.js';
+import { distanceM } from './geo.js';
+import { stationCatalog } from './stations.js';
+import {
+  SEOUL_GUS, seoulGuOf, type MarketChanges, type MarketChart, type MarketLine, type MarketNow, type MarketStation, type MarketTier, type MarketView,
+  type MarketYearly, type NormalizedListing, type PeakSeries, type TradePeakSignals,
+} from '../shared/types.js';
 
 // 시세 통계 탭: KB 통계 시계열(kb-stats), 국토부 아파트 실거래(apt-trades), 지역별 거래 건수(region-volume)로 그래프 자료, 지금 흐름 요약, 구별 급지표를 만든다.
 // 급지는 공식 분류가 아니다. 최근 1년 실거래의 전용면적 평당 중간값 순위로 구를 다섯 묶음으로 고르게 나눈 것이다.
@@ -123,6 +128,43 @@ function volumeOf(gus: string[], fetchedAt: string | null): MarketView['volume']
   };
 }
 
+/** 역을 동에 붙일 때 볼 모은 매물 반경(m)과 그 안에 있어야 하는 매물 수 */
+const STATION_RADIUS_M = 300;
+const STATION_MIN_LISTINGS = 3;
+
+/**
+ * 서울 전철역을 구별로 묶고 역마다 법정동을 정한다. 역 300m 안에 같은 구 매물이 3건 이상 모여 있으면 그중 가장 많은 동,
+ * 아니면 역 이름(끝의 '역' 뺌) 뒤에 '동', '동1가', '1가'처럼만 붙은 이름의 동(그런 동이 하나일 때만).
+ */
+function stationsByGu(): Map<string, MarketStation[]> {
+  const points = new Map<string, { lat: number; lng: number; dong: string }[]>();
+  for (const row of store.allListings()) {
+    const d = JSON.parse(row.data) as NormalizedListing;
+    const gu = seoulGuOf(d.address);
+    if (d.lat == null || d.lng == null || !d.dong || !gu) continue;
+    points.set(gu, [...(points.get(gu) ?? []), { lat: d.lat, lng: d.lng, dong: d.dong }]);
+  }
+  const out = new Map<string, MarketStation[]>();
+  for (const s of stationCatalog().stations) {
+    if (s.sido !== '서울' || !s.gu) continue;
+    const near = (points.get(s.gu) ?? []).filter((p) => distanceM(p.lat, p.lng, s.lat, s.lng) <= STATION_RADIUS_M);
+    let station: MarketStation;
+    if (near.length >= STATION_MIN_LISTINGS) {
+      const counts = new Map<string, number>();
+      for (const p of near) counts.set(p.dong, (counts.get(p.dong) ?? 0) + 1);
+      station = { name: s.name, lines: s.lines, dongs: [[...counts].sort((a, b) => b[1] - a[1])[0][0]], how: 'listings' };
+    } else {
+      // 이름이 붙은 동이 여럿이면(회현동1가~3가) 어느 동인지 몰라 붙이지 않는다.
+      const stem = s.name.replace(/역$/, '');
+      const dongs = dongsOfGu(s.gu).filter((d) => d.startsWith(stem) && /^(동|동\d+가|\d+가)?$/.test(d.slice(stem.length)));
+      station = dongs.length === 1 ? { name: s.name, lines: s.lines, dongs, how: 'name' } : { name: s.name, lines: s.lines, dongs: [], how: null };
+    }
+    out.set(s.gu, [...(out.get(s.gu) ?? []), station]);
+  }
+  for (const list of out.values()) list.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  return out;
+}
+
 /** 구별 급지표: 최근 1년 해제되지 않은 매매의 전용면적 평당 중간값 순위 */
 function tiersOf(gus: string[], price: MarketChart): MarketView['tiers'] {
   const { from, to } = yearRange();
@@ -131,6 +173,7 @@ function tiersOf(gus: string[], price: MarketChart): MarketView['tiers'] {
   const changeOf = new Map(price.lines.filter((l) => l.kind === 'gu').map((l) => [l.name, longChanges(price, l).change]));
   const perPy = (list: store.AptTradeRow[]) => Math.round(median(list.map((r) => r.price / r.area_m2))! * PYEONG_M2);
   const groups = SEOUL_GUS.map((gu) => ({ gu, list: rows.filter((r) => r.gu === gu) })).filter((g) => g.list.length);
+  const stations = stationsByGu();
   const list = groups
     .map(({ gu, list }) => {
       const dongs = new Map<string, store.AptTradeRow[]>();
@@ -146,6 +189,7 @@ function tiersOf(gus: string[], price: MarketChart): MarketView['tiers'] {
         change: changeOf.get(gu) ?? { y1: null, y5: null, y10: null },
         near: gus.includes(gu),
         dongs: [...dongs].map(([dong, l]) => ({ dong, count: l.length, pyeong: perPy(l) })).sort((a, b) => b.pyeong - a.pyeong),
+        stations: stations.get(gu) ?? [],
       };
     })
     .sort((a, b) => b.pyeong - a.pyeong);

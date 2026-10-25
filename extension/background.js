@@ -7,7 +7,7 @@
 // - '한 번에 열기': 팝업, 대시보드에서 누르면 켜 둔 사이트를 새 창 하나에 연다.
 // - 공고 사이트에서 직접 받은 첨부 파일의 위치를 대시보드에 알린다(대시보드가 파일을 읽음).
 
-importScripts('sites.js', 'areas.js');
+importScripts('sites.js', 'areas.js', 'browse-queue.js');
 
 const SERVER = 'http://127.0.0.1:8787';
 const BATCH = 20;
@@ -28,7 +28,7 @@ async function registerSiteScripts() {
   if (!matches.length) return;
   await chrome.scripting.registerContentScripts([
     { id: 'hnw-hook', matches, js: ['hook.js'], runAt: 'document_start', world: 'MAIN', persistAcrossSessions: true },
-    { id: 'hnw-bridge', matches, js: ['sites.js', 'areas.js', 'bridge.js', 'naver.js'], runAt: 'document_start', persistAcrossSessions: true },
+    { id: 'hnw-bridge', matches, js: ['sites.js', 'areas.js', 'bridge.js', 'naver.js', 'browse-page.js'], runAt: 'document_start', persistAcrossSessions: true },
   ]);
 }
 
@@ -44,11 +44,12 @@ async function setBadge(text, color, title) {
   await chrome.action.setTitle({ title });
 }
 
-async function postJson(path, payload, method = 'POST') {
+async function postJson(path, payload, method = 'POST', timeoutMs = 15000) {
   const res = await fetch(`${SERVER}${path}`, {
     method,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status });
@@ -56,17 +57,20 @@ async function postJson(path, payload, method = 'POST') {
 }
 
 /** 대시보드가 받아 놓고 거절한 경우(4xx). 다시 보내도 안 되므로 모아 두지 않는다. */
-const rejected = (e) => e && e.status >= 400 && e.status < 500;
+const rejected = (e) => e && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429;
 
 async function showTotal(total) {
   const n = Number(total) || 0;
   await setBadge(n > 999 ? '999+' : String(n), '#12825e', `회사근처 내집마련: 화면 데이터 ${n}건을 대시보드로 보냈습니다`);
 }
 
-/** 매물 목록 응답(네이버 .../clusteredArticles 등). 대시보드의 매물, '봤음'이 이것으로 만들어진다. */
+/** 매물과 신규 판정에 쓰는 응답은 서비스 워커가 종료돼도 다시 보낼 수 있게 보관한다. */
 function isListing(capture) {
   try {
-    return /Articles$/.test(new URL(capture.url).pathname);
+    const pathname = new URL(capture.url).pathname.replace(/\/$/, '');
+    if (capture.site === 'dabang') return pathname.includes('/room-list/');
+    if (capture.site === 'zigbang') return /\/items\/(list|subways\/[^/]+\/onerooms)$/.test(pathname);
+    return (!capture.site || capture.site === 'naver') && /Articles$/.test(pathname);
   } catch {
     return false;
   }
@@ -83,7 +87,7 @@ async function savePending(captures) {
   const now = Date.now();
   const items = {};
   captures.forEach((c, i) => {
-    items[`${PENDING}${now}:${String(i).padStart(3, '0')}`] = c;
+    items[`${PENDING}${now}:${crypto.randomUUID()}:${String(i).padStart(3, '0')}`] = c;
   });
   await chrome.storage.local.set(items);
   const keys = await pendingKeys();
@@ -94,18 +98,21 @@ async function savePending(captures) {
 async function flushPending() {
   if (sendingPending) return;
   sendingPending = true;
+  let batchKeys = [];
   try {
     for (;;) {
       const keys = (await pendingKeys()).slice(0, BATCH);
       if (!keys.length) break;
       const stored = await chrome.storage.local.get(keys);
+      batchKeys = keys;
       const data = await postJson('/api/naver/capture', { captures: keys.map((k) => stored[k]).filter(Boolean) });
       await chrome.storage.local.remove(keys);
       await showTotal(data.total);
     }
   } catch (e) {
     // 대시보드가 아직 꺼져 있으면 다음에 다시 한다. 거절당한 묶음은 버린다(계속 막히지 않게).
-    if (rejected(e)) await chrome.storage.local.remove((await pendingKeys()).slice(0, BATCH));
+    if (rejected(e)) await chrome.storage.local.remove(batchKeys);
+    else await setBadge('!', '#e5484d', '회사근처 내집마련: 대시보드로 보내지 못해 매물 목록을 보관 중입니다. 연결되면 다시 보냅니다.');
   } finally {
     sendingPending = false;
   }
@@ -124,8 +131,12 @@ async function flush() {
     // 대시보드가 꺼져 있으면 매물 목록 응답은 저장해 두고(켜지면 보냄), 나머지(지도 묶음 등)는 조금만 들고 있다가 다음에 같이 보낸다.
     // 지도 표시('새 N', 봤음)는 대시보드 없이도 된다.
     if (!rejected(e)) {
-      await savePending(batch.filter(isListing)).catch(() => {});
-      queue = batch.filter((c) => !isListing(c)).concat(queue).slice(-200);
+      try {
+        await savePending(batch.filter(isListing));
+        queue = batch.filter((c) => !isListing(c)).concat(queue).slice(-200);
+      } catch {
+        queue = batch.concat(queue).slice(-200);
+      }
     }
     await setBadge('!', '#e5484d', `회사근처 내집마련: 대시보드가 꺼져 있어 못 보냈습니다(${e.message}). 매물 목록은 모아 뒀다가 켜지면 보냅니다. 지도 표시는 그대로 됩니다.`);
   } finally {
@@ -139,6 +150,10 @@ async function flush() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return;
+  if (['browse-command', 'browse-status', 'browse-context'].includes(message.type)) {
+    HNW_BROWSE.message(message, sender).then(sendResponse, (e) => sendResponse({ error: e.message }));
+    return true;
+  }
   if (message.type === 'open-sites') {
     openSites(message.area).then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
     return true;
@@ -152,13 +167,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
   if (message.type !== 'capture') return;
-  queue.push(message.capture);
-  setTimeout(flush, 800);
-  const pageUrl = message.capture && message.capture.pageUrl;
+  if (message.browseJobId) {
+    HNW_BROWSE.capture(message, sender).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
+    return true;
+  }
+  captureOutsideBrowse(message.capture, sender).then(sendResponse, () => sendResponse({ ok: false }));
+  return true;
+});
+
+async function captureOutsideBrowse(capture, sender) {
+  // 전용 탭이 새로고침되거나 일시 중단되어 문서 연결이 없어도 일반 수집으로 섞이지 않게 한다.
+  // 소유 여부 확인에 실패하면 전송하지 않는다. 다른 일반 탭의 수집에는 영향을 주지 않는다.
+  if (await HNW_BROWSE.ownsTab(sender.tab?.id)) return { ok: false, reason: 'unbound-browse' };
+  const pageUrl = capture && capture.pageUrl;
   if (typeof pageUrl === 'string' && pageUrl.startsWith('https://fin.land.naver.com/map')) {
     void chrome.storage.local.set({ lastNaverUrl: pageUrl });
   }
-});
+  if (isListing(capture)) {
+    // 전송에 앞서 저장하고 응답 채널을 유지한다. 오프라인 중 워커가 잠들어도 매물은 남는다.
+    try {
+      await savePending([capture]);
+      void flushPending();
+      return { ok: true };
+    } catch {
+      queue.push(capture);
+      setTimeout(flush, 800);
+      return { ok: false };
+    }
+  }
+  queue.push(capture);
+  setTimeout(flush, 800);
+  return { ok: true };
+}
 
 // ---------- 한 번에 열기 ----------
 // 팝업, 대시보드의 '한 번에 열기'를 누르면 켜 둔 사이트의 바로 가기를 새 창 하나에 연다(sites.js의 hnwOpenLinks).

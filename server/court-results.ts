@@ -14,8 +14,8 @@ import { LAND_PREFIX, SEOUL, SHOP_PREFIX, type AuctionResultKind, type CourtRegi
 
 const RESULT_URL = 'https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ158M00.xml';
 const RESULT_API = 'selectDspslSchdRsltSrch.on';
-const CASE_URL = 'https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ159M00.xml';
-const CASE_API = 'selectAuctnCsSrchRslt.on';
+export const CASE_URL = 'https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ159M00.xml';
+export const CASE_API = 'selectAuctnCsSrchRslt.on';
 const STATS_URL = 'https://www.courtauction.go.kr/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ163M01.xml';
 const STATS_API = 'selectRletYrDspslStats.on';
 
@@ -26,7 +26,7 @@ const RESULT = {
   /** 쪽 번호 다음 묶음(11쪽, 21쪽, …)의 첫 쪽으로 가는 버튼 */
   nextGroup: '#mf_wfm_mainFrame_pgl_gdsDtlSrchPage_next_btn',
 };
-const CASE = {
+export const CASE = {
   court: '#mf_wfm_mainFrame_sbx_auctnCsSrchCortOfc',
   year: '#mf_wfm_mainFrame_sbx_auctnCsSrchCsYear',
   no: '#mf_wfm_mainFrame_ibx_auctnCsSrchCsNo',
@@ -60,8 +60,8 @@ export function courtResultsDue(): boolean {
   return !at || Date.now() - Date.parse(at) >= RESULTS_MAX_AGE_MS;
 }
 
-/** 법원경매정보 화면이 열리지 않음(서비스 점검 시간 등). 매각 결과 모으기를 거기서 멈춘다. */
-class ScreenDownError extends Error {}
+/** 법원경매정보 화면이 열리지 않음(서비스 점검 시간 등). 매각 결과와 배당 순위 확인 모으기를 거기서 멈춘다. */
+export class ScreenDownError extends Error {}
 
 /** 이 컴퓨터 날짜로 오늘에서 days일 더한 날, YYYY-MM-DD */
 function localDay(days = 0): string {
@@ -113,7 +113,7 @@ function resultOfLot(lot: any[]): store.AuctionResultInput | null {
 }
 
 /** 화면을 열고 검색 버튼이 보일 때까지 기다린 뒤 안내 창을 닫는다. 막히면 BlockedError, 화면이 안 열리면 ScreenDownError. */
-async function openScreen(session: BrowserSession, url: string, ready: string) {
+export async function openScreen(session: BrowserSession, url: string, ready: string) {
   const response = await session.goto('courtauction', url).catch((e) => {
     throw new ScreenDownError(`법원경매정보에 접속하지 못했습니다(${errorText(e)}).`);
   });
