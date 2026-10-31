@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import L from 'leaflet';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { SOURCE_LABEL, type Area, type ListingView } from '../../../shared/types';
+import { SOURCE_LABEL, type Area, type DealType, type ListingView, type PriceOption } from '../../../shared/types';
 import { loadCatalog, type CatalogStation } from '../areaActions';
 import { auctionSiteLinks, isAuction } from '../auction';
 import { KIND_LABEL, kindOf } from '../kinds';
@@ -15,6 +15,7 @@ import type { RedevZoneFeature } from '../../../shared/types';
 
 // 매물 탭 오른쪽 지도와 경매 탭, 고시원과 쉐어 탭의 지도가 같이 쓴다.
 // - 매물(같은 자리는 숫자 동그라미로 묶음)을 누르면 정보 창이 뜨고, 거기서 '목록에서 보기'나 '원본 열기'를 누른다.
+//   확대해 보면(PRICE_ZOOM) 동그라미 대신 가격('보증금/월세', 전세 '전 1.5억')을 쓴 표시로 그리고, 같은 자리 여러 건은 가장 싼 것과 건수를 쓴다.
 //   옆에 목록이 있으면 누를 때 그 자리 매물들을 reveal 이벤트로 알려 목록도 그 매물로 옮기게 한다.
 // - 역(흰 동그라미, 켜진 지역은 검은 동그라미)을 누르면 그 역 지역을 켜고 끈다(station 이벤트, 확대 12 이상에서 보임).
 // - 휠 한 칸에 약 1.2배씩 확대하거나 축소한다.
@@ -61,6 +62,10 @@ const fileEl = ref<HTMLInputElement | null>(null);
 const stations = ref<CatalogStation[]>([]);
 /** 이 확대보다 멀리서 보면 역을 그리지 않는다(수도권 658곳이 한꺼번에 보이면 매물이 가려서). */
 const STATION_MIN_ZOOM = 12;
+/** 이 확대부터 매물 표시에 가격을 쓴다(strong은 펼친 목록의 매물, normal은 펼친 목록이 없을 때 매물). 멀리서는 겹쳐서 동그라미로 둔다. */
+const PRICE_ZOOM = { strong: 14, normal: 15 };
+/** 마지막으로 그린 가격 표시 단계(0 동그라미만, 1 펼친 목록만 가격, 2 모두 가격) */
+let drawnPriceLevel = -1;
 /** 매물 번호 → 그 매물이 든 표시(같은 자리 매물은 한 표시로 묶는다) */
 const markerOf = new Map<string, { marker: L.Layer; group: Group }>();
 let selected: { marker: L.Layer; group: Group } | null = null;
@@ -107,6 +112,37 @@ function tooltip(items: ListingView[]) {
   if (items.length > 6) lines.push(`외 ${items.length - 6}건`);
   return (items.length > 1 ? `<strong>이 자리 ${items.length}건</strong><br>` : '') + lines.join('<br>');
 }
+
+/** 지도 표시에 쓸 짧은 금액(만원): 1억이 넘으면 '1.5억', 아니면 '9,000' */
+function shortMoney(v: number | null): string {
+  if (v == null) return '?';
+  return v >= 10000 ? `${(Math.round(v / 1000) / 10).toLocaleString('ko-KR')}억` : v.toLocaleString('ko-KR');
+}
+
+/** 지도 표시에 쓰는 가격 글자: 월세와 단기 '보증금/월세', 전세 '전 1.5억', 매매와 경매 '3.2억' */
+function mapPrice(p: PriceOption): string {
+  if (p.deal === 'monthly' || p.deal === 'short') return `${shortMoney(p.deposit)}/${p.monthly ?? '?'}`;
+  if (p.deal === 'jeonse') return `전 ${shortMoney(p.deposit)}`;
+  return shortMoney(p.price);
+}
+
+const DEAL_ORDER: Record<DealType, number> = { monthly: 0, short: 1, jeonse: 2, sale: 3, auction: 4 };
+
+/** 같은 자리 매물마다 첫 가격(카드 가격 줄의 첫 값) 중 표시에 쓸 것: 월세와 단기 먼저 월세가 낮은 것, 그다음 보증금, 매매가가 낮은 것 */
+function cheapestPrice(items: ListingView[]): PriceOption | null {
+  const ps = items.map((l) => l.prices[0]).filter((p): p is PriceOption => !!p);
+  ps.sort(
+    (a, b) =>
+      DEAL_ORDER[a.deal] - DEAL_ORDER[b.deal] || (a.monthly ?? 0) - (b.monthly ?? 0) || (a.deposit ?? 0) - (b.deposit ?? 0) || (a.price ?? 0) - (b.price ?? 0),
+  );
+  return ps[0] ?? null;
+}
+
+/** 지금 확대에서 가격 표시 단계(PRICE_ZOOM) */
+const priceLevel = () => {
+  const z = map?.getZoom() ?? 0;
+  return z >= PRICE_ZOOM.normal ? 2 : z >= PRICE_ZOOM.strong ? 1 : 0;
+};
 
 /** 가격 글자. 고시원과 쉐어의 가장 싼 방과 비싼 방은 '월세 0/22 ~ 0/40'처럼 잇는다. */
 function pricesText(l: ListingView) {
@@ -305,10 +341,25 @@ function drawDots(fit: boolean) {
   markerOf.clear();
   selected = null;
   const dim = props.listings.length > 0;
+  drawnPriceLevel = priceLevel();
   for (const g of groups()) {
     const c = g.strong || !dim ? groupColor(g.items) : MUTED;
+    const price = (g.strong ? drawnPriceLevel >= 1 : !dim && drawnPriceLevel >= 2) ? cheapestPrice(g.items) : null;
     let marker: L.Layer;
-    if (g.items.length === 1) {
+    if (price) {
+      // 확대해 보면 가격을 쓴 표시(같은 자리 여러 건이면 가장 싼 것과 건수)
+      marker = L.marker([g.lat, g.lng], {
+        icon: L.divIcon({
+          className: `price${g.strong ? ' strong' : ''}`,
+          html: `<span style="background:${c}">${esc(mapPrice(price))}${g.items.length > 1 ? `<b>${g.items.length}</b>` : ''}</span>`,
+          iconSize: [0, 0],
+          iconAnchor: [0, 0],
+          tooltipAnchor: [0, -10],
+        }),
+        keyboard: false,
+        zIndexOffset: g.strong ? 500 : 0,
+      });
+    } else if (g.items.length === 1) {
       marker = L.circleMarker([g.lat, g.lng], {
         radius: g.strong ? 7 : dim ? 3.5 : 5,
         color: '#fff',
@@ -382,7 +433,13 @@ function setSelected(s: { marker: L.Layer; group: Group }, on: boolean) {
     if (on) s.marker.bringToFront();
   } else {
     (s.marker as L.Marker).getElement()?.classList.toggle('sel', on);
+    (s.marker as L.Marker).setZIndexOffset(on ? 1000 : s.group.strong ? 500 : 0);
   }
+}
+
+/** 확대를 바꿔 가격 표시 단계가 바뀌면 매물 표시를 다시 그린다(보던 확대와 위치는 그대로). */
+function onZoom() {
+  if (priceLevel() !== drawnPriceLevel) drawDots(false);
 }
 
 function onKey(e: KeyboardEvent) {
@@ -408,6 +465,7 @@ onMounted(() => {
   base = L.layerGroup().addTo(map);
   dots = L.layerGroup().addTo(map);
   map.on('moveend', drawStations);
+  map.on('zoomend', onZoom);
   void loadCatalog()
     .then((list) => {
       stations.value = list;
@@ -505,6 +563,7 @@ onBeforeUnmount(() => {
       <span><i style="background:#c48a0a"></i>관심</span>
       <span><i style="background:#1f5fbf"></i>나머지</span>
       <span><b class="stack-sample">3</b>같은 건물 매물 수</span>
+      <span :title="`확대 ${PRICE_ZOOM.normal}부터(가격대를 펼쳤으면 그 매물은 ${PRICE_ZOOM.strong}부터) 동그라미 대신 가격을 씁니다. 월세는 보증금/월세(만원), 전세는 '전 1.5억'처럼, 같은 자리 여러 건은 가장 싼 것과 건수`"><b class="price-sample">500/40</b>확대하면 가격</span>
       <span><i class="st-sample"></i>역: 누르면 지역 켜고 끄기</span>
       <span><i class="pick-sample"></i>찍은 지역: 누르면 끄기</span>
       <template v-if="zonesOn && zones?.count">
@@ -598,6 +657,19 @@ onBeforeUnmount(() => {
 :deep(.stack.strong span) { font-size: 13px; border-width: 2px; }
 :deep(.stack.dim span) { font-size: 9px; opacity: .75; }
 :deep(.stack.sel span) { outline: 3px solid #16202e; outline-offset: 1px; }
+/* 가격 표시: 크기 0인 표시 칸의 가운데에 글자 상자를 놓는다(글자 길이만큼 넓어짐) */
+:deep(.price span), .price-sample {
+  display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; border-radius: 9px; white-space: nowrap;
+  color: #fff; font: 700 11px/1.4 var(--font); border: 1.5px solid #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+}
+:deep(.price span) { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); cursor: pointer; }
+:deep(.price span b) {
+  display: inline-grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px;
+  background: #fff; color: #16202e; font-size: 10px; line-height: 1;
+}
+:deep(.price.strong span) { padding: 2px 6px; font-size: 12px; border-width: 2px; }
+:deep(.price.sel span) { outline: 3px solid #16202e; outline-offset: 1px; }
+.price-sample { margin-right: 4px; background: #1f5fbf; box-shadow: 0 0 0 1px #1f5fbf; }
 .legend .st-sample { width: 10px; height: 10px; border: 2px solid #16202e; background: #fff; box-sizing: border-box; }
 :deep(.st-tip) { color: var(--muted); font-size: 12px; }
 :deep(.mp) { display: grid; gap: 8px; max-height: 340px; overflow: auto; font: 13px/1.45 var(--font); }

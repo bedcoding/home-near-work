@@ -1,5 +1,7 @@
 // 서버와 화면이 함께 쓰는 타입. 금액 단위는 전부 만원이다.
 
+import type { Filters } from './filters.js';
+
 export type SourceId = 'naver' | 'dabang' | 'zigbang' | 'ziptoss' | 'peterpanz' | 'gobang' | 'courtauction' | 'onbid' | 'betterliving' | 'mangrove' | 'celib';
 
 /** 크롬 확장이 받은 화면 데이터로 매물을 읽는 사이트('조회하기'가 돌지 않음) */
@@ -838,6 +840,11 @@ export interface AutoCheckState {
 
 /** 조회가 끝나면 띄울 알림 고르기('조회하기'와 자동 확인 모두). 금액은 만원, null이면 제한 없음. */
 export interface AlertSettings {
+  /**
+   * 매매와 전월세 새 매물을 고를 매물 탭 필터(화면이 필터를 바꿀 때마다 알려 준다). 있으면 아래 거래 유형 줄의 상한 대신
+   * 이 필터의 금액, 평, 매물 유형, 층, 무옵션, 지역 조건을 쓰고, 거래 유형 줄은 켜기만 본다. 아직 받지 못했으면 null.
+   */
+  homeFilter: Filters | null;
   /** 매매와 전월세 새 매물: 거래 유형마다 켜기와 상한 */
   monthly: { on: boolean; monthlyMax: number | null; depositMax: number | null };
   jeonse: { on: boolean; depositMax: number | null };
@@ -1235,3 +1242,60 @@ export interface LineViewSetting {
 /** 조회할 때 역, 지역, 구 사이에 쉬는 시간으로 고를 수 있는 값(초)과 처음 값. 사이트와 이 컴퓨터에 요청이 한꺼번에 몰리지 않게 한다. */
 export const REST_CHOICES = [0, 2, 3, 5, 10];
 export const REST_DEFAULT = 3;
+
+// ---------- 동별 전월세(국토부 실거래가 전월세) ----------
+
+/** 동별 전월세의 종류 묶음(kinds는 실거래 자료의 주택 종류) */
+export const RENT_KINDS = [
+  { id: 'small', label: '아파트 뺌', kinds: ['단독다가구', '연립다세대', '오피스텔'] },
+  { id: 'house', label: '단독다가구', kinds: ['단독다가구'] },
+  { id: 'villa', label: '연립다세대', kinds: ['연립다세대'] },
+  { id: 'officetel', label: '오피스텔', kinds: ['오피스텔'] },
+  { id: 'apt', label: '아파트', kinds: ['아파트'] },
+] as const;
+export type RentKindId = (typeof RENT_KINDS)[number]['id'];
+
+/** 동별 전월세의 면적 칸(전용면적 ㎡, min 초과 max 이하. 단독다가구는 계약면적) */
+export const RENT_SIZES = [
+  { id: 'one', label: '원룸 30㎡ 이하', min: 0, max: 30 },
+  { id: 'two', label: '투룸 30~50㎡', min: 30, max: 50 },
+  { id: 'mid', label: '50~85㎡', min: 50, max: 85 },
+] as const;
+export type RentSizeId = (typeof RENT_SIZES)[number]['id'];
+
+/** 월세 계약 요약(만원): 건수, 환산 월세(월세 + 보증금 × 전환율 ÷ 12)의 중간값과 하위, 상위 4분의 1 경계, 보증금과 월세 중간값 */
+export interface RentMonthlyStat {
+  count: number;
+  conv: number;
+  convLow: number;
+  convHigh: number;
+  deposit: number;
+  rent: number;
+}
+
+/** 전세 계약 요약(만원): 건수, 전세금 중간값과 하위, 상위 4분의 1 경계 */
+export interface RentJeonseStat {
+  count: number;
+  median: number;
+  low: number;
+  high: number;
+}
+
+/** 동이나 구 하나. cells의 키는 '종류 id:면적 id'(RENT_KINDS, RENT_SIZES)이고 그 칸에 계약이 없으면 키가 없다. */
+export interface RentPlace {
+  name: string;
+  cells: Record<string, { monthly: RentMonthlyStat | null; jeonse: RentJeonseStat | null }>;
+}
+
+/**
+ * 시세 통계 탭 동별 전월세: 켜 둔 지역 근처 구의 계약일 from ~ to 신규 계약. rate는 환산에 쓴 전환율(연 %).
+ * gus는 구 전체와 동마다(동에는 그 동에 맞춘 역), fetchedAt은 마지막으로 받은 때, error는 마지막으로 받다 난 오류.
+ */
+export interface RentView {
+  fetchedAt: string | null;
+  error: string | null;
+  from: string;
+  to: string;
+  rate: number;
+  gus: (RentPlace & { dongs: (RentPlace & { stations: MarketStation[] })[] })[];
+}

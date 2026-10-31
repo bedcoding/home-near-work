@@ -136,7 +136,7 @@ const STATION_MIN_LISTINGS = 3;
  * 서울 전철역을 구별로 묶고 역마다 법정동을 정한다. 역 300m 안에 같은 구 매물이 3건 이상 모여 있으면 그중 가장 많은 동,
  * 아니면 역 이름(끝의 '역' 뺌) 뒤에 '동', '동1가', '1가'처럼만 붙은 이름의 동(그런 동이 하나일 때만).
  */
-function stationsByGu(): Map<string, MarketStation[]> {
+export function stationsByGu(): Map<string, MarketStation[]> {
   const points = new Map<string, { lat: number; lng: number; dong: string }[]>();
   for (const row of store.allListings()) {
     const d = JSON.parse(row.data) as NormalizedListing;

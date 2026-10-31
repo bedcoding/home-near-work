@@ -10,6 +10,7 @@ import { DASHBOARD_URL, HOST, PORT, RUNS_DIR, WEB_DIST } from './config.js';
 import * as store from './db.js';
 import { openCourtItem } from './court-viewer.js';
 import { buildHouseTradeSummary, collectHouseTrades } from './house-trades.js';
+import { buildRentView, collectRentTrades, rateOf } from './rent-trades.js';
 import { collectAptTrades } from './apt-trades.js';
 import { collectKbStats } from './kb-stats.js';
 import { buildMarketView } from './market.js';
@@ -237,6 +238,21 @@ app.post<{ Body: { age?: unknown } | null }>('/api/house-trades/fetch', async (r
 /** 시세 통계 탭: KB 지수 그래프, 지금 흐름 요약, 서울 아파트 월별 거래량, 구별 급지표(켜진 지역 근처 구 표시). */
 app.get('/api/market', async () => buildMarketView(gusFor(store.enabledAreas())));
 
+/** 시세 통계 탭 동별 전월세: 켜진 지역 근처 구의 최근 1년 신규 전월세 계약 요약. rate는 환산 월세에 쓸 전환율(연 %). */
+app.get<{ Querystring: { rate?: string } }>('/api/rent-trades', async (req) => buildRentView(gusFor(store.enabledAreas()), rateOf(req.query.rate)));
+
+/** 근처 구 전월세 실거래를 지금 받고 동별 전월세 요약을 돌려준다. */
+app.post<{ Body: { rate?: unknown } | null }>('/api/rent-trades/fetch', async (req, reply) => {
+  const gus = gusFor(store.enabledAreas());
+  try {
+    await collectRentTrades(gus);
+    return buildRentView(gus, rateOf(req.body?.rate));
+  } catch (e) {
+    reply.code(502);
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
 // 지도에 칠하는 정비사업 구역: 서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보' ZIP을 본문 그대로 받아 바꿔 둔다.
 app.addContentTypeParser(['application/zip', 'application/x-zip-compressed', 'application/octet-stream'], { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
 app.get('/api/redev-zones', async () => ({ ...redevZones(), check: zoneFileCheckState() }));
@@ -264,8 +280,9 @@ app.post<{ Querystring: { name?: string } }>('/api/redev-zones', { bodyLimit: 60
 });
 
 /**
- * 시세 통계 자료를 지금 받고 탭 자료를 돌려준다: KB 지수 모두, 고점 신호 공공 자료, 지역별 거래 건수, 서울 아파트 실거래 최근 1년과 안 받은 지난 해 모두(몇 분 걸릴 수 있다).
- * 일부만 실패하면 그 오류는 탭 자료의 kb.error, peak.sources.error, regionVolume.error, trades.error에 남고, 넷 다 실패하면 502.
+ * 시세 통계 자료를 지금 받고 탭 자료를 돌려준다: KB 지수 모두, 고점 신호 공공 자료, 지역별 거래 건수, 서울 아파트 실거래 최근 1년과 안 받은 지난 해 모두,
+ * 근처 구 전월세 실거래 최근 1년(몇 분 걸릴 수 있다). 일부만 실패하면 그 오류는 탭 자료의 kb.error, peak.sources.error, regionVolume.error,
+ * trades.error와 동별 전월세의 error에 남고, 다섯 다 실패하면 502.
  */
 app.post('/api/market/fetch', async (_req, reply) => {
   const errors: string[] = [];
@@ -274,7 +291,8 @@ app.post('/api/market/fetch', async (_req, reply) => {
   await collectPeakSources().catch(fail);
   await collectRegionVolume().catch(fail);
   await collectAptTrades(undefined, { recent: true }).catch(fail);
-  if (errors.length === 4) {
+  await collectRentTrades(gusFor(store.enabledAreas())).catch(fail);
+  if (errors.length === 5) {
     reply.code(502);
     return { error: errors.join(' / ') };
   }

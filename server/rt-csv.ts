@@ -1,6 +1,7 @@
-// 국토부 실거래가 공개시스템 자료제공(rt.molit.go.kr)에서 서울 매매 실거래를 CSV로 받는다. 단독/다가구(house-trades)와 아파트(apt-trades)가 같이 쓴다.
-// 자료제공 화면을 열어 세션 쿠키를 받고, 화면의 'CSV 다운'과 같은 조건(매매, 지번주소, 시도 서울특별시, 나머지 전체)으로
-// 건수 확인(ptXlsDownDataCheck.do)과 CSV(ptXlsCSVDown.do)를 요청한다. CSV는 EUC-KR이고, 안내 줄 다음에 "NO"로 시작하는 머리글 줄이 온다.
+// 국토부 실거래가 공개시스템 자료제공(rt.molit.go.kr)에서 서울 실거래를 CSV로 받는다. 단독/다가구 매매(house-trades), 아파트 매매(apt-trades),
+// 구별 전월세(rent-trades)가 같이 쓴다. 자료제공 화면을 열어 세션 쿠키를 받고, 화면의 'CSV 다운'과 같은 조건(지번주소, 시도 서울특별시,
+// 고른 거래 구분과 시군구, 나머지 전체)으로 건수 확인(ptXlsDownDataCheck.do)과 CSV(ptXlsCSVDown.do)를 요청한다.
+// CSV는 EUC-KR이고, 안내 줄 다음에 "NO"로 시작하는 머리글 줄이 온다.
 
 const BASE = process.env.HNW_RT_BASE ?? 'https://rt.molit.go.kr';
 const PAGE_URL = `${BASE}/pt/xls/xls.do?mobileAt=`;
@@ -8,8 +9,14 @@ const CHECK_URL = `${BASE}/pt/xls/ptXlsDownDataCheck.do`;
 const CSV_URL = `${BASE}/pt/xls/ptXlsCSVDown.do`;
 const TIMEOUT_MS = 60000;
 
-/** 자료제공 화면의 실거래 구분(srhThingNo): A 아파트, C 단독/다가구. 화면의 구분 순서(아파트, 연립/다세대, 단독/다가구)를 따른 글자. */
-export type RtThing = 'A' | 'C';
+/** 자료제공 화면의 실거래 구분(srhThingNo): A 아파트, B 연립/다세대, C 단독/다가구, D 오피스텔. */
+export type RtThing = 'A' | 'B' | 'C' | 'D';
+
+/** 받을 범위: 거래 구분(srhDelngSecd, 1 매매, 2 전월세, 없으면 매매)과 시군구(이름과 5자리 코드, 없으면 서울 전체) */
+export interface RtQuery {
+  deal?: '1' | '2';
+  sgg?: { name: string; code: string };
+}
 
 /** 요청 하나를 기록하는 함수(url, HTTP 상태, 설명) */
 export type RecordRequest = (url: string, status: number | null, note: string) => void;
@@ -55,7 +62,7 @@ export function csvHead(lines: string[]): { at: number; head: string[] } {
 }
 
 /**
- * 서울 thing 매매 중 계약일 from ~ to(YYYY-MM-DD)의 CSV 글자와 건수 확인 값(cnt, 모르면 null)을 받는다.
+ * 서울 thing 실거래(query: 거래 구분과 시군구, 없으면 서울 전체 매매) 중 계약일 from ~ to(YYYY-MM-DD)의 CSV 글자와 건수 확인 값(cnt, 모르면 null)을 받는다.
  * 화면과 건수 확인 요청은 기록하고, CSV 요청은 읽은 건수를 아는 부르는 쪽이 기록하도록 url과 상태를 돌려준다(받지 못했으면 기록하고 오류).
  * csvTimeoutMs는 CSV 한 번을 기다리는 시간(아파트 한 해치는 커서 길게 준다).
  */
@@ -65,16 +72,19 @@ export async function downloadSeoulCsv(
   to: string,
   record: RecordRequest,
   csvTimeoutMs = TIMEOUT_MS,
+  query: RtQuery = {},
 ): Promise<{ text: string; count: number | null; url: string; status: number }> {
   const page = await fetch(PAGE_URL, { signal: AbortSignal.timeout(TIMEOUT_MS) });
   record(PAGE_URL, page.status, '자료제공 화면');
   if (!page.ok) throw new Error(`자료제공 화면을 열지 못했습니다(${page.status}).`);
   const cookie = page.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  const deal = query.deal ?? '1';
   const form = new URLSearchParams({
-    srhThingNo: thing, srhDelngSecd: '1', srhAddrGbn: '1', srhLfstsSecd: '1',
-    sidoNm: '서울특별시', sggNm: '전체', emdNm: '전체', loadNm: '전체', areaNm: '전체', hsmpNm: '전체', mobileAt: '',
-    srhFromDt: from, srhToDt: to, srhNewRonSecd: '', srhSidoCd: '11000', srhSggCd: '', srhEmdCd: '',
+    srhThingNo: thing, srhDelngSecd: deal, srhAddrGbn: '1', srhLfstsSecd: '1',
+    sidoNm: '서울특별시', sggNm: query.sgg?.name ?? '전체', emdNm: '전체', loadNm: '전체', areaNm: '전체', hsmpNm: '전체', mobileAt: '',
+    srhFromDt: from, srhToDt: to, srhNewRonSecd: '', srhSidoCd: '11000', srhSggCd: query.sgg?.code ?? '', srhEmdCd: '',
     srhRoadNm: '', srhLoadCd: '', srhHsmpCd: '', srhArea: '', srhFromAmount: '', srhToAmount: '',
+    ...(deal === '2' ? { srhLrArea: '' } : {}),
   });
   const headers = { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', Cookie: cookie };
   const check = await fetch(CHECK_URL, { method: 'POST', headers, body: form, signal: AbortSignal.timeout(TIMEOUT_MS) });

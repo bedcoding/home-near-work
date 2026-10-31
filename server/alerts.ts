@@ -1,6 +1,8 @@
 import { DASHBOARD_URL } from './config.js';
 import * as store from './db.js';
 import { distanceM } from './geo.js';
+import { optionsRef } from './views.js';
+import { dealOptions, filterSummary, normalizeFilters, rangeText } from '../shared/filters.js';
 import { manwon } from '../shared/format.js';
 import {
   hasHomeListings, listingSection, noticeSourcesOf, NOTICE_SHORT, SOURCE_LABEL,
@@ -10,6 +12,7 @@ import {
 
 /** 처음 알림 설정 */
 export const DEFAULT_ALERTS: AlertSettings = {
+  homeFilter: null,
   monthly: { on: true, monthlyMax: 50, depositMax: null },
   jeonse: { on: false, depositMax: null },
   short: { on: false, monthlyMax: null },
@@ -52,6 +55,7 @@ export function normalizeAlerts(input: unknown, base: AlertSettings = DEFAULT_AL
   };
   const [m, j, s, sa, r, a, sh, la, ap] = ['monthly', 'jeonse', 'short', 'sale', 'rooms', 'auction', 'shopAuction', 'landAuction', 'aptAuction'].map(sub);
   return {
+    homeFilter: o.homeFilter === undefined ? base.homeFilter : o.homeFilter === null ? null : normalizeFilters(o.homeFilter),
     monthly: { on: flag(m.on, base.monthly.on), monthlyMax: amount(m.monthlyMax, base.monthly.monthlyMax), depositMax: amount(m.depositMax, base.monthly.depositMax) },
     jeonse: { on: flag(j.on, base.jeonse.on), depositMax: amount(j.depositMax, base.jeonse.depositMax) },
     short: { on: flag(s.on, base.short.on), monthlyMax: amount(s.monthlyMax, base.short.monthlyMax) },
@@ -134,13 +138,14 @@ const upTo = (max: number | null) => (max == null ? '' : ` ${manwon(max)} 이하
 /** 설정의 면적(㎡)을 평으로('10평', 소수 한 자리) */
 const pyeongText = (m2: number) => `${Math.round((m2 / 3.3058) * 10) / 10}평`;
 
-/** 알림 줄 이름: '월세 50만 이하', '전세 2억 이하', '임대 공고' */
+/** 알림 줄 이름: '월세 50만 이하', '전세 2억 이하', '임대 공고'. 매물 탭 필터가 있으면 거래 유형 줄의 상한은 필터 값이다. */
 export function rowLabel(row: AlertRow, s: AlertSettings): string {
+  const f = s.homeFilter;
   switch (row) {
-    case 'monthly': return `월세${upTo(s.monthly.monthlyMax)}`;
-    case 'jeonse': return `전세${upTo(s.jeonse.depositMax)}`;
-    case 'short': return `단기${upTo(s.short.monthlyMax)}`;
-    case 'sale': return `매매${upTo(s.sale.priceMax)}`;
+    case 'monthly': return `월세${upTo(f ? f.monthlyMax : s.monthly.monthlyMax)}`;
+    case 'jeonse': return `전세${upTo(f ? f.depositMax : s.jeonse.depositMax)}`;
+    case 'short': return `단기${upTo(f ? f.monthlyMax : s.short.monthlyMax)}`;
+    case 'sale': return `매매${upTo(f ? f.priceMax : s.sale.priceMax)}`;
     case 'rooms': return `고시원과 쉐어${upTo(s.rooms.monthlyMax)}`;
     case 'auction': return `경매${upTo(s.auction.priceMax)}`;
     case 'aptAuction': return `서울 아파트 경매${upTo(s.aptAuction.priceMax)}`;
@@ -193,11 +198,28 @@ function matchingRows(l: NormalizedListing, s: AlertSettings, areas: Area[], apt
   return rows;
 }
 
-/** 켜진 지역 기준 매물 알림 줄(지역 반경 안만이면 반경 밖 매물은 없음) */
+/** 매물 탭 필터로 고르는 거래 유형 줄(줄 이름과 거래 유형 이름이 같다) */
+const HOME_DEALS = ['monthly', 'jeonse', 'short', 'sale'] as const;
+
+/** 매물 탭 필터의 무옵션만에 쓰는 옵션 정보(저장된 원본에서 읽음) */
+function optionsOf(l: NormalizedListing) {
+  return optionsRef(l.source, store.listingRaw(`${l.source}:${l.sourceId}`)?.raw ?? null, l.title ?? '');
+}
+
+/**
+ * 켜진 지역 기준 매물 알림 줄. 매매와 전월세 매물은 매물 탭 필터가 있으면 거래 유형마다 매물 탭에 보일 매물만 맞고
+ * (필터의 금액, 평, 매물 유형, 층, 무옵션, 지역 조건), 없으면 거래 유형 줄의 상한으로 본다.
+ * 그 밖의 매물과 필터가 없을 때는 지역 반경 안만이면 반경 밖 매물은 없다.
+ */
 function nearRows(l: NormalizedListing, s: AlertSettings, areas: Area[]): AlertRow[] {
+  const section = listingSection(l);
+  const f = s.homeFilter;
+  if (section === 'home' && f) {
+    const target = { ...l, options: f.noOptionsOnly ? optionsOf(l) : null };
+    return HOME_DEALS.filter((deal) => s[deal].on && dealOptions(target, deal, f, areas).length > 0);
+  }
   if (s.insideAreas && !insideRadius(areas, l)) return [];
   const has = (deal: DealType, ok: (p: PriceOption) => boolean) => l.prices.some((p) => p.deal === deal && ok(p));
-  const section = listingSection(l);
   if (section === 'auction') {
     return s.auction.on && (s.auction.priceMax == null || l.prices.some((p) => under(p.price, s.auction.priceMax))) ? ['auction'] : [];
   }
@@ -289,7 +311,11 @@ export function buildAlerts(input: {
     if (!n.changed) for (const row of rows) count(row, item);
   }
   if (s.failures) {
-    for (const src of input.sources) if (src.status !== 'ok') groups[sourcePurpose(src.source)].failed.push(SOURCE_LABEL[src.source]);
+    for (const src of input.sources) {
+      if (src.status === 'ok') continue;
+      const part = src.error?.startsWith('일부를 보지 못함') ? '(일부)' : '';
+      groups[sourcePurpose(src.source)].failed.push(`${SOURCE_LABEL[src.source]}${part}`);
+    }
   }
 
   const alerts: Alert[] = [];
@@ -303,13 +329,19 @@ export function buildAlerts(input: {
         : parts.map((p) => `${p.label} ${p.items.length}건${p.row === 'rentNotices' && g.near.length ? `(근처 ${g.near.length})` : ''}`).join(', ')
       : g.changed.length
         ? `가격 변동 ${g.changed.length}건`
-        : '수집 실패';
+        : `수집 실패 ${g.failed.length}곳`;
+    const f = s.homeFilter;
+    // 거래 유형 줄이 있으면 매물 탭 필터의 나머지 조건(제목에 없는 보증금 범위와 평, 유형 등)을 한 줄로
+    const conditions = f && parts.some((p) => DEAL_ROWS.includes(p.row))
+      ? [parts.some((p) => p.row === 'monthly') ? rangeText('보증금', f.depositMin, f.depositMax, manwon) : null, ...filterSummary(f, input.areas, false)].filter(Boolean)
+      : [];
     const lines = [
       g.near.length ? `근처 공고: ${g.near.map((t) => (t.length > 30 ? `${t.slice(0, 30)}…` : t)).join(', ')}` : '',
       countText(g.newSites),
+      conditions.length ? `조건: ${conditions.join(', ')}` : '',
       countText(g.noticeSources),
       g.changed.length ? (parts.length ? `가격 변동 ${g.changed.length}` : countText(g.changedSites)) : '',
-      g.failed.length ? `실패: ${g.failed.join(', ')}` : '',
+      g.failed.length ? `실패 ${g.failed.length}곳: ${g.failed.join(', ')}` : '',
     ].filter(Boolean);
     alerts.push({
       title: purpose === 'buy' ? `매매 목적: ${head}` : head,

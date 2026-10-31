@@ -1170,7 +1170,7 @@ const emptyText: Partial<Record<Tab, string>> = {
       />
       <AreaSettings v-else-if="tab === 'areas' && state" :areas="state.areas" :restore="state.areaRestore" @changed="refreshState" />
       <AlertsTab
-        v-else-if="tab === 'alerts' && state" :settings="state.alerts" :visible="visibleMode" :auto-time="state.autoCheck.time" :auto-day="state.autoCheck.day" :notice-time="state.autoCheck.noticeTime"
+        v-else-if="tab === 'alerts' && state" :settings="state.alerts" :areas="state.areas" :visible="visibleMode" :auto-time="state.autoCheck.time" :auto-day="state.autoCheck.day" :notice-time="state.autoCheck.noticeTime"
         :auto-times="autoTimes" :running="!!running" :rest-seconds="state.restSeconds" @changed="refreshState" @visible="(v) => (visibleMode = v)"
         @auto-time="(time) => setAutoCheck({ time })" @auto-day="(day) => setAutoCheck({ day })" @notice-time="(noticeTime) => setAutoCheck({ noticeTime })"
       />

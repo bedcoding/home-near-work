@@ -4,12 +4,13 @@ import type { MarketLine, MarketStation, MarketTier, MarketView, PeakSeries } fr
 import { manwon } from '../../../shared/format';
 import { changeOf, LINE_COLORS, MARKET_CHECKED, MARKET_LINKS, MARKET_NOTES, pct, STAT_TIPS, TIER_NAMES } from '../market';
 import CountTooltip from './CountTooltip.vue';
+import RentByDong from './RentByDong.vue';
 import TimeChart, { type ChartSeries } from './TimeChart.vue';
 
 // 시세 통계 탭: 지금 서울 아파트가 오르는지 내리는지(KB 주간 지수, 매수우위지수, 실거래 거래량, 서울과 전국 1년 변동),
 // KB 월간 매매가격지수 그래프(고른 기간 첫 달을 100으로 맞춤, 전국, 서울, 권역, 구), 매수우위지수 그래프(100 점선),
 // 서울 아파트 월별 거래량(구 고르기, 신고 기한 안 달은 흐리게, 12달 평균 선), 구별 급지표(누르면 동별)와 읽는 법,
-// 고점 신호(신호등과 가격 국면, 지표마다 그래프), 해마다 오른 비율. 통계 이름에 올리면 뜻을 바로 띄운다(CountTooltip).
+// 고점 신호(신호등과 가격 국면, 지표마다 그래프), 해마다 오른 비율, 근처 구 동별 전월세(RentByDong). 통계 이름에 올리면 뜻을 바로 띄운다(CountTooltip).
 // 고른 기간, 켠 선, 거래량 구는 이 브라우저에 기억한다.
 
 const props = defineProps<{
@@ -648,7 +649,7 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
       </span>
       <button
         class="btn run" :disabled="fetching || running"
-        title="KB 통계, 공공 자료(기준금리, 청약, 입주예정, 준공, 미분양), 국토부 실거래(서울 아파트 최근 1년, 아직 안 받은 지난 해)를 지금 받습니다. 처음에는 해마다 받아 몇 분 걸릴 수 있습니다."
+        title="KB 통계, 공공 자료(기준금리, 청약, 입주예정, 준공, 미분양), 국토부 실거래(서울 아파트 최근 1년, 아직 안 받은 지난 해, 근처 구 전월세 최근 1년)를 지금 받습니다. 처음에는 해마다 받아 몇 분 걸릴 수 있습니다."
         @click="emit('fetch')"
       >{{ fetching ? '받는 중…' : '지금 받기' }}</button>
     </div>
@@ -965,6 +966,7 @@ const countFormat = (v: number) => Math.round(v).toLocaleString('ko-KR');
         <p v-else class="muted note">실거래를 아직 안 받았습니다.</p>
       </section>
     </template>
+    <RentByDong v-if="view" :refresh-key="view" />
 
     <details class="fold notes">
       <summary><span class="fold-name">읽는 법과 근거</span><span class="muted fold-count">{{ dot(MARKET_CHECKED) }} 확인</span></summary>
