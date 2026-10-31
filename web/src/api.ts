@@ -1,4 +1,5 @@
-import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, LineViewSetting, RedevZonesView, RunDetail, RunInfo, RunScope, SiteReport, SourceId, Station, Verdict } from '../../shared/types';
+import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, LineViewSetting, RedevZonesView, RentView, RunDetail, RunInfo, RunScope, SiteReport, SourceId, Station, Verdict } from '../../shared/types';
+import type { Filters } from '../../shared/filters';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -29,6 +30,8 @@ export const api = {
   setAutoCheck: (body: { time?: string | null; day?: number | null; visible?: boolean; noticeTime?: string | null }) => request<AutoCheckState>('PUT', '/api/auto-check', body),
   /** 조회가 끝나면 띄울 알림 설정을 바꾼다(준 값만). 바뀐 전체 설정을 돌려준다. */
   setAlerts: (body: Partial<AlertSettings>) => request<AlertSettings>('PUT', '/api/alerts', body),
+  /** 매물 알림이 쓸 매물 탭 필터를 알린다. */
+  setAlertFilter: (filter: Filters) => request<AlertSettings>('PUT', '/api/alerts', { homeFilter: filter }),
   /** 노선 탭 '이 노선 조회하기': 노선 역(반경 radiusM)만 매물 사이트로 조회한다. */
   startLineRun: (visible: boolean, line: string, radiusM: number) => request<{ runId: number }>('POST', '/api/runs/line', { visible, line, radiusM }),
   /** 노선 탭에서 고른 노선과 역 반경(line null이면 고르지 않음) */
@@ -61,6 +64,10 @@ export const api = {
   market: () => request<MarketView>('GET', '/api/market'),
   /** 시세 통계 자료를 지금 받고 탭 자료를 돌려준다(처음에는 몇 분 걸릴 수 있다) */
   fetchMarket: () => request<MarketView>('POST', '/api/market/fetch'),
+  /** 동별 전월세: 근처 구의 최근 1년 신규 전월세 계약 요약(rate는 환산 전환율, 연 %) */
+  rentTrades: (rate: number) => request<RentView>('GET', `/api/rent-trades?rate=${rate}`),
+  /** 근처 구 전월세 실거래를 지금 받고 동별 전월세 요약을 돌려준다 */
+  fetchRentTrades: (rate: number) => request<RentView>('POST', '/api/rent-trades/fetch', { rate }),
   /** 지도에 칠하는 정비사업 구역(넣어 둔 서울플랜+ 파일) */
   redevZones: () => request<RedevZonesView>('GET', '/api/redev-zones'),
   /** 열린데이터광장 최신판을 보고 새것이면 받아 바꾼다(message는 결과 글) */

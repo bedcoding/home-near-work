@@ -353,6 +353,27 @@ CREATE TABLE IF NOT EXISTS house_trades (
 CREATE INDEX IF NOT EXISTS house_trades_date ON house_trades (contract_date);
 `);
 
+// 국토부 실거래가 전월세(거래 하나에 한 줄, 켜 둔 지역 근처 구만). key는 구, 동, 종류, 번지, 이름, 면적, 계약일, 보증금, 월세, 층, 계약 구분을
+// 잇고 뒤에 같은 줄의 순번('#1', '#2')을 붙인 것. kind는 아파트, 연립다세대, 단독다가구, 오피스텔.
+// area_m2는 전용면적(단독다가구는 계약면적), contract_date YYYY-MM-DD, deposit과 rent는 만원(전세는 rent 0), contract_type은 신규나 갱신(모르면 null).
+db.exec(`
+CREATE TABLE IF NOT EXISTS rent_trades (
+  key TEXT PRIMARY KEY,
+  gu TEXT NOT NULL,
+  dong TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT,
+  area_m2 REAL NOT NULL,
+  contract_date TEXT NOT NULL,
+  deposit INTEGER NOT NULL,
+  rent INTEGER NOT NULL,
+  contract_type TEXT,
+  built_year INTEGER,
+  floor INTEGER
+);
+CREATE INDEX IF NOT EXISTS rent_trades_gu_date ON rent_trades (gu, contract_date);
+`);
+
 // 서울 아파트 탭에서 직접 넣은 단지 세대수. key는 AptInfo.complexKey('lot:강남구 대치동 316', 'nv:1234'), name은 넣을 때 보인 단지 이름이나 주소.
 // apt_registry는 건축물대장에서 읽은 단지 정보(경매와 공매 지번 키 'lot:…'마다, 칸은 shared/types AptRegistry와 같음).
 db.exec(`
@@ -1311,6 +1332,68 @@ export function houseTradeRows(from: string): HouseTradeRow[] {
        FROM house_trades WHERE contract_date >= ? AND canceled_at IS NULL AND house_type = '단독'`,
     )
     .all(from) as HouseTradeRow[];
+}
+
+// ---------- 국토부 실거래가 전월세 ----------
+
+/** 전월세 실거래 한 건(저장용). 금액은 만원(전세는 rent 0), 면적은 ㎡, 날짜는 YYYY-MM-DD. */
+export interface RentTradeInput {
+  key: string;
+  gu: string;
+  dong: string;
+  kind: string;
+  name: string | null;
+  areaM2: number;
+  contractDate: string;
+  deposit: number;
+  rent: number;
+  contractType: string | null;
+  builtYear: number | null;
+  floor: number | null;
+}
+
+/** gu의 kind 전월세 중 계약일 from ~ to(YYYY-MM-DD) 범위를 rows로 통째로 바꾼다. 같은 key가 여러 줄이면 key 뒤에 '#순번'을 붙인다. */
+export function replaceRentTrades(gu: string, kind: string, from: string, to: string, rows: RentTradeInput[]) {
+  const insert = db.prepare(
+    `INSERT INTO rent_trades (key, gu, dong, kind, name, area_m2, contract_date, deposit, rent, contract_type, built_year, floor)
+     VALUES (@key, @gu, @dong, @kind, @name, @areaM2, @contractDate, @deposit, @rent, @contractType, @builtYear, @floor)`,
+  );
+  db.transaction(() => {
+    db.prepare('DELETE FROM rent_trades WHERE gu = ? AND kind = ? AND contract_date BETWEEN ? AND ?').run(gu, kind, from, to);
+    const seen = new Map<string, number>();
+    for (const r of rows) {
+      const n = (seen.get(r.key) ?? 0) + 1;
+      seen.set(r.key, n);
+      insert.run({ ...r, key: `${r.key}#${n}` });
+    }
+  })();
+}
+
+export interface RentTradeRow {
+  gu: string;
+  dong: string;
+  kind: string;
+  area_m2: number;
+  contract_date: string;
+  deposit: number;
+  rent: number;
+  contract_type: string | null;
+}
+
+/** 계약일이 from(YYYY-MM-DD) 이후인 gus 구의 전월세 실거래 */
+export function rentTradeRows(from: string, gus: string[]): RentTradeRow[] {
+  if (!gus.length) return [];
+  return db
+    .prepare(
+      `SELECT gu, dong, kind, area_m2, contract_date, deposit, rent, contract_type
+       FROM rent_trades WHERE contract_date >= ? AND gu IN (${gus.map(() => '?').join(', ')})`,
+    )
+    .all(from, ...gus) as RentTradeRow[];
+}
+
+/** 전월세 실거래가 한 건이라도 있는 구들 */
+export function rentTradeGus(): string[] {
+  return (db.prepare('SELECT DISTINCT gu FROM rent_trades').all() as { gu: string }[]).map((r) => r.gu);
 }
 
 // ---------- 시세 통계: 국토부 실거래가 아파트 매매, KB 통계 시계열 ----------

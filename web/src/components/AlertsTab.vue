@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { REST_CHOICES, type AlertSettings } from '../../../shared/types';
+import { computed, ref } from 'vue';
+import { REST_CHOICES, type AlertSettings, type Area } from '../../../shared/types';
+import { filterSummary, rangeText } from '../../../shared/filters';
 import { manwon } from '../../../shared/format';
 import { api } from '../api';
 import { profile } from '../profile';
@@ -9,8 +10,11 @@ import { LOAN_RATE, LOAN_RATIO } from '../rentRate';
 
 // 설정 탭: 조회 방식(창 띄우기, 자동 확인 요일과 시각)과 조회가 끝나면 띄울 알림. 바꾸면 바로 저장한다. 금액은 만원, 빈칸은 제한 없음.
 // 전월세 줄과 매매 목적 줄은 알림이 따로 뜬다. 조회 방식은 App이 저장한다(visible, autoTime, autoDay 이벤트).
+// 월세, 전세, 단기, 매매 줄은 서버가 매물 탭 필터를 받았으면(settings.homeFilter) 켜기만 고르고 조건은 그 필터를 보여 준다.
 const props = defineProps<{
   settings: AlertSettings;
+  /** 지역 전체(필터에서 고른 지역 이름을 찾는 데 씀) */
+  areas: Area[];
   /** 브라우저 창 띄워서 보면서 조회 */
   visible: boolean;
   /** 자동 확인 시각('HH:MM', 끔이면 null)과 고를 수 있는 시각 */
@@ -77,7 +81,7 @@ const FLAGS: { key: Flag; name: string; group: Group; title?: string }[] = [
   { key: 'landNotices', name: '토지 공고', group: 'buy', title: 'LH 토지 공고와 선착순 토지 중 켜 둔 지역 근처 구의 것만 셉니다(구를 모르면 셈)' },
   { key: 'priceChanges', name: '가격 변동', group: 'common', title: '바뀐 가격이 위에서 켠 조건에 맞는 매물만 셉니다' },
   { key: 'failures', name: '수집 실패', group: 'common' },
-  { key: 'insideAreas', name: '매물은 지역 반경 안만', group: 'common' },
+  { key: 'insideAreas', name: '경매와 고시원은 반경 안만', group: 'common', title: '경매, 고시원과 쉐어는 켜 둔 지역 반경 안만 셉니다. 월세, 전세, 단기, 매매는 매물 탭 필터의 지역 조건을 씁니다' },
   {
     key: 'captureSites', name: '직접 보는 사이트', group: 'common',
     title: '바탕 화면 아이콘이나 한 번에 열기로 연 사이트에서 다방 새 방(위 매물 조건에 맞는 것), 직방 새 방, KB와 네이버의 늘어난 매물 수를 알림 하나로 띄웁니다',
@@ -89,6 +93,29 @@ const GROUPS: { id: Group; name: string; title: string }[] = [
   { id: 'buy', name: '매매 목적', title: '여기 줄은 따로 알림 하나로 띄웁니다' },
   { id: 'common', name: '공통', title: '두 알림 모두에 씁니다' },
 ];
+
+/** 매물 탭 필터로 고르는 줄 */
+const HOME_ROWS: AmountRow[] = ['monthly', 'jeonse', 'short', 'sale'];
+const byFilter = (row: AmountRow) => !!props.settings.homeFilter && HOME_ROWS.includes(row);
+
+/** 매물 조건 줄에 보일 필터 조건(금액 칸은 줄마다 따로 보임) */
+const filterText = computed(() => {
+  const f = props.settings.homeFilter;
+  if (!f) return '아직 못 받음';
+  return filterSummary(f, props.areas, false).join(', ') || '금액 말고는 조건 없음';
+});
+
+/** 거래 유형 줄에 보일 필터 금액 조건 */
+function filterAmountText(row: AmountRow): string {
+  const f = props.settings.homeFilter!;
+  const parts =
+    row === 'jeonse'
+      ? [rangeText('전세금', f.depositMin, f.depositMax, manwon)]
+      : row === 'sale'
+        ? [rangeText('매매가', f.priceMin, f.priceMax, manwon)]
+        : [rangeText('보증금', f.depositMin, f.depositMax, manwon), rangeText('월세', f.monthlyMin, f.monthlyMax, manwon)];
+  return parts.filter(Boolean).join(', ') || '금액 제한 없음';
+}
 
 const amountOf = (row: AmountRow, key: string) => (props.settings[row] as unknown as Record<string, number | null>)[key];
 /** 1억 이상이면 읽기 쉬운 금액('2억 5,000만') */
@@ -216,12 +243,20 @@ async function toggleFlag(key: Flag, event: Event) {
     <div v-for="g in GROUPS" :key="g.id" class="group">
       <h3 :title="g.title">{{ g.name }} 알림</h3>
       <ul class="list">
+        <li
+          v-if="g.id === 'rent'" class="row"
+          title="월세, 전세, 단기, 매매 알림은 매물 탭 왼쪽 필터와 같은 조건(금액, 평, 매물 유형, 층, 무옵션, 지역)으로 셉니다. 필터를 바꾸면 알림 조건도 같이 바뀝니다. 거래 유형은 아래 줄 켜기로 고릅니다."
+        >
+          <strong class="name">매물 조건</strong>
+          <span class="muted filter-text">매물 탭 필터: {{ filterText }}</span>
+        </li>
         <li v-for="r in AMOUNT_ROWS.filter((x) => x.group === g.id)" :key="r.row" class="row" :class="{ off: !settings[r.row].on }" :title="r.title">
           <label class="check toggle">
             <input type="checkbox" :checked="settings[r.row].on" @change="toggleRow(r.row, $event)" />
             <strong>{{ r.name }}</strong>
           </label>
-          <span class="fields">
+          <span v-if="byFilter(r.row)" class="muted filter-text" title="매물 탭 필터의 금액입니다. 필터에서 바꿉니다">{{ filterAmountText(r.row) }}</span>
+          <span v-else class="fields">
             <label v-for="f in r.fields" :key="f.key" class="field">
               {{ f.label }}
               <input
@@ -307,5 +342,6 @@ p { margin: 0; }
 .time { min-height: 40px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); font-size: 15px; font-weight: 600; }
 .field input { width: 110px; min-height: 36px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); font-size: 15px; font-weight: 600; }
 .hint { font-size: 13px; }
+.filter-text { font-size: 14px; overflow-wrap: anywhere; }
 @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
 </style>

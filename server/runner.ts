@@ -9,6 +9,7 @@ import { collectCourtClaims } from './court-claims.js';
 import { collectCourtResults, courtResultsDue } from './court-results.js';
 import * as store from './db.js';
 import { collectHouseTrades, HOUSE_TRADES_SOURCE, houseTradesDue } from './house-trades.js';
+import { collectRentTrades, RENT_TRADES_SOURCE, rentTradesDue } from './rent-trades.js';
 import { APT_TRADES_SOURCE, aptRecentDue, aptTradesDue, collectAptTrades } from './apt-trades.js';
 import { collectKbStats, KB_SOURCE, kbStatsDue } from './kb-stats.js';
 import { collectPeakSources, PEAK_SOURCE, peakSourcesDue } from './peak-sources.js';
@@ -491,6 +492,15 @@ async function execute(
         log(`${APT_TRADES_SOURCE}: ${await collectAptTrades(record, fullData ? { maxYears: 2 } : { recent: true, maxYears: 0 })}`);
       } catch (e) {
         log(`${APT_TRADES_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      }
+    }
+    // 동별 전월세: 켜 둔 지역 근처 구의 전월세 실거래 최근 1년은 받은 지 7일이 지났거나 아직 안 받은 근처 구가 있으면 받는다(전부 도는 조회만).
+    if (!state.stopping && fullData && rentTradesDue(gusFor(areas))) {
+      try {
+        const record = (url: string, status: number | null, note: string) => store.addRequest(runId, RENT_TRADES_SOURCE, 'data', url, status, note);
+        log(`${RENT_TRADES_SOURCE}: ${await collectRentTrades(gusFor(areas), record)}`);
+      } catch (e) {
+        log(`${RENT_TRADES_SOURCE} 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
     // 정비구역 지도 파일(서울플랜+)의 새 판: 마지막 확인에서 7일(실패했으면 하루)이 지났으면 조회용 브라우저로 본다(경매 범위도).
