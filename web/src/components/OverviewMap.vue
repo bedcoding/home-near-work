@@ -5,6 +5,7 @@ import { SOURCE_LABEL, type Area, type DealType, type ListingView, type PriceOpt
 import { loadCatalog, type CatalogStation } from '../areaActions';
 import { auctionSiteLinks, isAuction } from '../auction';
 import { KIND_LABEL, kindOf } from '../kinds';
+import { ledgerChips } from '../ledger';
 import { isRoomStay, roomRange, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
 import { manwon, perPyeong, priceText, pyeong } from '../format';
@@ -175,6 +176,11 @@ function popup(g: Group) {
     if (l.isNew) top.appendChild(line('mp-tag new', '신규'));
     if (l.priceChange) top.appendChild(line('mp-tag down', '가격 변동'));
     if (l.verdict === 'star') top.appendChild(line('mp-tag star', '관심'));
+    for (const c of ledgerChips(l)) {
+      const tag = line(`mp-tag ${c.tone}`, c.label);
+      tag.title = c.tip;
+      top.appendChild(tag);
+    }
     const per = perPyeong(l);
     const facts = document.createElement('div');
     facts.className = 'mp-facts';
@@ -684,6 +690,8 @@ onBeforeUnmount(() => {
 :deep(.mp-tag.new) { background: var(--new-soft); color: var(--new); }
 :deep(.mp-tag.down) { background: var(--down-soft); color: var(--down); }
 :deep(.mp-tag.star) { background: var(--star-soft); color: var(--star); }
+:deep(.mp-tag.danger) { background: #c92a2a; color: #fff; cursor: help; }
+:deep(.mp-tag.warn) { background: #fff4d6; color: #8a5a00; cursor: help; }
 :deep(.mp-actions) { display: flex; flex-wrap: wrap; gap: 6px; }
 :deep(.mp-actions button), :deep(.mp-actions a) {
   min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font: 600 13px var(--font); cursor: pointer;

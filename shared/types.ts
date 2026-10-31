@@ -487,6 +487,19 @@ export interface ListingView extends NormalizedListing {
   trade: TradeRef | null;
   /** 사는 매물(매매, 경매, 공매)의 좌표가 정비사업 구역(서울플랜+ 파일) 안이면 그 구역들과 파일의 작성일. 아니면 null. */
   redev: { hits: RedevHit[]; fileDate: string | null } | null;
+  /** 건축물대장에 걸리는 표시(근린생활시설 용도, 위반건축물). 둘 다 못 찾았으면 null. */
+  ledger: { neigh: LedgerHit | null; violation: LedgerHit | null } | null;
+}
+
+/**
+ * 건축물대장 표시 하나. from은 찾은 곳('법원 물건 비고', '네이버 소개 글' 등), text는 그 원문 글(찾은 곳 근처, 길면 앞뒤를 줄임).
+ * level: sure 건축물대장 용도나 법원 비고로 확인(근생은 건물 용도에 주택이 없음), mixed 건물 용도에 근린생활시설과 주택이 함께 있음(그 방이 어느 쪽인지 모름),
+ * said 제목이나 소개 글에 적힘(위반건축물은 sure와 said만 씀).
+ */
+export interface LedgerHit {
+  level: 'sure' | 'mixed' | 'said';
+  from: string;
+  text: string;
 }
 
 /**

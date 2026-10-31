@@ -5,9 +5,10 @@ import { parseLot, pnuOf } from './lots.js';
 import { zonesAt } from './redev-zones.js';
 import { compareTrades, type TradeMatch } from './trade-compare.js';
 import { manwon } from '../shared/format.js';
+import { kindOf } from '../shared/kinds.js';
 import {
   isApartmentType, isDetachedHouseType, listingSection, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seniorInRemarks, seoulGuOf, type AptInfo, type AptRegistry, type AuctionResultSummary,
-  type AuctionResultView, type AuctionSummaryKind, type CourtClaims, type LandZoneCheck, type ListingView, type NormalizedListing, type NoticeFacts, type NoticeView, type PlotZone,
+  type AuctionResultView, type AuctionSummaryKind, type CourtClaims, type LandZoneCheck, type LedgerHit, type ListingView, type NormalizedListing, type NoticeFacts, type NoticeView, type PlotZone,
   type PriceChangeType, type PriceOption, type RatioStats, type SourceId, type TradeRef, type TrustDocRound, type TrustDocView,
 } from '../shared/types.js';
 
@@ -21,6 +22,7 @@ type CourtRow = {
   yuchalCnt?: unknown;
   mulBigo?: unknown;
   convAddr?: unknown;
+  pjbBuldList?: unknown;
   hjguSigu?: unknown;
   hjguDong?: unknown;
 } | null | undefined;
@@ -291,6 +293,101 @@ export function optionsRef(source: string, raw: unknown, title: string): Listing
   return saysFull || saysNone ? { list: saysNone ? [] : null, full: saysFull } : null;
 }
 
+/** 근린생활시설 글자. 근린공원, 최근생, 인근생활, 부근생, 접근생 같은 낱말은 걸리지 않는다. */
+const NEIGH_WORD = /근린\s*생활\s*시설|(?<![최부인접측직])근생(?!활)/g;
+/** 위반건축물이나 허가 없이 고친 건축 글자 */
+const VIOLATION_WORD = /위반\s*건축물|위법\s*건축물|불법\s*(?:건축물|건물|증축|개축|개조|용도\s*변경)|무단\s*(?:증축|용도\s*변경)/g;
+/** 주택 용도 글자(근린생활시설과 함께 있으면 섞인 건물로 본다) */
+const HOME_USE = /주택|다가구|다세대|다중|연립|아파트|기숙사|오피스텔/;
+/** 찾은 낱말 바로 뒤에 오면 아니라는 뜻('근생 아님', '위반건축물 없음', '근생X') */
+const NOT_AFTER = /^\s*(?:건물\s*|표시\s*)?(?:아님|아닌|아니|없음|없는|없고|해당\s*없|해제|[xX×](?![a-zA-Z]))/;
+/** 찾은 낱말 앞뒤 15자 안에 있으면 지금 용도가 아니라 바꾸거나 쓸 수 있다는 권유로 본다('용도변경 후 근린생활시설로 사용 추천', '근생 주택 사옥 등 다목적 활용') */
+const SUGGEST = /용도\s*변경|전환|추천|활용/;
+const LEVEL_RANK: Record<LedgerHit['level'], number> = { sure: 3, mixed: 2, said: 1 };
+const stronger = (a: LedgerHit | null, b: LedgerHit | null) => (!a ? b : !b ? a : LEVEL_RANK[b.level] > LEVEL_RANK[a.level] ? b : a);
+
+/**
+ * text에서 re(전역 정규식)에 걸린 곳 중 아니라는 뜻이 아닌 첫 곳(suggest면 권유도 뺌). 없으면 null.
+ * near: 그 근처 글자(앞 30자, 뒤 50자, 잘랐으면 '…'), before와 after: 바로 앞 20자와 뒤 15자.
+ */
+function findWord(text: string, re: RegExp, suggest = false): { near: string; before: string; after: string } | null {
+  for (const m of text.matchAll(re)) {
+    const at = m.index ?? 0;
+    const end = at + m[0].length;
+    const after = text.slice(end, end + 15);
+    if (NOT_AFTER.test(after)) continue;
+    if (suggest && SUGGEST.test(text.slice(Math.max(0, at - 15), end + 15))) continue;
+    const from = Math.max(0, at - 30);
+    const to = Math.min(text.length, end + 50);
+    const near = `${from > 0 ? '…' : ''}${text.slice(from, to).replace(/\s+/g, ' ').trim()}${to < text.length ? '…' : ''}`;
+    return { near, before: text.slice(Math.max(0, at - 20), at), after };
+  }
+  return null;
+}
+
+type NaverDetail = { articleDetail?: { articleFeatureDescription?: unknown } } | null | undefined;
+
+/**
+ * 건축물대장에 걸리는 표시(근린생활시설 용도, 위반건축물). 둘 다 못 찾았으면 null.
+ * 집토스: 건물 정보의 주용도와 기타용도(건축물대장 값). 근린생활시설만 있으면 sure, 주택 용도도 있으면 mixed.
+ * 주용도가 근린생활시설이 아니고 오피스텔이나 아파트 건물(건물 종류나 매물 유형)이면 상가 층이 딸린 건물이라 보지 않는다.
+ * 법원경매: 물건 비고(공부상 근린생활시설이면 sure, 주택과 같이 적혔으면 mixed, 위반건축물은 '여부'나 '유무'가 아니면 sure)와
+ * 목록 글자(건물 용도, 주택과 섞이면 mixed). 그 밖: 제목과 네이버 소개 글에 적혔으면 said.
+ * 근생은 상가와 토지(경매 상가 칸, 땅만 파는 물건)에는 붙이지 않는다.
+ */
+export function ledgerRef(source: string, l: NormalizedListing, raw: unknown): ListingView['ledger'] {
+  let neigh: LedgerHit | null = null;
+  let violation: LedgerHit | null = null;
+  const kind = kindOf(l);
+  if (source === 'ziptoss') {
+    const b = (raw as { building?: { mainPurpose?: unknown; subPurpose?: unknown; type?: unknown } } | null)?.building;
+    const main = typeof b?.mainPurpose === 'string' ? b.mainPurpose.trim() : '';
+    const sub = typeof b?.subPurpose === 'string' ? b.subPurpose.trim() : '';
+    const uses = `${main} ${sub}`;
+    // 주용도가 오피스텔이나 아파트이고 근린생활시설은 딸린 용도이면 그 집은 오피스텔이나 아파트 호실이라 보지 않는다.
+    const mainNeigh = /^\s*(?:제\s*\d\s*종\s*)?근린\s*생활\s*시설/.test(main);
+    const flat = !mainNeigh && (/오피스텔|아파트/.test(String(b?.type ?? '')) || kind === 'officetel' || kind === 'apt') && /오피스텔|아파트/.test(uses);
+    if (!flat && findWord(uses, NEIGH_WORD)) {
+      neigh = {
+        level: HOME_USE.test(uses) ? 'mixed' : 'sure',
+        from: '집토스 건물 정보(건축물대장 용도)',
+        text: `주용도 ${main || '모름'}${sub ? `, 기타용도 ${sub}` : ''}`,
+      };
+    }
+  } else if (source === 'courtauction') {
+    const rows = (Array.isArray(raw) ? raw : [raw]) as CourtRow[];
+    const joined = (pick: (r: NonNullable<CourtRow>) => unknown) => [...new Set(rows.map((r) => (r ? String(pick(r) ?? '') : '')).filter(Boolean))].join(' ');
+    const remark = joined((r) => r.mulBigo);
+    const lots = joined((r) => r.pjbBuldList ?? r.convAddr);
+    const inRemark = findWord(remark, NEIGH_WORD);
+    if (inRemark) {
+      const level = HOME_USE.test(inRemark.near) ? 'mixed' : /공부상/.test(inRemark.before) ? 'sure' : 'said';
+      neigh = { level, from: '법원 물건 비고', text: inRemark.near };
+    }
+    const inLots = findWord(lots, NEIGH_WORD);
+    if (inLots) neigh = stronger(neigh, { level: HOME_USE.test(lots) ? 'mixed' : 'sure', from: '법원 목록(건물 용도)', text: inLots.near });
+    const bad = findWord(remark, VIOLATION_WORD);
+    if (bad) violation = { level: /^\s*(?:여부|유무)/.test(bad.after) ? 'said' : 'sure', from: '법원 물건 비고', text: bad.near };
+  } else {
+    const texts = [{ from: '제목', text: l.title ?? '' }];
+    if (source === 'naver') {
+      const r = raw as { representativeArticleInfo?: NaverDetail; duplicatedArticleInfo?: { articleInfoList?: NaverDetail[] } } | null;
+      for (const x of [r?.representativeArticleInfo, ...(r?.duplicatedArticleInfo?.articleInfoList ?? [])]) {
+        const intro = x?.articleDetail?.articleFeatureDescription;
+        if (typeof intro === 'string' && intro.trim()) texts.push({ from: '네이버 소개 글', text: intro });
+      }
+    }
+    for (const t of texts) {
+      const n = findWord(t.text, NEIGH_WORD, true);
+      if (n && !neigh) neigh = { level: 'said', from: t.from, text: n.near };
+      const v = findWord(t.text, VIOLATION_WORD);
+      if (v && !violation) violation = { level: 'said', from: t.from, text: v.near };
+    }
+  }
+  if (kind === 'shop' || kind === 'land') neigh = null;
+  return neigh || violation ? { neigh, violation } : null;
+}
+
 /** 매물 + 판정 + 확인하지 않은 변화를 화면용으로 합친다. */
 /** 사는 매물(매매, 경매, 공매)이면 좌표가 든 정비사업 구역. 구역 밖이거나 좌표가 없거나 전월세만 있는 매물이면 null. */
 function redevRef(source: string, l: NormalizedListing): ListingView['redev'] {
@@ -350,6 +447,7 @@ export function buildListingViews(): ListingView[] {
       zone: zoneRef(row.source, data, raw, zones, points),
       trade: tradeRef(row.source, data, raw, points),
       redev: redevRef(row.source, data),
+      ledger: ledgerRef(row.source, data, raw),
     };
   });
 }

@@ -1,5 +1,6 @@
 import { isDetachedHouseType, type ListingView } from '../../shared/types';
 import { kindOf } from './kinds';
+import { ledgerHouseCheck } from './ledger';
 
 // 대출 신호등(ListingCard): 사는 매물(매매, 경매, 공매)의 값, 전용면적, 집 종류로 정책대출(디딤돌, 신생아 특례 디딤돌, 보금자리론)을
 // 받을 수 있는지와 일반 주택담보대출 한도 구간을 본다. 자산, 무주택 여부, 신용은 보지 않고, 소득은 내 조건(profile.ts)으로 못 받는 대출을 뺄 때만 쓴다. 금액은 만원.
@@ -32,8 +33,19 @@ const eok = (manwon: number) => (manwon % EOK === 0 ? `${manwon / EOK}억` : `${
 const money = (manwon: number) => (manwon >= EOK ? `${Math.floor(manwon / EOK)}억${manwon % EOK ? ` ${(manwon % EOK).toLocaleString('ko-KR')}만` : ''}` : `${manwon.toLocaleString('ko-KR')}만`);
 const STATE_TEXT: Record<LoanState, string> = { ok: '가격과 집 조건 맞음', maybe: '확인 필요', no: '안 됨' };
 
-/** 집 종류 판단: ok 아파트, 연립, 다세대, 단독, maybe 다가구나 상가주택 또는 모름, no 오피스텔(준주택)이나 집이 아닌 것 */
-function typeCheck(l: Pick<ListingView, 'buildingType'>): { state: LoanState; why: string } {
+/**
+ * 집 종류 판단: ok 아파트, 연립, 다세대, 단독, maybe 다가구나 상가주택 또는 모름, no 오피스텔(준주택)이나 집이 아닌 것.
+ * 건축물대장 근생 표시가 있으면 그 판단을 더한다(확인된 근생은 no, 섞인 건물이나 글 언급은 maybe).
+ */
+function typeCheck(l: Pick<ListingView, 'buildingType' | 'ledger'>): { state: LoanState; why: string } {
+  const base = houseTypeCheck(l);
+  const neigh = ledgerHouseCheck(l);
+  if (!neigh || base.state === 'no') return base;
+  if (neigh.state === 'no' || base.state === 'ok') return neigh;
+  return { state: 'maybe', why: `${base.why}, ${neigh.why}` };
+}
+
+function houseTypeCheck(l: Pick<ListingView, 'buildingType'>): { state: LoanState; why: string } {
   const kind = kindOf(l);
   const t = l.buildingType ?? '';
   if (kind === 'officetel') return { state: 'no', why: '오피스텔은 준주택이라 대상 주택이 아님' };
@@ -54,7 +66,7 @@ const worst = (states: LoanState[]): LoanState => (states.includes('no') ? 'no' 
  * skip이 true를 돌려주는 정책대출(내 소득으로는 못 받는 것)은 신호등과 설명에서 뺀다.
  */
 export function loanView(
-  l: Pick<ListingView, 'buildingType' | 'prices' | 'areaM2' | 'trade' | 'auction' | 'source'>,
+  l: Pick<ListingView, 'buildingType' | 'prices' | 'areaM2' | 'trade' | 'auction' | 'source' | 'ledger'>,
   skip: (id: LoanLight['id']) => boolean = () => false,
 ): LoanView | null {
   const kind = kindOf(l);

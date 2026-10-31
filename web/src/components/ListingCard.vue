@@ -11,6 +11,7 @@ import { redevChip } from '../zones';
 import { loanView } from '../loans';
 import { cannotGet } from '../profile';
 import { convertedRent, loanMonthly } from '../rentRate';
+import { ledgerChips } from '../ledger';
 import CountTooltip from './CountTooltip.vue';
 
 const props = defineProps<{
@@ -32,6 +33,8 @@ const redev = computed(() => redevChip(props.listing, kind.value === 'land'));
 /** 사는 매물이면 대출 신호등(디딤돌, 신생아 특례, 보금자리론, 내 소득으로 못 받는 것은 뺌)과 일반 주택담보대출 한도 */
 const loan = computed(() => loanView(props.listing, cannotGet));
 const claims = computed(() => claimsChip(props.listing));
+/** 건축물대장 표시(근린생활시설 용도, 위반건축물) */
+const ledger = computed(() => ledgerChips(props.listing));
 const eokText = (manwon: number) => `${manwon / 10000}억`;
 /** 경매(법원경매, 온비드)는 사진을 받지 않아 사진 칸을 두지 않는다. */
 const noThumb = computed(() => isAuction(l.value));
@@ -213,6 +216,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       <div class="tags">
         <slot name="banner" />
         <CountTooltip v-if="redev" :text="redev.tip" :max-width="480"><span class="chip redev-chip" :class="`chip-${redev.tone}`">{{ redev.label }}</span></CountTooltip>
+        <CountTooltip v-for="c in ledger" :key="c.label" :text="c.tip" :max-width="520"><span class="chip" :class="`chip-${c.tone}`">{{ c.label }}</span></CountTooltip>
         <CountTooltip v-if="loan" :text="loan.tip" :max-width="500">
           <span class="chip loan-chip"><span v-for="x in loan.lights" :key="x.id" class="loan" :class="x.state"><i class="ld" />{{ x.name }}</span><span v-if="loan.cap" class="loan-cap">주담대 {{ eokText(loan.cap) }}</span></span>
         </CountTooltip>
