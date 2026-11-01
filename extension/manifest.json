@@ -3,6 +3,12 @@
   "name": "회사근처 내집마련 지도 표시",
   "version": "0.8.3",
   "description": "부동산 지도 표시와 지역 순차 조회. 대시보드에서 시작하면 전용 탭에서 고른 지역을 순회하고 지원되는 매물 목록을 탐색합니다. 받은 자료와 저장 결과는 로컬 대시보드(127.0.0.1:8787)에서 확인합니다.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": ["alarms", "activeTab", "storage", "unlimitedStorage", "scripting", "downloads"],
   "host_permissions": [
     "http://127.0.0.1:8787/*",
@@ -20,5 +26,12 @@
   "content_scripts": [
     { "matches": ["http://localhost:8787/*", "http://127.0.0.1:8787/*"], "js": ["sites.js", "dashboard.js"], "run_at": "document_end" }
   ],
-  "action": { "default_title": "회사근처 내집마련", "default_popup": "popup.html" }
+  "action": {
+    "default_title": "회사근처 내집마련",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  }
 }

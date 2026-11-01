@@ -1,0 +1,8 @@
+Use case: logo-brand.
+Asset type: Chrome browser extension app icon for a personal home-finding and property map tool.
+Primary request: Create one polished, very simple symbol combining a house with a map location pin, with the house integrated as a bold negative-space shape inside the pin. The mark should feel calm, helpful, and clear, never corporate or complicated.
+Style/medium: crisp flat vector-like logo, solid geometric shapes, smooth balanced curves, strong silhouette. No texture, no 3D, no gradients, no shadows.
+Color palette: established accent blue #1f5fbf and white only.
+Composition/framing: one large blue softly rounded-square tile, centered on a square transparent canvas, with a white location-pin-and-house symbol inside. Tile fills about 88 percent of the square. The white symbol must be bold, with generous spacing and no fine details, readable when reduced to 16 pixels. Optically centered and symmetrical.
+Text: none.
+Constraints: output only the single finished icon, actual transparent outer corners around the blue tile, no mockup, no presentation board, no labels, no extra logos, no watermark. Use a generic original house motif and pin, with no real company or service identity.
