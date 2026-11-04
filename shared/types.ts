@@ -2,10 +2,10 @@
 
 import type { Filters } from './filters.js';
 
-export type SourceId = 'naver' | 'dabang' | 'zigbang' | 'ziptoss' | 'peterpanz' | 'gobang' | 'courtauction' | 'onbid' | 'betterliving' | 'mangrove' | 'celib';
+export type SourceId = 'naver' | 'dabang' | 'zigbang' | 'daangn' | 'ziptoss' | 'peterpanz' | 'gobang' | 'courtauction' | 'onbid' | 'betterliving' | 'mangrove' | 'celib';
 
-/** 크롬 확장이 받은 화면 데이터로 매물을 읽는 사이트('조회하기'가 돌지 않음) */
-export const CAPTURE_SOURCES: SourceId[] = ['naver', 'dabang', 'zigbang'];
+/** 크롬 확장이 받은 화면 데이터도 읽는 사이트. 구·동 자동수집과 함께 사용할 수 있다. */
+export const CAPTURE_SOURCES: SourceId[] = ['naver', 'dabang', 'zigbang', 'daangn'];
 
 export type DealType = 'monthly' | 'jeonse' | 'sale' | 'short' | 'auction';
 
@@ -112,14 +112,15 @@ export const noticeSourcesOf = (section: NoticeSection) =>
   (Object.keys(SOURCE_SECTIONS) as NoticeSourceId[]).filter((s) => SOURCE_SECTIONS[s].includes(section));
 
 /** 탭 하나만 조회하는 범위(조회하기 옆 ▾ 메뉴, 경매 탭의 '경매 조회하기') */
-export type RunScope = 'home' | 'auction' | 'room' | 'rent' | 'subscription';
+export type RunScope = 'home' | 'dabang' | 'naver' | 'auction' | 'room' | 'rent' | 'subscription';
 
 /**
  * 범위마다 도는 매물 사이트(sources)와 공고 탭(sections, 그 탭에 공고가 보일 수 있는 곳을 모두 돈다). tabs는 그 범위가 채우는 탭.
- * 네이버, 다방, 직방은 크롬 확장이 모으므로 어느 범위에도 들지 않는다.
+ * 지역 전체를 지원하는 사이트는 별도 범위로도 조회한다. 직방은 지역 안 역들의 1km 원룸을 서버가 직접 받는다.
  */
 export const RUN_SCOPES: { id: RunScope; label: string; tabs: string[]; sources: SourceId[]; sections: NoticeSection[] }[] = [
-  { id: 'home', label: '매물', tabs: ['overview'], sources: ['ziptoss', 'peterpanz', 'gobang'], sections: [] },
+  { id: 'home', label: '매물', tabs: ['overview'], sources: ['dabang', 'zigbang', 'ziptoss', 'peterpanz', 'gobang'], sections: [] },
+  { id: 'dabang', label: '다방 구 전체', tabs: [], sources: ['dabang'], sections: [] },
   { id: 'auction', label: '경매, 집터, 서울 아파트', tabs: ['auction', 'plot', 'apt'], sources: ['courtauction', 'onbid'], sections: ['trust', 'shop', 'land'] },
   { id: 'room', label: '고시원과 쉐어', tabs: ['rooms'], sources: ['gobang', 'betterliving', 'mangrove', 'celib'], sections: [] },
   { id: 'rent', label: '임대 공고', tabs: ['notices'], sources: [], sections: ['rent'] },
@@ -324,6 +325,7 @@ export const SOURCE_LABEL: Record<SourceId, string> = {
   naver: '네이버',
   dabang: '다방',
   zigbang: '직방',
+  daangn: '당근부동산',
   ziptoss: '집토스',
   peterpanz: '피터팬',
   gobang: '고방',
@@ -352,6 +354,7 @@ export interface NormalizedListing {
   lng: number | null;
   address: string | null;
   dong: string | null;
+  legalDongCode?: string | null;
   /** 사이트 안에서 건물을 구분하는 값. 재등록 판정에 쓴다. */
   buildingKey: string | null;
   buildingType: string | null;
@@ -402,6 +405,16 @@ export interface ExcludedRow {
   url: string;
 }
 
+/** Canonical selection unit. Coordinates on Area are query hints, not its boundary. */
+export interface AdministrativeRegion {
+  kind: 'gu' | 'dong';
+  code: string;
+  sido: string;
+  sigungu: string;
+  dong: string | null;
+  name: string;
+}
+
 export interface Area {
   id: number;
   name: string;
@@ -409,6 +422,16 @@ export interface Area {
   lng: number;
   radiusM: number;
   enabled: boolean;
+  region?: AdministrativeRegion | null;
+  /** Persisted rows distinguish collection targets from independent alert circles. */
+  purpose?: 'collection' | 'alert';
+  alertLimits?: AlertLimits | null;
+}
+
+export interface AlertLimits {
+  monthlyMax: number | null;
+  depositMax: number | null;
+  priceMax: number | null;
 }
 
 export interface Station {
@@ -426,7 +449,9 @@ export interface Station {
   sido?: string;
 }
 
-export type Verdict = 'discard' | 'star';
+/** star 관심, meh 별로(목록에는 남기고 흐리게 맨 뒤로), discard 버림(목록에서 숨김) */
+export type Verdict = 'discard' | 'star' | 'meh';
+export const VERDICTS: Verdict[] = ['discard', 'star', 'meh'];
 
 export type PriceChangeType = 'price_down' | 'price_up' | 'price_changed';
 
@@ -800,22 +825,45 @@ export interface HouseTradeSummary {
   cheapest: HouseTradeView[];
 }
 
+export interface CollectionCoverage {
+  source?: SourceId;
+  areaId: number;
+  areaName: string;
+  category: string;
+  label: string;
+  pages: number;
+  totalPages: number | null;
+  total: number | null;
+  received: number;
+  stored: number;
+  storageChecked?: boolean;
+  complete: boolean;
+  reason: string;
+}
+
 export interface RunSourceSummary {
   source: SourceId;
   status: 'ok' | 'error';
   fetched: number;
   kept: number;
+  /** Stored successfully outside the selected collection area. Alerts have their own station scope. */
+  incidentalCount?: number;
   newCount: number;
   priceChanged: number;
   relisted: number;
   baselineAreas: string[];
   error?: string;
+  coverage?: CollectionCoverage[];
 }
 
 export interface RunSummary {
   sources: RunSourceSummary[];
   newCount: number;
   changedCount: number;
+  /** 계획한 매물·공고를 모두 확인했는지. 예전 기록과 확장 수집 기록에는 없을 수 있다. */
+  complete?: boolean;
+  /** 일시 오류가 있어 같은 예약 회차를 다시 시도할 수 있는지. 설정·지원 범위 제한만 있으면 false. */
+  retryable?: boolean;
 }
 
 export interface RunInfo {
@@ -853,9 +901,11 @@ export interface AutoCheckState {
 
 /** 조회가 끝나면 띄울 알림 고르기('조회하기'와 자동 확인 모두). 금액은 만원, null이면 제한 없음. */
 export interface AlertSettings {
+  scopeVersion?: 2;
+  stationAreasOnly?: boolean;
   /**
-   * 매매와 전월세 새 매물을 고를 매물 탭 필터(화면이 필터를 바꿀 때마다 알려 준다). 있으면 아래 거래 유형 줄의 상한 대신
-   * 이 필터의 금액, 평, 매물 유형, 층, 무옵션, 지역 조건을 쓰고, 거래 유형 줄은 켜기만 본다. 아직 받지 못했으면 null.
+   * 독립적으로 저장한 알림의 상세 조건. 목록 필터와 자동 동기화하지 않는다.
+   * 지역은 알림 구역, 금액은 거래 유형별 조건과 역별 상한에서 판정한다.
    */
   homeFilter: Filters | null;
   /** 매매와 전월세 새 매물: 거래 유형마다 켜기와 상한 */
@@ -882,13 +932,13 @@ export interface AlertSettings {
   shopNotices: boolean;
   /** LH 토지 공고와 선착순 토지(켜진 지역 근처) */
   landNotices: boolean;
-  /** 위 매물 조건에 맞는 매물의 가격 변동 */
+  /** 위 매물 조건에 맞는 매물의 가격 인하 */
   priceChanges: boolean;
   /** 매물 사이트 수집 실패 */
   failures: boolean;
-  /** 매물은 켜진 지역 반경 안만 센다 */
+  /** Legacy setting retained for old clients; listing geography uses stationAreasOnly. */
   insideAreas: boolean;
-  /** 크롬 확장으로 본 사이트(다방 새 방, KB, 네이버 늘어난 매물 수) */
+  /** 크롬 확장으로 저장된 개별 매물의 신규·가격 인하 알림 */
   captureSites: boolean;
 }
 
@@ -906,6 +956,7 @@ export interface RunProgress {
   log: string[];
   /** 중단을 눌러 멈추는 중 */
   stopping: boolean;
+  coverage?: CollectionCoverage[];
 }
 
 /** 소스 하나를 마지막으로 조회한 결과. */
@@ -923,6 +974,8 @@ export interface SiteReport {
   history: Partial<Record<SourceId, SiteRunRow[]>>;
   /** 크롬 확장 사이트(naver, dabang, zigbang, kbland, hogangnono, daangn)마다 받은 화면 데이터 요약 */
   captures: Record<string, SiteCaptureReport>;
+  /** 역 기준 사이트가 수집 지역을 실제로 얼마나 덮는지(지금은 직방 서버 수집). percent는 면적 비율, 셀 수 없으면 null. */
+  scopeCoverage?: Partial<Record<string, { areaName: string; stations: number; percent: number | null }[]>>;
 }
 
 export interface SiteRunRow {
@@ -969,6 +1022,8 @@ export interface RunDetail extends RunInfo {
 }
 
 export interface AppState {
+  /** 저장 데이터 변경과 서버 재시작을 구별하는 값. 읽기 요청만으로는 바뀌지 않는다. */
+  dataRevision: string;
   /** 확인하지 않은 새 공고 수 */
   newNotices: number;
   areas: Area[];

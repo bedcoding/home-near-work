@@ -18,6 +18,7 @@ function worker(storage, status = 503, { ownedTabId = null, ownershipFails = fal
   };
   const context = {
     importScripts() {}, URL, AbortSignal, crypto: { randomUUID },
+    HNW_AUTO_BROWSE: { poll: async () => {} },
     setTimeout() {},
     HNW_BROWSE: {
       ownsTab: async (id) => {
@@ -46,10 +47,22 @@ function worker(storage, status = 503, { ownedTabId = null, ownershipFails = fal
 }
 const captures = [
   { site: 'naver', url: 'https://example.invalid/api/clusteredArticles' },
+  { site: 'naver', url: 'https://example.invalid/api/boundedArticles' },
+  { site: 'naver', url: 'https://example.invalid/api/legalDivisionArticleList?query=synthetic' },
   { site: 'dabang', url: 'https://example.invalid/api/v5/room-list/search' },
   { site: 'zigbang', url: 'https://example.invalid/house/property/v1/items/list' },
   { site: 'zigbang', url: 'https://example.invalid/house/property/v1/items/subways/123/onerooms?radius=1' },
 ].map((capture, i) => ({ ...capture, body: JSON.stringify({ synthetic: i }) }));
+
+test('manual list pages are durable while map counts and aggregation are not listing pages', () => {
+  const background = worker({});
+  for (const name of ['boundedArticles', 'clusteredArticles', 'legalDivisionArticleList/']) {
+    assert.equal(background.isListing({ site: 'naver', url: `https://example.invalid/api/${name}` }), true);
+  }
+  for (const name of ['boundedArticlesCount', 'articleClusters', 'unrelatedArticles']) {
+    assert.equal(background.isListing({ site: 'naver', url: `https://example.invalid/api/${name}` }), false);
+  }
+});
 
 test('listing captures survive an offline worker restart and replay successfully', async () => {
   const storage = {};

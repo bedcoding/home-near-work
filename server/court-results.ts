@@ -41,6 +41,9 @@ const STATS = {
 
 /** 마지막으로 매각결과검색(서울 전체)을 마친 시각을 두는 설정 키(ISO) */
 const SEARCHED_KEY = 'court_results_searched_at';
+/** 부분 응답과 실패도 별도로 남겨, 마지막 정상 조회 시각 때문에 재시도가 밀리지 않게 한다. */
+const SEARCH_STATUS_KEY = 'court_results_search_status';
+const RESULTS_RETRY_MS = 6 * 3600000;
 /** 매각결과검색을 마친 지 이만큼 지나면 공고만 확인에서도 매각 결과를 모은다(결과가 매각기일 다음 날부터 7일 동안만 나와서). */
 const RESULTS_MAX_AGE_MS = 5 * 86400000;
 /** 매각결과검색에서 넘겨 보는 쪽 수 한도(40건씩) */
@@ -54,10 +57,20 @@ const CASE_MAX_DAYS = 180;
 /** 법원 물건 상태 코드 중 결과가 아직 안 들어온 것(매각준비, 매각공고) */
 const PENDING_STATUS = new Set(['00', '01']);
 
-/** 매각 결과를 모을 때가 됐는지: 매각결과검색을 마친 적이 없거나 마친 지 RESULTS_MAX_AGE_MS가 지났으면 true. */
+/** 정상 조회는 5일, 부분 응답이나 실패는 마지막 시도에서 6시간 뒤에 다시 모은다. */
 export function courtResultsDue(): boolean {
+  try {
+    const last = JSON.parse(store.getSetting(SEARCH_STATUS_KEY) ?? 'null') as { at?: string; ok?: boolean } | null;
+    if (last?.ok === false) {
+      const attempted = Date.parse(last.at ?? '');
+      return !Number.isFinite(attempted) || Date.now() - attempted >= RESULTS_RETRY_MS;
+    }
+  } catch {
+    // 오래된 상태를 읽지 못해도 정상 완료 시각으로 조회 여부를 판단한다.
+  }
   const at = store.getSetting(SEARCHED_KEY);
-  return !at || Date.now() - Date.parse(at) >= RESULTS_MAX_AGE_MS;
+  const searched = Date.parse(at ?? '');
+  return !Number.isFinite(searched) || Date.now() - searched >= RESULTS_MAX_AGE_MS;
 }
 
 /** 법원경매정보 화면이 열리지 않음(서비스 점검 시간 등). 매각 결과와 배당 순위 확인 모으기를 거기서 멈춘다. */
@@ -132,7 +145,13 @@ async function readResultRows(session: BrowserSession, response: Response | null
   const data: any = await response.json().catch(() => null);
   session.record('courtauction', 'data', response.url(), response.status(), data ? `매각 결과 ${data.data?.dlt_srchResult?.length ?? 0}건 (전체 ${data.data?.dma_pageInfo?.totalCnt ?? '?'}건)` : '응답을 읽지 못함');
   if (!data) return null;
-  return { rows: (data.data?.dlt_srchResult ?? []) as any[], total: Number(data.data?.dma_pageInfo?.totalCnt ?? 0) };
+  const rows = data.data?.dlt_srchResult;
+  const count = data.data?.dma_pageInfo?.totalCnt;
+  const total = Number(count);
+  if (!Array.isArray(rows) || count == null || count === '' || !Number.isSafeInteger(total) || total < 0) {
+    throw new Error('매각결과검색 응답의 목록이나 전체 건수가 없습니다.');
+  }
+  return { rows, total };
 }
 
 /**
@@ -337,20 +356,28 @@ export async function collectCourtResults(ctx: CollectContext, stopped: () => bo
     parts.push(`${what} 실패(${errorText(e)})`);
     return e instanceof ScreenDownError;
   };
+  const saveSearchStatus = (ok: boolean) => {
+    const at = new Date().toISOString();
+    store.setSetting(SEARCH_STATUS_KEY, JSON.stringify({ at, ok }));
+    if (ok) store.setSetting(SEARCHED_KEY, at);
+  };
 
   try {
     const found = await searchResults(ctx);
-    if (!found) parts.push('매각결과검색 응답 없음');
-    else {
+    if (!found) {
+      saveSearchStatus(false);
+      parts.push('매각결과검색 응답 없음');
+    } else {
       const results = lotsOf(found.rows).map(resultOfLot).filter((r): r is store.AuctionResultInput => r != null);
       store.saveAuctionResults(results);
-      store.setSetting(SEARCHED_KEY, new Date().toISOString());
+      saveSearchStatus(found.rows.length >= found.total);
       const sold = results.filter((r) => r.amount != null).length;
       const near = results.filter((r) => r.gu != null && gus.includes(r.gu)).length;
       const short = found.rows.length < found.total ? `, ${found.total}줄 중 ${found.rows.length}줄만 읽음` : '';
       parts.push(`서울 최근 7일 ${results.length}건(낙찰 ${sold}, 켜진 지역 근처 구 ${near}건${short})`);
     }
   } catch (e) {
+    saveSearchStatus(false);
     if (failed('매각결과검색', e)) return parts.join(', ');
   }
   await ctx.session.pause(PAGE_DELAY_MS);

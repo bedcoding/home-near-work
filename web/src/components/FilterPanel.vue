@@ -5,6 +5,7 @@ import { DEFAULT_FILTERS, FILTER_DEALS, type Filters } from '../filters';
 import { DEALS_OF, OVERVIEW_DEALS, OVERVIEW_LABEL } from '../bands';
 import { M2_PER_PYEONG } from '../format';
 import { KIND_LABEL, KINDS } from '../kinds';
+import { hasRegions, primaryAreas } from '../../../shared/regions';
 
 const filters = defineModel<Filters>({ required: true });
 /**
@@ -16,7 +17,7 @@ const emit = defineEmits<{ manageAreas: []; hide: [] }>();
 
 /** 매물 탭 지역 칸에서 한 지역만 보고 있으면 그 이름. */
 const focusText = computed(() => {
-  const names = props.allAreas.filter((a) => a.enabled && filters.value.areaIds.includes(a.id)).map((a) => a.name);
+  const names = primaryAreas(props.allAreas).filter((a) => filters.value.areaIds.includes(a.id)).map((a) => a.name);
   return names.length ? `${names.join(', ')}만 보는 중` : null;
 });
 
@@ -93,7 +94,7 @@ function summary(id: SectionId): string {
   const f = filters.value;
   const parts =
     id === 'area'
-      ? [focusText.value, f.insideAreas ? null : '반경 밖 포함', f.distanceMax != null ? `역까지 ${f.distanceMax}m` : null]
+      ? [focusText.value, f.insideAreas ? null : hasRegions(props.allAreas) ? '주변 함께 저장 포함' : '반경 밖 포함', f.distanceMax != null && !hasRegions(props.allAreas) ? `역까지 ${f.distanceMax}m` : null]
       : id === 'deal'
         ? [
             (props.singleDeal
@@ -191,9 +192,10 @@ async function nudge(id: SectionId, delta: number, e: KeyboardEvent) {
               {{ focusText }}
               <button class="btn btn-ghost btn-sm" @click="filters.areaIds = []">모두 보기</button>
             </p>
-            <label class="check" title="끄면 모은 범위(반경 +500m)까지 보입니다"><input v-model="filters.insideAreas" type="checkbox" /> 지역 반경 안만</label>
-            <label class="field">역까지 최대 거리(m)<input type="number" min="100" step="100" :value="filters.distanceMax ?? ''" @input="filters.distanceMax = num($event)" /></label>
-            <button class="btn btn-sm manage" @click="emit('manageAreas')">지역 켜고 끄기</button>
+            <label v-if="primaryAreas(allAreas).length" class="check" title="목록만 거릅니다. 알림 역·반경은 지역 관리에서 따로 설정합니다"><input v-model="filters.insideAreas" type="checkbox" @change="hasRegions(allAreas) && !filters.insideAreas && (filters.areaIds = [])" /> {{ hasRegions(allAreas) ? '선택한 수집 구·동 안만 보기' : '탐색 반경 안만 보기' }}</label>
+            <p v-else class="muted small">저장된 전체 지역을 봅니다. 알림 역·반경은 목록을 제한하지 않습니다.</p>
+            <label v-if="!hasRegions(allAreas) && primaryAreas(allAreas).length" class="field">최대 거리(m)<input type="number" min="100" step="100" :value="filters.distanceMax ?? ''" @input="filters.distanceMax = num($event)" /></label>
+            <button class="btn btn-sm manage" @click="emit('manageAreas')">지역 추가·관리</button>
           </template>
 
           <div v-else-if="id === 'deal'" class="chips">

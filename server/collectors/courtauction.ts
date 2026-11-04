@@ -246,7 +246,7 @@ export const courtauction: Collector = {
     const { session } = ctx;
     const page = session.page;
     const items: CollectedItem[] = [];
-    const near = gusFor(ctx.areas);
+    const near = gusFor(ctx.areas, true);
     const aptGus = new Set(ctx.aptGus);
     /** 고른 구 중 근처가 아닌 구: 주거용 건물만 검색해 아파트만 남긴다 */
     const aptOnly = ctx.aptGus.filter((gu) => !near.includes(gu));
@@ -267,10 +267,12 @@ export const courtauction: Collector = {
 
     const readRows = async (response: Response | null) => {
       if (!response) return null;
+      if (response.status() === 403 || response.status() === 429) throw new BlockedError(`법원경매 검색 응답 HTTP ${response.status()}`);
       const data: any = await response.json().catch(() => null);
       session.record('courtauction', 'data', response.url(), response.status(), data ? `검색 결과 ${data.data?.dlt_srchResult?.length ?? 0}건 (전체 ${data.data?.dma_pageInfo?.totalCnt ?? '?'}건)` : '응답을 읽지 못함');
-      if (!data) return null;
-      return { rows: (data.data?.dlt_srchResult ?? []) as any[], total: Number(data.data?.dma_pageInfo?.totalCnt ?? 0) };
+      const total = Number(data?.data?.dma_pageInfo?.totalCnt);
+      if (response.status() >= 400 || !Array.isArray(data?.data?.dlt_srchResult) || !Number.isFinite(total) || total < 0) return null;
+      return { rows: data.data.dlt_srchResult as any[], total };
     };
 
     /**
@@ -329,6 +331,7 @@ export const courtauction: Collector = {
         await session.pause(1200);
       }
       ctx.log(`법원경매: ${gu} ${usage} ${total}건 중 ${found.size}건 읽음 (${screen.name}, 매각기일 ${label})`);
+      if (found.size < total) ctx.partial(`법원경매 ${gu} ${screen.name} ${usage}: 전체 ${total}건 중 ${found.size}건만 읽음`);
       return found;
     };
 
@@ -350,11 +353,11 @@ export const courtauction: Collector = {
             // 고른 구(아파트만)는 그 화면만 건너뛰고 계속한다(다 돈 것으로 보지 않아 그 구 물건이 '사라짐'이 되지 않는다).
             if (e instanceof BlockedError || (screen === SCREENS[0] && !onlyApt)) throw e;
             ctx.log(`법원경매: ${gu} ${screen.name} ${usage}를 보지 못했습니다(${e instanceof Error ? e.message.split('\n')[0] : String(e)})`);
-            if (onlyApt) ctx.partial(`법원경매 ${gu} ${screen.name}`);
+            ctx.partial(`법원경매 ${gu} ${screen.name} ${usage}`);
           }
           if (!found) {
             ctx.log(`법원경매: ${gu} ${screen.name} ${usage} 검색 응답을 받지 못했습니다`);
-            if (onlyApt) ctx.partial(`법원경매 ${gu} ${screen.name}`);
+            ctx.partial(`법원경매 ${gu} ${screen.name} ${usage}`);
             continue;
           }
           const shot = await session.screenshot('courtauction', `${gu} ${screen.name} ${usage}`);

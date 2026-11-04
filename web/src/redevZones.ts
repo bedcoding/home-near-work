@@ -3,7 +3,7 @@ import type { RedevZoneGroup, RedevZonesView } from '../../shared/types';
 import { api } from './api';
 
 // 지도에 칠하는 정비사업 구역. 매물, 경매, 집터, 서울 아파트, 고시원과 쉐어 탭 지도가 같이 쓴다.
-// 구역은 처음 켤 때 한 번 받고, 칠할지는 이 브라우저에 기억한다(처음은 켬).
+// 구역은 처음 켤 때 받고, 서버 자료가 바뀌면 다시 받는다. 칠할지는 이 브라우저에 기억한다(처음은 켬).
 
 /** 묶음마다 이름과 색 */
 export const ZONE_GROUPS: { id: RedevZoneGroup; name: string; color: string }[] = [
@@ -43,24 +43,43 @@ watch(zonesOn, (on) => {
   if (on) void loadZones();
 });
 
-let loading: Promise<void> | null = null;
-/** 구역을 한 번 받는다(이미 받았으면 그대로). */
-export function loadZones(): Promise<void> {
-  if (zones.value) return Promise.resolve();
-  loading ??= api
+let loading: Promise<boolean> | null = null;
+let requested = false;
+let version = 0;
+let loadFailed = false;
+/** 구역을 받는다. force는 서버 자료가 바뀌었을 때 기존 캐시도 다시 읽는다. */
+export function loadZones(force = false): Promise<boolean> {
+  requested = true;
+  // 이전 버전의 읽기가 진행 중이면 끝난 뒤 새 요청을 보내야 최신 파일을 놓치지 않는다.
+  if (loading) return force ? loading.then(() => loadZones(true)) : loading;
+  if (zones.value && !force) return Promise.resolve(true);
+  const readVersion = version;
+  loading = api
     .redevZones()
     .then((v) => {
-      zones.value = v;
-      zonesError.value = null;
+      if (readVersion === version) {
+        zones.value = v;
+        zonesError.value = null;
+        loadFailed = false;
+      }
+      return true;
     })
     .catch((e) => {
-      zonesError.value = e instanceof Error ? e.message : String(e);
+      if (readVersion === version) {
+        zonesError.value = e instanceof Error ? e.message : String(e);
+        loadFailed = true;
+      }
+      return false;
     })
     .finally(() => {
       loading = null;
     });
   return loading;
 }
+
+/** 지도를 한 번이라도 열었으면 파일과 확인 결과를 갱신한다(첫 읽기 실패도 재시도). */
+export const reloadZones = (): Promise<boolean> => requested ? loadZones(true) : Promise.resolve(true);
+export const zonesNeedReload = (): boolean => loadFailed;
 
 /** 열린데이터광장의 최신판을 보고 새것이면 받아 바꾼다(1~2분 걸릴 수 있음). */
 export async function checkZonesNow() {
@@ -69,6 +88,9 @@ export async function checkZonesNow() {
   zonesMessage.value = null;
   try {
     const { message, ...view } = await api.updateRedevZones();
+    requested = true;
+    version += 1;
+    loadFailed = false;
     zones.value = view;
     zonesMessage.value = message;
     zonesOn.value = true;
@@ -84,7 +106,11 @@ export async function uploadZones(file: File) {
   zonesBusy.value = true;
   zonesError.value = null;
   try {
-    zones.value = await api.uploadRedevZones(file);
+    const view = await api.uploadRedevZones(file);
+    requested = true;
+    version += 1;
+    loadFailed = false;
+    zones.value = view;
     zonesOn.value = true;
   } catch (e) {
     zonesError.value = e instanceof Error ? e.message : String(e);

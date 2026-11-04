@@ -8,6 +8,8 @@ import { autoCheckState, runMissedCheck, setAutoCheck, startAutoCheck } from './
 import { gusFor, nearNamesFor } from './collectors/gus.js';
 import { DASHBOARD_URL, HOST, PORT, RUNS_DIR, WEB_DIST } from './config.js';
 import * as store from './db.js';
+import { canonicalRegion, regionArea, regionCatalog } from './region-catalog.js';
+import { normalizeAlertLimits } from '../shared/alert-scope.js';
 import { openCourtItem } from './court-viewer.js';
 import { buildHouseTradeSummary, collectHouseTrades } from './house-trades.js';
 import { buildRentView, collectRentTrades, rateOf } from './rent-trades.js';
@@ -17,8 +19,9 @@ import { buildMarketView } from './market.js';
 import { fillHouseholds, householdsFillState } from './building-register.js';
 import { checkZones, zoneCheckState } from './land-zones.js';
 import {
-  acceptBrowseCaptures, acceptCaptures, browseReceipt, extensionVersion, finishCaptureSession, naverCaptureState, naverMarks, processPendingNaverCaptures, saveSnapshot, type CaptureInput,
+  acceptBrowseCaptures, acceptCaptures, browseReceipt, extensionVersion, finishCaptureSession, naverCaptureState, naverMarks, processPendingNaverCaptures, refreshNaverFloors, saveSnapshot, type CaptureInput,
 } from './naver-capture.js';
+import { markPinsOf, walkFromPins, walkPinsOf, WalkError } from './walk.js';
 import { learnFromStoredCaptures, withLinkHints } from './link-hints.js';
 import { acceptNoticeFiles, noticeFileViews } from './notice-files.js';
 import { importRedevZones, redevZones } from './redev-zones.js';
@@ -27,29 +30,41 @@ import { restSeconds } from './browser.js';
 import { updateZonesNow, zoneFileCheckState } from './redev-zones-update.js';
 import { getProgress, startLineRun, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
-import { normalizeBrowseProgress, type BrowseProgress } from './browse-progress.js';
+import { browseConsole, normalizeBrowseProgress, type BrowseProgress } from './browse-progress.js';
+import { BROWSE_SCOPES_KEY, readBrowseScopes } from './browse-settings.js';
+import { browseAutoState, setBrowseAuto, runBrowseAutoNow, pollBrowseAuto, reportBrowseAuto, migrateDabangSchedule } from './browse-auto.js';
+import { saveNaverPreset, naverPresetState } from './naver-preset.js';
 import { refreshTradeSignals } from './trade-signals.js';
 import { collectPeakSources } from './peak-sources.js';
 import { collectRegionVolume } from './region-volume.js';
 import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, withTrustFacts } from './views.js';
 import { siteReport } from './site-report.js';
-import { CAPTURE_SOURCES, REST_CHOICES, RUN_SCOPES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type SourceId, type Verdict } from '../shared/types.js';
+import { lastAreaKindError, missingAreaKinds } from '../shared/regions.js';
+import { refreshDabangUrls } from './dabang-links.js';
+import { dabangNearUrl, parseDabangNear } from './dabang-parse.js';
+import { DABANG_HEADERS } from './dabang-client.js';
+import { CAPTURE_SOURCES, REST_CHOICES, RUN_SCOPES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type SourceId, type Verdict, VERDICTS } from '../shared/types.js';
 
 // 처리하지 못한 비동기 오류가 나도 대시보드 서버가 꺼지지 않게 기록만 남긴다.
 process.on('unhandledRejection', (e) => console.error('처리하지 못한 오류:', e instanceof Error ? e.message : e));
 
 store.closeInterruptedRuns();
+if (migrateDabangSchedule()) console.log('다방 예약을 구 전체 자동수집으로 전환했습니다. 기존 동별 예약 설정은 로컬에 보관했습니다.');
 const tidy = store.tidyListings();
 if (tidy.stale) console.log(`네이버, 다방, 직방에서 14일 넘게 다시 못 본 매물 ${tidy.stale}건을 사라짐으로 두었습니다.`);
 if (tidy.purged) console.log(`사라진 지 오래된 매물 ${tidy.purged}건을 지웠습니다.`);
 // 지난번에 받아 두고 아직 매물로 읽지 않은 네이버 응답이 있으면 읽는다.
 processPendingNaverCaptures();
+const naverFloors = refreshNaverFloors();
+if (naverFloors) console.log(`네이버 매물 ${naverFloors}건의 층을 원본에서 다시 읽었습니다.`);
+const dabangUrls = refreshDabangUrls();
+if (dabangUrls) console.log(`다방 매물 ${dabangUrls}건의 원본 열기 주소에 방 번호를 붙였습니다.`);
 
 const app = Fastify({ logger: false });
 
 /** 크롬 확장(네이버, 다방) 하루치 기록은 '마지막 조회' 줄에서 뺀다. 그 줄은 '조회하기'로 돈 기록을 보여 준다. */
-const isNaverOnly = (r: { summary: { sources: { source: string }[] } | null }) =>
-  !!r.summary && r.summary.sources.length > 0 && r.summary.sources.every((s) => CAPTURE_SOURCES.includes(s.source as SourceId));
+const isNaverOnly = (r: { summary: { sources: { source: string; coverage?: unknown[] }[] } | null }) =>
+  !!r.summary && r.summary.sources.length > 0 && r.summary.sources.every((s) => !s.coverage && CAPTURE_SOURCES.includes(s.source as SourceId));
 
 /** 소스마다 그 소스가 들어간 마지막 조회 결과(조회 중인 것은 뺀다). runs는 새것부터. */
 function lastBySource(runs: RunInfo[]): AppState['lastBySource'] {
@@ -67,6 +82,7 @@ function lastBySource(runs: RunInfo[]): AppState['lastBySource'] {
 app.get('/api/state', async (): Promise<AppState> => {
   const runs = store.listRuns(30);
   return {
+    dataRevision: store.dataRevision(),
     newNotices: store.newNoticeCount(),
     areas: store.listAreas(),
     stations: withLinkHints(knownStations()),
@@ -186,6 +202,9 @@ app.post('/api/auto-check/missed', async () => ({ result: runMissedCheck() }));
 
 /** 조회가 끝나면 띄울 알림 설정(AlertSettings, 준 값만 바꿈). 바뀐 전체 설정을 돌려준다. */
 app.put<{ Body: unknown }>('/api/alerts', async (req, reply) => {
+  if (req.body && typeof req.body === 'object' && 'homeFilter' in req.body && !('scopeVersion' in req.body)) {
+    return reply.code(409).send({ error: '목록 필터는 알림 조건과 분리됐습니다. 새로고침 후 알림 설정에서 변경해 주세요.' });
+  }
   try {
     return setAlertSettings(req.body);
   } catch (e) {
@@ -235,6 +254,22 @@ app.post<{ Body: { age?: unknown } | null }>('/api/house-trades/fetch', async (r
   }
 });
 
+/** 거리 핀에서 좌표가 있는 매물과 표시 핀(marks)까지 길을 따라 걷는 거리. 길 데이터가 없거나 30일 지났으면 오픈스트리트맵에서 먼저 받는다. */
+app.post<{ Body: { pins?: unknown; marks?: unknown } | null }>('/api/walk', async (req, reply) => {
+  const pins = walkPinsOf(req.body?.pins);
+  const marks = markPinsOf(req.body?.marks);
+  if (!pins || !marks) {
+    reply.code(400);
+    return { error: '핀 값이 잘못됐습니다.' };
+  }
+  try {
+    return await walkFromPins(pins, marks);
+  } catch (e) {
+    reply.code(e instanceof WalkError ? 400 : 502);
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
 /** 시세 통계 탭: KB 지수 그래프, 지금 흐름 요약, 서울 아파트 월별 거래량, 구별 급지표(켜진 지역 근처 구 표시). */
 app.get('/api/market', async () => buildMarketView(gusFor(store.enabledAreas())));
 
@@ -272,7 +307,9 @@ app.post<{ Querystring: { name?: string } }>('/api/redev-zones', { bodyLimit: 60
     return { error: 'ZIP 파일을 보내 주세요.' };
   }
   try {
-    return { ...importRedevZones(new Uint8Array(req.body), typeof req.query.name === 'string' ? req.query.name.slice(0, 200) : null), check: zoneFileCheckState() };
+    const view = importRedevZones(new Uint8Array(req.body), typeof req.query.name === 'string' ? req.query.name.slice(0, 200) : null);
+    store.touchDataRevision();
+    return { ...view, check: zoneFileCheckState() };
   } catch (e) {
     reply.code(400);
     return { error: e instanceof Error ? e.message : String(e) };
@@ -333,10 +370,36 @@ app.post<{ Params: { id: string } }>('/api/listings/:id/open-court', async (req,
   }
 });
 
-app.post<{ Params: { id: string }; Body: { verdict: Verdict | null } }>('/api/listings/:id/verdict', async (req) => {
-  store.setVerdict(req.params.id, req.body?.verdict ?? null);
+app.post<{ Params: { id: string }; Body: { verdict: Verdict | null } }>('/api/listings/:id/verdict', async (req, reply) => {
+  const verdict = req.body?.verdict ?? null;
+  if (verdict !== null && !VERDICTS.includes(verdict)) {
+    reply.code(400);
+    return { error: 'verdict는 discard, star, meh 중 하나' };
+  }
+  store.setVerdict(req.params.id, verdict);
   store.ackEvents(req.params.id);
   return { ok: true };
+});
+
+/** 다방 매물 하나의 지번 주소를 다방 주변 정보 요청으로 받아 저장한다(카드의 '주소 보기'). 이미 받아 두었으면 다시 요청하지 않는다. */
+app.post<{ Params: { id: string } }>('/api/listings/:id/dabang-address', async (req, reply) => {
+  const id = req.params.id;
+  const row = store.getListing(id);
+  if (!row || row.source !== 'dabang') return reply.code(404).send({ error: '다방 매물을 찾지 못했습니다.' });
+  const saved = store.getDabangAddress(id);
+  if (saved) return { address: saved };
+  const raw = store.listingRaw(id)?.raw as { id?: unknown } | null | undefined;
+  const roomId: unknown = raw && typeof raw === 'object' ? raw.id : null;
+  const url = dabangNearUrl(roomId);
+  if (!url) return reply.code(409).send({ error: '이 매물은 다방 방 번호가 없어 주소를 받을 수 없습니다. 원본 열기로 확인해 주세요.' });
+  let response: Response;
+  try { response = await fetch(url, { headers: DABANG_HEADERS, signal: AbortSignal.timeout(15000) }); }
+  catch { return reply.code(502).send({ error: '다방에서 응답이 없습니다. 잠시 뒤 다시 눌러 주세요.' }); }
+  if (response.status === 403 || response.status === 429) return reply.code(502).send({ error: `다방이 요청을 막았습니다(${response.status}). 잠시 뒤 다시 눌러 주세요.` });
+  const parsed = response.ok ? parseDabangNear(await response.text()) : null;
+  if (!parsed) return reply.code(502).send({ error: '다방이 주소를 주지 않았습니다. 매물이 내려갔을 수 있습니다. 원본 열기로 확인해 주세요.' });
+  store.saveDabangAddress(id, roomId as string, parsed.address, parsed.lat, parsed.lng);
+  return { address: parsed.address };
 });
 
 app.post<{ Params: { id: string } }>('/api/listings/:id/ack', async (req) => {
@@ -344,7 +407,15 @@ app.post<{ Params: { id: string } }>('/api/listings/:id/ack', async (req) => {
   return { ok: true };
 });
 
+app.get('/api/regions', async () => ({ regions: regionCatalog() }));
+app.post<{ Body: { code?: string } }>('/api/areas/region', async (req, reply) => {
+  const input = regionArea(String(req.body?.code ?? ''));
+  if (!input) return reply.code(400).send({ error: '지원하는 지역 코드를 선택해 주세요.' });
+  const existing = store.listAreas().find((a) => a.region?.code === input.region!.code);
+  return existing ? store.updateArea(existing.id, { enabled: true }) : store.createArea(input);
+});
 app.post<{ Body: Omit<Area, 'id'> }>('/api/areas', async (req, reply) => {
+  if (req.body?.region) return reply.code(400).send({ error: '구·동은 지역 선택에서 추가해 주세요.' });
   const { name, lat, lng, radiusM, enabled } = req.body ?? ({} as Omit<Area, 'id'>);
   if (!name || !Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(radiusM)) {
     reply.code(400);
@@ -364,7 +435,20 @@ app.post('/api/areas/restore', async (_req, reply) => {
 });
 
 app.put<{ Params: { id: string }; Body: Partial<Omit<Area, 'id'>> }>('/api/areas/:id', async (req, reply) => {
-  const area = store.updateArea(Number(req.params.id), req.body ?? {});
+  const current = store.listAreas().find((a) => a.id === Number(req.params.id));
+  if (req.body?.region !== undefined || current?.region && Object.keys(req.body ?? {}).some((key) => key !== 'enabled')) {
+    return reply.code(400).send({ error: '구·동 경계는 반경으로 변경할 수 없습니다. 지역 선택에서 추가해 주세요.' });
+  }
+  const patch = { ...req.body };
+  if (patch.alertLimits !== undefined) {
+    try { patch.alertLimits = normalizeAlertLimits(patch.alertLimits); }
+    catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : '알림 금액을 확인해 주세요.' }); }
+  }
+  if (patch.radiusM !== undefined && (!Number.isFinite(patch.radiusM) || patch.radiusM < 100 || patch.radiusM > 5000)) return reply.code(400).send({ error: '알림 반경은 100~5000m로 설정해 주세요.' });
+  // 구나 동과 지하철역은 하나 이상씩 켜 둔다(둘 다 있어야 모든 사이트가 모은다).
+  const kindError = patch.enabled === false && current ? lastAreaKindError(store.listAreas(), current.id, { enabled: false }) : null;
+  if (kindError) return reply.code(409).send({ error: kindError });
+  const area = store.updateArea(Number(req.params.id), patch);
   if (!area) {
     reply.code(404);
     return { error: '지역을 찾지 못했습니다.' };
@@ -409,6 +493,12 @@ app.put<{ Body: { areas?: unknown } }>('/api/areas', async (req, reply) => {
     return { error: '크롬 확장에서 보낸 요청만 받습니다.' };
   }
   const input = Array.isArray(req.body?.areas) ? (req.body.areas as Record<string, unknown>[]) : null;
+  // Older extensions must not erase administrative identity or replace it with a circle.
+  if (store.listAreas().some((a) => a.region && !input?.some((row) => row.id === a.id && canonicalRegion(row.region)?.code === a.region!.code)) ||
+      input?.some((row) => row.region != null && !canonicalRegion(row.region))) {
+    return reply.code(409).send({ error: '구·동 설정은 대시보드에서 관리해 주세요. 확장 프로그램의 예전 지역 목록으로 덮어쓰지 않았습니다.' });
+  }
+  let invalidLimits = false;
   const list = input?.map((a) => ({
     id: typeof a.id === 'number' && Number.isInteger(a.id) ? a.id : null,
     name: typeof a.name === 'string' ? a.name.trim().slice(0, 40) : '',
@@ -416,18 +506,30 @@ app.put<{ Body: { areas?: unknown } }>('/api/areas', async (req, reply) => {
     lng: Number(a.lng),
     radiusM: Math.round(Number(a.radiusM)),
     enabled: a.enabled !== false,
+    ...(a.alertLimits === undefined ? {} : (() => { try { return { alertLimits: normalizeAlertLimits(a.alertLimits) }; } catch { invalidLimits = true; return {}; } })()),
+    ...(a.region ? regionArea((a.region as { code: string }).code)! : {}),
+    ...(a.region ? { enabled: a.enabled !== false } : {}),
   }));
   const valid = (a: NonNullable<typeof list>[number]) =>
-    !!a.name && Math.abs(a.lat) <= 90 && Math.abs(a.lng) <= 180 && a.radiusM >= 100 && a.radiusM <= 5000;
+    !!a.name && Math.abs(a.lat) <= 90 && Math.abs(a.lng) <= 180 && a.radiusM >= 100 && a.radiusM <= (a.region ? 50000 : 5000);
   // 노선 하나를 켜면 역이 75곳(1호선)까지 되므로 넉넉히 받는다.
-  if (!list || list.length > 150 || !list.every(valid)) {
+  if (invalidLimits || !list || list.length > 150 || !list.every(valid)) {
     reply.code(400);
     return { error: '지역 목록이 올바르지 않습니다(이름, 좌표, 반경 100~5000m, 150곳까지).' };
+  }
+  const before = missingAreaKinds(store.listAreas());
+  const lost = missingAreaKinds(list as Area[]).filter((kind) => !before.includes(kind));
+  if (lost.length) {
+    return reply.code(409).send({ error: lost.includes('station')
+      ? '마지막 지하철역은 끌 수 없습니다. 구나 동과 지하철역을 하나 이상씩 켜 두어야 모든 사이트가 모읍니다.'
+      : '마지막 구나 동은 끌 수 없습니다. 구나 동과 지하철역을 하나 이상씩 켜 두어야 모든 사이트가 모읍니다.' });
   }
   return { areas: store.replaceAreas(list), areasUpdatedAt: store.areasUpdatedAt() };
 });
 
-app.delete<{ Params: { id: string } }>('/api/areas/:id', async (req) => {
+app.delete<{ Params: { id: string } }>('/api/areas/:id', async (req, reply) => {
+  const kindError = lastAreaKindError(store.listAreas(), Number(req.params.id), { deleted: true });
+  if (kindError) return reply.code(409).send({ error: kindError });
   store.deleteArea(Number(req.params.id));
   return { ok: true };
 });
@@ -437,6 +539,9 @@ app.delete<{ Params: { id: string } }>('/api/areas/:id', async (req) => {
  * 예전 화면이 보내는 sources(['courtauction', 'onbid'])는 경매 범위로 본다.
  */
 app.post<{ Body: { visible?: boolean; scope?: unknown; sources?: unknown } }>('/api/runs', async (req, reply) => {
+  if (req.body?.scope != null && !RUN_SCOPES.some((s) => s.id === req.body.scope)) {
+    return reply.code(400).send({ error: '지원하지 않는 조회 범위입니다. 대시보드를 새로고침해 주세요.' });
+  }
   const scope = RUN_SCOPES.find((s) => s.id === req.body?.scope)?.id
     ?? (Array.isArray(req.body?.sources) && req.body!.sources.some((s) => s === 'courtauction' || s === 'onbid') ? 'auction' : undefined);
   try {
@@ -483,7 +588,48 @@ app.post<{ Body: { captures?: CaptureInput[] } }>('/api/naver/capture', { bodyLi
   return { stored, total: naverCaptureState().total };
 });
 
-app.post<{ Body: { jobId?: unknown; batchId?: unknown; captures?: unknown } }>('/api/browse/capture', { bodyLimit: EXTENSION_BODY_LIMIT }, async (req, reply) => {
+function browseAutoReply(reply: { code: (status: number) => unknown }, action: () => unknown) {
+  try { return action(); }
+  catch (error) {
+    const status = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number' ? error.statusCode : 503;
+    reply.code(status);
+    return { error: status < 500 && error instanceof Error ? error.message : '예약 조회 상태를 처리하지 못했습니다.' };
+  }
+}
+const fromDashboard = (origin: string | undefined) => !origin || ['http://localhost:8787', 'http://127.0.0.1:8787', 'http://localhost:5173', 'http://127.0.0.1:5173'].includes(origin);
+app.get('/api/browse/naver-preset',async (_req,reply)=>{reply.header('Cache-Control','no-store');return browseAutoReply(reply,()=>({preset:naverPresetState()}));});
+app.put<{Body:Parameters<typeof saveNaverPreset>[0]}>('/api/browse/naver-preset',async (req,reply)=>{
+  if(!fromExtension(req.headers.origin) && !fromDashboard(req.headers.origin)){reply.code(403);return {error:'확장 팝업이나 로컬 대시보드에서만 조건을 저장할 수 있습니다.'};}
+  return browseAutoReply(reply,()=>({preset:saveNaverPreset(req.body)}));
+});
+app.get('/api/browse/auto', async (_req, reply) => {
+  reply.header('Cache-Control', 'no-store');
+  return browseAutoReply(reply, browseAutoState);
+});
+app.put<{ Body: { enabled?: unknown; areaIds?: unknown; sites?: unknown } }>('/api/browse/auto', async (req, reply) => {
+  if (!fromDashboard(req.headers.origin)) { reply.code(403); return { error: '대시보드에서만 예약 설정을 바꿀 수 있습니다.' }; }
+  return browseAutoReply(reply, () => setBrowseAuto(req.body));
+});
+app.post<{ Body: { areaIds?: unknown; sites?: unknown } }>('/api/browse/auto/run', async (req, reply) => {
+  if (!fromDashboard(req.headers.origin)) { reply.code(403); return { error: '대시보드에서만 실행할 수 있습니다.' }; }
+  return browseAutoReply(reply, () => runBrowseAutoNow(req.body));
+});
+app.post<{ Body: Parameters<typeof pollBrowseAuto>[0] }>('/api/browse/auto/poll', async (req, reply) => {
+  if (!fromExtension(req.headers.origin)) { reply.code(403); return { error: '확장 프로그램에서 온 요청만 받습니다.' }; }
+  return browseAutoReply(reply, () => pollBrowseAuto(req.body));
+});
+app.post<{ Body: Parameters<typeof reportBrowseAuto>[0] }>('/api/browse/auto/report', async (req, reply) => {
+  if (!fromExtension(req.headers.origin)) { reply.code(403); return { error: '확장 프로그램에서 온 요청만 받습니다.' }; }
+  return browseAutoReply(reply, () => reportBrowseAuto(req.body));
+});
+
+app.get('/api/browse/scopes', async (_req, reply) => {
+  reply.header('Cache-Control', 'no-store');
+  try { return { scopes: readBrowseScopes(store.getSetting(BROWSE_SCOPES_KEY), store.listAreas()) }; }
+  catch { reply.code(409); return { error: '저장한 동별 범위와 현재 지역 설정을 확인해 주세요.' }; }
+});
+
+app.post<{ Body: { jobId?: unknown; batchId?: unknown; captures?: unknown; scope?: unknown; naverScope?: unknown } }>('/api/browse/capture', { bodyLimit: EXTENSION_BODY_LIMIT }, async (req, reply) => {
   if (!fromExtension(req.headers.origin)) {
     reply.code(403);
     return { error: '확장 프로그램에서 온 요청만 받습니다.' };
@@ -507,6 +653,8 @@ app.post('/api/browse/hints', async (req, reply) => {
 
 // 최신 순회의 단계, 집계, 이벤트만 로컬에 보관한다. 지역명, 좌표, URL, 매물 본문은 포함하지 않는다.
 const BROWSE_PROGRESS_KEY = 'browse_progress';
+// 확장 순차 조회도 이 서버 창에서 따라갈 수 있게 새 이벤트만 한 줄씩 남긴다.
+const browseConsoleLines = browseConsole();
 function latestBrowseProgress(): BrowseProgress | null {
   try {
     const stored = JSON.parse(store.getSetting(BROWSE_PROGRESS_KEY) ?? 'null');
@@ -525,6 +673,7 @@ app.post('/api/browse/progress', async (req, reply) => {
   const previous = latestBrowseProgress();
   if (previous && previous.updatedAt > progress.updatedAt) return { ok: true, ignored: true };
   store.setSetting(BROWSE_PROGRESS_KEY, JSON.stringify(progress));
+  for (const line of browseConsoleLines(progress)) console.log(line);
   return { ok: true };
 });
 

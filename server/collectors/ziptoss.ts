@@ -106,6 +106,11 @@ export const ziptoss: Collector = {
     const page = session.page;
     const stations = stationsFor(ctx.areas);
     const items: CollectedItem[] = [];
+    for (const area of ctx.areas) {
+      if (!stations.some((s) => distanceM(area.lat, area.lng, s.lat, s.lng) <= Math.max(area.radiusM + 600, 2000))) {
+        ctx.partial(`집토스 ${area.name}: 조회할 역을 찾지 못함`);
+      }
+    }
     ctx.log(
       stations.length
         ? `집토스: 역 페이지 ${stations.length}곳을 봅니다 (${stations.map((s) => s.name).join(', ')})`
@@ -121,6 +126,7 @@ export const ziptoss: Collector = {
       if (status === 403 || status === 429) throw new BlockedError(`집토스가 요청을 막았습니다(HTTP ${status}). 우회하지 않고 멈춥니다.`);
       if (status >= 400) {
         ctx.log(`집토스: ${station.name} 페이지 응답 ${status}, 건너뜁니다`);
+        ctx.partial(`집토스 ${station.name}: HTTP ${status}`);
         continue;
       }
       ctx.progress(`집토스, ${station.name} 주변 (${i + 1}/${stations.length}), 목록 읽는 중`);
@@ -133,6 +139,7 @@ export const ziptoss: Collector = {
       });
       if (!Array.isArray(raws)) {
         ctx.log(`집토스: ${station.name} 페이지에서 매물 데이터를 찾지 못했습니다(화면 구조가 바뀌었을 수 있음)`);
+        ctx.partial(`집토스 ${station.name}: 매물 목록을 읽지 못함`);
         continue;
       }
       session.record('ziptoss', 'data', url, status, `페이지에 담긴 매물 목록 ${raws.length}건 읽음`);

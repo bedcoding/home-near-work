@@ -1,6 +1,7 @@
 // 아이콘을 누르면 뜨는 창. 사이트별 켜기/끄기, 지역(지도에 그릴 범위) 고르기, 바로가기 버튼('한 번에 열기' 포함).
 const statusEl = document.getElementById('status');
 const say = (text) => (statusEl.textContent = text);
+document.getElementById('version').textContent = 'v' + chrome.runtime.getManifest().version;
 
 async function render() {
   const { sites: toggles = {} } = await chrome.storage.local.get('sites');
@@ -72,6 +73,15 @@ async function renderAreas() {
     const radius = li.querySelector('.radius');
     radius.setAttribute('aria-label', `${area.name} 반경`);
     radiusSelect(radius, area.radiusM);
+    if (area.region) {
+      radius.textContent = '';
+      const label = document.createElement('option');
+      label.textContent = area.region.kind === 'gu' ? '구 전체' : '법정동';
+      radius.appendChild(label);
+      radius.disabled = true;
+      li.querySelector('.icon').disabled = true;
+      li.querySelector('.icon').title = '구·동 삭제는 대시보드 지역 관리에서 합니다';
+    }
     radius.addEventListener('change', () => void edit((l) => l.map((a, j) => (j === i ? { ...a, radiusM: Number(radius.value) } : a)), `${area.name}: 반경 ${hnwRadiusText(Number(radius.value))}`));
     li.querySelector('.icon').addEventListener('click', () => {
       if (!confirm(`${area.name} 지역을 지울까요? 잠깐 안 보이게만 하려면 스위치를 끄세요.`)) return;
@@ -152,7 +162,7 @@ async function renderLinks() {
   for (const a of on) {
     const option = document.createElement('option');
     option.value = a.name;
-    option.textContent = `${a.name} ${hnwRadiusText(a.radiusM)}`;
+    option.textContent = a.region ? `${a.name} ${a.region.kind === 'gu' ? '전체' : '법정동'}` : `${a.name} ${hnwRadiusText(a.radiusM)}`;
     select.appendChild(option);
   }
   select.hidden = on.length === 0;

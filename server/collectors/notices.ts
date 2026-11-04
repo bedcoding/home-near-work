@@ -79,7 +79,10 @@ export const kbtrust: NoticeCollector = {
           postedAt: (b.createdDate ?? '').slice(0, 10) || null,
         });
       }
-      if ((data.totalItems ?? 0) > data.list.length) ctx.log(`KB부동산신탁 공매: '${gu}' ${data.totalItems}건 중 첫 쪽 ${data.list.length}건만 읽었습니다`);
+      if ((data.totalItems ?? 0) > data.list.length) {
+        ctx.log(`KB부동산신탁 공매: '${gu}' ${data.totalItems}건 중 첫 쪽 ${data.list.length}건만 읽었습니다`);
+        ctx.partial(`KB부동산신탁 공매: 전체 ${data.totalItems}건 중 첫 ${data.list.length}건만 확인함`, false);
+      }
       await session.pause(600);
     }
     const items = [...out.values()];
@@ -118,6 +121,7 @@ export const koreit: NoticeCollector = {
     if (blocked(r.status())) throw new BlockedError(`HTTP ${r.status()}`);
     const rows = ((await r.json()) as { result?: { value?: { Table?: { rows?: KoreitRow[] } } } }).result?.value?.Table?.rows;
     if (!Array.isArray(rows) || !rows.length) throw new Error('공매공고 목록을 읽지 못했습니다. 사이트 화면 구조가 바뀌었을 수 있습니다.');
+    ctx.partial('한국토지신탁 공매: 게시판 첫 페이지만 확인함', false);
     return rows
       .filter((row) => gus.some((gu) => (row.Title ?? '').includes(gu)))
       .map((row) => ({

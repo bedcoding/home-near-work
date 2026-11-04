@@ -245,7 +245,7 @@ function tradeRef(source: string, l: NormalizedListing, raw: unknown, points: Ma
   const ways: TradeMatch[] = [];
   if (typeof rep?.complexName === 'string' && rep.complexName.trim()) ways.push({ basis: 'name', gu, dong: l.dong, value: rep.complexName.trim() });
   const parcel = rep?.complexNumber != null && String(rep.complexNumber) ? points.get(`nv:${rep.complexNumber}`) : undefined;
-  const jibun = parcel?.status === 'ok' ? parcelJibun(parcel.addr, gu, l.dong) : null;
+  const jibun = parcel?.status === 'ok' && parcel.lat === l.lat && parcel.lng === l.lng ? parcelJibun(parcel.addr, gu, l.dong) : null;
   if (jibun) ways.push({ basis: 'parcel', gu, dong: l.dong, value: jibun });
   return compareTrades(ways, l.areaM2, sale);
 }
@@ -259,6 +259,7 @@ function naverZoneRef(l: NormalizedListing, raw: unknown, zones: Map<string, Lan
   if (complex == null || !String(complex) || !point) return { ...base, lot: null, pnu: null, why: '단지 번호나 좌표가 없어 확인하지 않음', check: null };
   const lot = `nv:${complex}`;
   const p = points.get(lot);
+  if (p && (p.lat !== point.lat || p.lng !== point.lng)) return { ...base, lot, pnu: null, why: null, check: null };
   if (!p || p.status === 'error') return { ...base, lot, pnu: null, why: p?.error ? `단지 좌표로 필지를 못 찾음(${p.error})` : null, check: null };
   if (p.status === 'none' || !p.pnu) return { ...base, lot, pnu: null, why: '단지 좌표에 필지가 없음', check: null };
   return { ...base, lot, pnu: p.pnu, parcel: p.addr, why: null, check: zones.get(lot) ?? null };
@@ -418,7 +419,13 @@ export function buildListingViews(): ListingView[] {
     changes.set(e.listing_id, { type: e.type as PriceChangeType, before: detail.before, after: detail.after, at: e.created_at });
   }
 
-  const parsed = rows.map((r) => ({ row: r, data: JSON.parse(r.data) as NormalizedListing }));
+  const dabangAddresses = store.dabangAddressMap();
+  // 다방은 목록에 주소가 없어 '주소 보기'로 받아 둔 지번 주소를 채운다(사이트가 준 주소가 있으면 그것을 쓴다).
+  const parsed = rows.map((r) => {
+    const data = JSON.parse(r.data) as NormalizedListing;
+    const address = !data.address && r.source === 'dabang' ? dabangAddresses.get(r.id) : undefined;
+    return { row: r, data: address ? { ...data, address } : data };
+  });
   const discarded = parsed.filter(({ row }) => verdicts.get(row.id)?.verdict === 'discard');
 
   return parsed.map(({ row, data }) => {

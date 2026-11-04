@@ -2,6 +2,8 @@
 // 대시보드의 '한 번에 열기'를 확장 백그라운드로 넘긴다.
 //   대시보드 → { source: 'hnw-dashboard', type: 'ping' | 'open-sites', area }
 //   확장     → { source: 'hnw-extension', type: 'hello', version, sites } / { type: 'opened', ok, names | error }
+//   대시보드 → { type: 'naver-filter-tabs' | 'naver-filter-state' | 'naver-preset-save', tabId, filterKey, areaIds, requestId }
+//   확장     → { type: 'naver-filter', requestId, requestType, tabs | context | preset | error }
 
 function hnwToPage(message) {
   window.postMessage({ source: 'hnw-extension', ...message }, location.origin);
@@ -9,7 +11,7 @@ function hnwToPage(message) {
 
 const HNW_BROWSE_RECONNECT = '순차 조회 백그라운드와 연결되지 않았습니다. 대시보드를 새로고침해 주세요. 계속되면 chrome://extensions에서 이 확장의 새로고침(↻)을 누른 뒤 대시보드도 새로고침해 주세요.';
 
-async function hnwBrowseRequest(message) {
+async function hnwBrowseRequest(message, field = 'state') {
   let timer;
   try {
     const res = await Promise.race([
@@ -17,7 +19,7 @@ async function hnwBrowseRequest(message) {
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), 10000); }),
     ]);
     // 예전 워커는 모르는 메시지에 undefined로 답한다. 설치 여부와 기능 준비 상태를 구분한다.
-    if (!res || typeof res !== 'object' || (!Object.hasOwn(res, 'state') && typeof res.error !== 'string')) return { error: HNW_BROWSE_RECONNECT };
+    if (!res || typeof res !== 'object' || (!Object.hasOwn(res, field) && typeof res.error !== 'string')) return { error: HNW_BROWSE_RECONNECT };
     return res;
   } catch {
     return { error: HNW_BROWSE_RECONNECT };
@@ -42,10 +44,18 @@ async function hnwHello() {
 window.addEventListener('message', (e) => {
   if (e.source !== window || e.origin !== location.origin || !e.data || e.data.source !== 'hnw-dashboard') return;
   if (e.data.type === 'ping') void hnwHello();
+  const requestId = typeof e.data.requestId === 'string' && e.data.requestId.length <= 120 ? e.data.requestId : undefined;
   if (['browse-command', 'browse-status'].includes(e.data.type)) {
-    const { type, command, areas, sites } = e.data;
-    const requestId = typeof e.data.requestId === 'string' && e.data.requestId.length <= 120 ? e.data.requestId : undefined;
-    void hnwBrowseRequest({ type, command, areas, sites }).then((res) => hnwToPage({ type: 'browse-status', requestId, requestType: type, ...res }));
+    const { type, command, areas, sites, naverSourceTabId, naverFilterKey } = e.data;
+    void hnwBrowseRequest({ type, command, areas, sites, naverSourceTabId, naverFilterKey }).then((res) => hnwToPage({ type: 'browse-status', requestId, requestType: type, ...res }));
+    return;
+  }
+  // 네이버 필터는 열린 네이버 탭의 주소에서 확장이 읽는다. 대시보드는 탭 목록과 조건 문구만 받는다.
+  const naverField = { 'naver-filter-tabs': 'tabs', 'naver-filter-state': 'context', 'naver-preset-save': 'preset' }[e.data.type];
+  if (naverField) {
+    const { type, tabId, filterKey, areaIds } = e.data;
+    void hnwBrowseRequest({ type, tabId, filterKey, areaIds }, naverField)
+      .then((res) => hnwToPage({ type: 'naver-filter', requestId, requestType: type, ...res }));
     return;
   }
   if (e.data.type !== 'open-sites') return;

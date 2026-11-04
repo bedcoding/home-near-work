@@ -153,7 +153,7 @@ export const gobang: Collector = {
     const { session } = ctx;
     const page = session.page;
     const items: CollectedItem[] = [];
-    const gus = gusFor(ctx.areas);
+    const gus = gusFor(ctx.areas, true);
     if (gus.length === 0) {
       ctx.log('고방: 켜진 지역이 서울 구에 닿지 않아 건너뜁니다');
       return items;
@@ -162,6 +162,7 @@ export const gobang: Collector = {
 
     // 화면이 스스로 불러오는 목록 응답을 옆에서 같이 읽는다.
     let sigungus: { sigunguCode: string; sigunguName: string; houseCount: number }[] = [];
+    let gotDistricts = false;
     let wantCode: string | null = null;
     let current = new Map<string, any>();
     /** 화면에 떠 있는 목록(마지막으로 받은 1쪽)의 구 코드와 그 1쪽. 사이트가 종류마다 지난번에 고른 구를 기억해 처음부터 띄워 둘 때가 있다. */
@@ -182,7 +183,10 @@ export const gobang: Collector = {
           const data: any = await r.json().catch(() => null);
           const list = Array.isArray(data?.result) ? (data.result as any[]) : null;
           if (url.includes(SIGUNGU_API)) {
-            if (list) sigungus = list;
+            if (list && status < 400) {
+              sigungus = list;
+              gotDistricts = true;
+            }
             return;
           }
           const q = listQuery(url);
@@ -205,6 +209,7 @@ export const gobang: Collector = {
     try {
       for (const cat of CATEGORIES) {
         sigungus = [];
+        gotDistricts = false;
         wantCode = null;
         shown = { code: null, list: [] };
         ctx.progress(`고방, ${cat.label} 목록 여는 중`);
@@ -214,12 +219,20 @@ export const gobang: Collector = {
         await page.waitForResponse((r) => r.url().includes(SIGUNGU_API), { timeout: 15000 }).catch(() => null);
         await session.pause(1200);
         await settle();
+        if (!gotDistricts) {
+          ctx.partial(`고방 ${cat.label}: 지역 목록을 읽지 못함`);
+          continue;
+        }
 
         for (const [gi, gu] of gus.entries()) {
           if (gi > 0) await session.rest();
           const sigungu = sigungus.find((s) => s.sigunguName === gu);
           if (!sigungu) {
             ctx.log(`고방: ${cat.label} ${gu} 칸이 없습니다(0곳)`);
+            continue;
+          }
+          if (!Number.isFinite(Number(sigungu.houseCount)) || Number(sigungu.houseCount) < 0) {
+            ctx.partial(`고방 ${cat.label} ${gu}: 전체 매물 수를 읽지 못함`);
             continue;
           }
           current = new Map();
@@ -233,6 +246,7 @@ export const gobang: Collector = {
           await settle();
           if (!picked) {
             ctx.log(`고방: ${cat.label} ${gu} 칸을 눌렀는데 목록이 바뀌지 않았습니다`);
+            ctx.partial(`고방 ${cat.label} ${gu}: 지역 선택 결과를 읽지 못함`);
             continue;
           }
           session.record('gobang', 'action', page.url(), null, `${cat.label}, ${gu} ${already ? '이미 골라져 있음' : '고르기'}`);
@@ -253,7 +267,10 @@ export const gobang: Collector = {
               lastCount = current.size;
             } else stalls += 1;
           }
-          if (current.size < sigungu.houseCount) ctx.log(`고방: ${cat.label} ${gu} ${sigungu.houseCount}곳 중 ${current.size}곳까지 불러와졌습니다`);
+          if (current.size < sigungu.houseCount) {
+            ctx.log(`고방: ${cat.label} ${gu} ${sigungu.houseCount}곳 중 ${current.size}곳까지 불러와졌습니다`);
+            ctx.partial(`고방 ${cat.label} ${gu}: 전체 ${sigungu.houseCount}곳 중 ${current.size}곳만 읽음`);
+          }
 
           const thumbs = await tagCards(session);
           const listings = [...current.values()].map((h) => normalize(h, thumbs[String(h.no)] ?? null)).filter((x): x is NormalizedListing => !!x);

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import L from 'leaflet';
+import { boundaryOf, regionBounds, regionColor, regionBoundaries } from '../../../shared/region-geometry';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { SOURCE_LABEL, type Area, type DealType, type ListingView, type PriceOption } from '../../../shared/types';
 import { loadCatalog, type CatalogStation } from '../areaActions';
@@ -8,7 +9,9 @@ import { KIND_LABEL, kindOf } from '../kinds';
 import { ledgerChips } from '../ledger';
 import { isRoomStay, roomRange, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
-import { manwon, perPyeong, priceText, pyeong } from '../format';
+import { distanceText, manwon, perPyeong, priceText, pyeong } from '../format';
+import { addWalkPin, ensureWalk, markDistances, moveWalkPin, pinCount, pinMax, removeWalkPin, renameWalkPin, setPinKind, walkPins, walkState, walkTimes } from '../walk';
+import { WALK_NAME_MAX, type PinKind } from '../../../shared/walk';
 import {
   checkZonesNow, loadZones, uploadZones, ZONE_COLOR, ZONE_GROUPS, ZONE_SOURCE_URL, zones, zonesBusy, zonesChecking, zonesError, zonesMessage, zonesOn,
 } from '../redevZones';
@@ -21,8 +24,9 @@ import type { RedevZoneFeature } from '../../../shared/types';
 // - 역(흰 동그라미, 켜진 지역은 검은 동그라미)을 누르면 그 역 지역을 켜고 끈다(station 이벤트, 확대 12 이상에서 보임).
 // - 휠 한 칸에 약 1.2배씩 확대하거나 축소한다.
 // - 정비사업 구역(서울플랜+ 파일을 넣었으면)을 매물과 역 아래 층에 칠한다. 마우스를 올리면 구역 이름, 사업 종류, 추진 단계가 보인다.
+// - '거리 핀'으로 자주 가는 곳에 핀(MAX_WALK_PINS개까지, 모든 지도가 같이 씀)을 꽂으면 정보 창과 매물 카드에 핀까지 걸어서 몇 분인지 보인다.
+//   '표시 핀'은 지도에 이름만 보이고(MAX_MARK_PINS개까지), 마우스를 올리면 거리 핀까지 걸어서 몇 분인지 보인다. 핀은 끌어서 옮기고, 누르면 이름이나 종류를 바꾸거나 뺀다.
 
-type Point = { lat: number; lng: number };
 
 const props = withDefaults(
   defineProps<{
@@ -41,24 +45,24 @@ const props = withDefaults(
      * 같은 값에서 매물만 바뀌면(10초마다 상태를 받을 때, 버림, 필터) 사용자가 보던 확대와 위치를 그대로 둔다.
      */
     fitKey?: string;
-    /** '위치 찍어 추가'(새 지역 만들기)를 둔다. 노선 탭처럼 켜진 지역과 상관없는 지도는 끈다. */
-    pickable?: boolean;
   }>(),
-  { listMode: true, fitKey: '', visible: true, pickable: true },
+  { listMode: true, fitKey: '', visible: true },
 );
-const emit = defineEmits<{ select: [ListingView]; reveal: [ListingView[]]; open: [ListingView]; pick: [Point]; area: [Area]; station: [CatalogStation] }>();
+const emit = defineEmits<{ select: [ListingView]; reveal: [ListingView[]]; open: [ListingView]; area: [Area]; station: [CatalogStation] }>();
 
 const el = ref<HTMLDivElement | null>(null);
-const picking = ref(false);
+/** 핀 꽂는 중이면 그 종류(다음에 누른 자리에 핀을 꽂는다) */
+const pinning = ref<PinKind | null>(null);
 /** 크게 보기: 화면 거의 전체를 덮는다. Esc로 돌아온다. */
 const big = ref(false);
 let map: L.Map | null = null;
-let base: L.LayerGroup | null = null; // 지역 원, 찍은 지역 표시
+let base: L.LayerGroup | null = null; // 지역 원, 역 이름이 아닌 지역 표시
 let dots: L.LayerGroup | null = null; // 매물
 let stationLayer: L.LayerGroup | null = null; // 역
 let stationRenderer: L.Renderer | null = null;
 let zoneLayer: L.GeoJSON | null = null; // 정비사업 구역
 let zoneRenderer: L.Renderer | null = null;
+let pinLayer: L.LayerGroup | null = null; // 거리 핀과 표시 핀
 const fileEl = ref<HTMLInputElement | null>(null);
 const stations = ref<CatalogStation[]>([]);
 /** 이 확대보다 멀리서 보면 역을 그리지 않는다(수도권 658곳이 한꺼번에 보이면 매물이 가려서). */
@@ -83,11 +87,18 @@ interface Group {
 
 const round6 = (v: number) => Math.round(v * 1e6) / 1e6;
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-const color = (l: ListingView) => (l.verdict === 'star' ? '#c48a0a' : l.isNew ? '#e5484d' : l.priceChange ? '#12825e' : '#1f5fbf');
-/** 묶음 색은 가장 눈여겨볼 매물을 따른다(신규 → 가격 변동 → 관심 → 나머지). */
-const groupColor = (items: ListingView[]) =>
-  items.some((l) => l.isNew) ? '#e5484d' : items.some((l) => l.priceChange) ? '#12825e' : items.some((l) => l.verdict === 'star') ? '#c48a0a' : '#1f5fbf';
+const MEH = '#aab2bd';
+const color = (l: ListingView) => (l.verdict === 'star' ? '#c48a0a' : l.verdict === 'meh' ? MEH : l.isNew ? '#e5484d' : l.priceChange ? '#12825e' : '#1f5fbf');
+/** 묶음 색은 가장 눈여겨볼 매물을 따른다(신규 → 가격 변동 → 관심 → 나머지, 모두 별로면 회색). 별로인 매물은 색을 정할 때 뺀다. */
+const groupColor = (all: ListingView[]) => {
+  const items = all.filter((l) => l.verdict !== 'meh');
+  if (!items.length) return MEH;
+  return items.some((l) => l.isNew) ? '#e5484d' : items.some((l) => l.priceChange) ? '#12825e' : items.some((l) => l.verdict === 'star') ? '#c48a0a' : '#1f5fbf';
+};
 const MUTED = '#8f99a6';
+/** 묶음에 별로가 아닌 신규 매물이 있으면 표시 오른쪽 위에 NEW 딱지를 붙인다. */
+const hasNew = (items: ListingView[]) => items.some((l) => l.isNew && l.verdict !== 'meh');
+const NEW_BADGE = '<em class="nw">NEW</em>';
 
 const positions = computed(() => new Set(props.background.filter((l) => l.lat != null).map((l) => `${l.lat!.toFixed(5)},${l.lng!.toFixed(5)}`)).size);
 
@@ -176,6 +187,7 @@ function popup(g: Group) {
     if (l.isNew) top.appendChild(line('mp-tag new', '신규'));
     if (l.priceChange) top.appendChild(line('mp-tag down', '가격 변동'));
     if (l.verdict === 'star') top.appendChild(line('mp-tag star', '관심'));
+    if (l.verdict === 'meh') top.appendChild(line('mp-tag', '별로'));
     for (const c of ledgerChips(l)) {
       const tag = line(`mp-tag ${c.tone}`, c.label);
       tag.title = c.tip;
@@ -189,10 +201,13 @@ function popup(g: Group) {
     const room = isRoomStay(l);
     const kindText = room ? null : KIND_LABEL[kindOf(l)];
     const roomText = room ? roomTypesText(l) : isAuction(l) ? null : l.roomLabel;
-    for (const f of [l.floor != null ? `${l.floor}층` : null, kindText, roomText, SOURCE_LABEL[l.source]]) {
+    const floorText = l.basement ? '반지하' : l.rooftop ? '옥탑' : l.floor != null ? `${l.floor}층` : null;
+    for (const f of [floorText, kindText, roomText, SOURCE_LABEL[l.source]]) {
       if (f) facts.appendChild(line('', f));
     }
     text.append(top, facts);
+    // 꽂은 핀마다 걸어서 몇 분
+    for (const w of walkTimes(l.id)) text.appendChild(line('mp-walk', `${w.pin.name}까지 걸어서 ${w.minutes}분(${distanceText(w.meters)})`));
     if (l.title) text.appendChild(line('mp-sub', l.title.slice(0, 40)));
     const actions = document.createElement('div');
     actions.className = 'mp-actions';
@@ -258,7 +273,7 @@ function drawStations() {
       fillColor: enabled ? '#16202e' : '#fff',
       fillOpacity: 1,
     })
-      .bindTooltip(`${esc(s.label)}<br><span class="st-tip">${enabled ? '누르면 이 지역 끄기' : '누르면 이 지역 켜기(1km)'}</span>`, { direction: 'top', offset: [0, -6] })
+      .bindTooltip(`${esc(s.label)}<br><span class="st-tip">${enabled ? '누르면 이 역 알림 끄기' : '누르면 이 역 알림 켜기(1km)'}</span>`, { direction: 'top', offset: [0, -6] })
       .on('click', () => emit('station', s))
       .addTo(stationLayer);
   }
@@ -307,6 +322,80 @@ function onZoneFile(e: Event) {
   if (file) void uploadZones(file);
 }
 
+/** 핀: 이름을 쓴 표시(아래 끝이 그 자리, 표시 핀은 색이 다름). 끌어서 옮기고, 누르면 이름, 종류 바꾸기와 빼기 창을 띄운다. */
+function drawPins() {
+  if (!pinLayer) return;
+  pinLayer.clearLayers();
+  for (const p of walkPins.value) {
+    const marker = L.marker([p.lat, p.lng], {
+      icon: L.divIcon({ className: p.kind === 'mark' ? 'walk-pin mark' : 'walk-pin', html: `<span>${esc(p.name)}</span>`, iconSize: [0, 0], iconAnchor: [0, 0], tooltipAnchor: [0, -34] }),
+      pane: 'walkpins',
+      draggable: true,
+      keyboard: false,
+    });
+    const help = `<span class="st-tip">${p.kind === 'mark' ? '표시 핀' : '거리 핀'}, 끌어서 옮기기, 누르면 이름 바꾸기와 빼기</span>`;
+    // 표시 핀은 마우스를 올릴 때마다 거리 핀까지 거리를 새로 읽어 보인다(옮긴 뒤 다시 잰 값도 바로 반영).
+    marker.bindTooltip(p.kind === 'mark' ? () => `${esc(p.name)}${markLines(p.id)}<br>${help}` : `${esc(p.name)}<br>${help}`, { direction: 'top' });
+    marker.on('dragend', () => {
+      const at = marker.getLatLng();
+      moveWalkPin(p.id, round6(at.lat), round6(at.lng));
+    });
+    marker.on('click', () => pinPopup(p.id));
+    marker.addTo(pinLayer);
+  }
+}
+
+/** 표시 핀 툴팁에 넣을 거리 핀마다 거리 줄. 길을 따라 잰 값이 있으면 걷는 시간과 거리, 없으면 곧은 거리. */
+function markLines(id: string) {
+  const list = markDistances(id);
+  if (!list.length) return '<br><span class="st-tip">거리 핀을 꽂으면 그 핀까지 거리가 보입니다</span>';
+  return list
+    .map((d) => {
+      const name = `<b>${esc(d.pin.name)}</b>까지`;
+      if (d.meters != null) return `<br>${name} 걸어서 ${d.minutes}분(${distanceText(d.meters)})`;
+      const why = walkState.value.loading ? '걷는 길 재는 중' : '걷는 길 못 잼';
+      return `<br>${name} 곧은 거리 ${distanceText(d.straight)} <span class="st-tip">(${why})</span>`;
+    })
+    .join('');
+}
+
+/** 핀을 누르면 뜨는 창: 이름 칸(Enter나 칸을 벗어나면 저장), 종류 바꾸기, '핀 빼기' */
+function pinPopup(id: string) {
+  const pin = walkPins.value.find((p) => p.id === id);
+  if (!pin || !map) return;
+  const box = document.createElement('div');
+  box.className = 'mp-actions pin-pop';
+  const name = document.createElement('input');
+  name.value = pin.name;
+  name.maxLength = WALK_NAME_MAX;
+  name.setAttribute('aria-label', '핀 이름');
+  name.addEventListener('change', () => renameWalkPin(id, name.value));
+  name.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') map?.closePopup();
+  });
+  const other: PinKind = pin.kind === 'mark' ? 'walk' : 'mark';
+  const swap = document.createElement('button');
+  swap.textContent = other === 'mark' ? '표시 핀으로' : '거리 핀으로';
+  if (pinCount(other) >= pinMax(other)) {
+    swap.disabled = true;
+    swap.title = `${other === 'mark' ? '표시' : '거리'} 핀은 ${pinMax(other)}개까지 꽂습니다`;
+  }
+  swap.addEventListener('click', () => {
+    map?.closePopup();
+    setPinKind(id, other);
+  });
+  const remove = document.createElement('button');
+  remove.textContent = '핀 빼기';
+  remove.addEventListener('click', () => {
+    map?.closePopup();
+    removeWalkPin(id);
+  });
+  box.append(name, swap, remove);
+  L.popup({ className: 'mp-popup', offset: [0, -30] }).setLatLng([pin.lat, pin.lng]).setContent(box).openOn(map);
+  name.focus();
+  name.select();
+}
+
 /** 지역이 이보다 많으면(노선 하나를 켠 때 등) 지역 이름을 늘 띄우지 않는다(겹쳐서 지도를 가림). */
 const AREA_LABEL_MAX = 12;
 
@@ -316,9 +405,22 @@ function drawBase() {
   base.clearLayers();
   const stationNames = new Set(stations.value.map((s) => s.name));
   const labels = props.areas.length <= AREA_LABEL_MAX;
+  const drawn = new Set<string>();
   for (const a of props.areas) {
-    const circle = L.circle([a.lat, a.lng], { radius: a.radiusM, color: '#16202e', weight: 1.5, fillOpacity: 0.03, dashArray: '6 6', interactive: false });
-    if (labels) circle.bindTooltip(a.name, { permanent: true, direction: 'top', className: 'area-label' });
+    if (a.region) {
+      const code = a.region.code.slice(0, 5);
+      const feature = boundaryOf(code);
+      if (feature && !drawn.has(code)) {
+        drawn.add(code);
+        const color = regionColor(code);
+        const layer = L.geoJSON(feature, { style: { color, fillColor: color, weight: 2.5, fillOpacity: 0.12 } });
+        layer.bindTooltip(`${esc(a.region.sigungu)} · ${a.region.kind === 'gu' ? '선택한 구 경계' : '참고용 구 경계 (동 경계 아님)'}`, { permanent: labels, direction: 'center', className: 'area-label' }).addTo(base);
+      }
+      continue;
+    }
+    const alarm = a.purpose === 'alert';
+    const circle = L.circle([a.lat, a.lng], { radius: a.radiusM, color: alarm ? '#087f5b' : '#16202e', weight: alarm ? 2.5 : 1.5, fillOpacity: alarm ? 0.045 : 0.03, dashArray: '6 6', interactive: false });
+    circle.bindTooltip(alarm ? `${esc(a.name)} · 알림 반경 ${distanceText(a.radiusM)}` : a.name, { permanent: labels && !alarm, direction: 'top', className: 'area-label' });
     circle.addTo(base);
     if (!stations.value.length || stationNames.has(a.name)) continue;
     L.marker([a.lat, a.lng], { icon: L.divIcon({ className: 'pick-pin', html: '<span></span>', iconSize: [16, 16], iconAnchor: [8, 8] }), keyboard: false, zIndexOffset: 800 })
@@ -336,6 +438,11 @@ function fitTo(points: L.LatLng[]) {
   }
   fitPending = false;
   const bounds = L.latLngBounds(points);
+  for (const a of props.areas) if (a.purpose === 'alert') bounds.extend(L.latLng(a.lat, a.lng).toBounds(a.radiusM * 2));
+  for (const a of props.areas) if (a.region) {
+    const b = regionBounds(a.region.code);
+    if (b) bounds.extend([[b[1], b[0]], [b[3], b[2]]]);
+  }
   if (!points.length) for (const a of props.areas) bounds.extend(L.latLng(a.lat, a.lng).toBounds(a.radiusM * 2));
   if (bounds.isValid()) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
 }
@@ -351,19 +458,37 @@ function drawDots(fit: boolean) {
   for (const g of groups()) {
     const c = g.strong || !dim ? groupColor(g.items) : MUTED;
     const price = (g.strong ? drawnPriceLevel >= 1 : !dim && drawnPriceLevel >= 2) ? cheapestPrice(g.items) : null;
+    // 신규가 든 표시는 빨갛게 칠하고 다른 표시 위에 그린다. NEW 딱지는 겹쳐서 지도를 가리지 않게 가격을 쓴 표시와
+    // PRICE_ZOOM.normal부터의 동그라미에만 붙이고, 연하게 칠한 매물(펼친 목록 밖)에는 붙이지 않는다.
+    const fresh = (g.strong || !dim) && hasNew(g.items);
+    const badge = fresh && (price || drawnPriceLevel >= 2) ? NEW_BADGE : '';
+    const zIndexOffset = (g.strong ? 500 : 0) + (fresh ? 300 : 0);
     let marker: L.Layer;
     if (price) {
       // 확대해 보면 가격을 쓴 표시(같은 자리 여러 건이면 가장 싼 것과 건수)
       marker = L.marker([g.lat, g.lng], {
         icon: L.divIcon({
           className: `price${g.strong ? ' strong' : ''}`,
-          html: `<span style="background:${c}">${esc(mapPrice(price))}${g.items.length > 1 ? `<b>${g.items.length}</b>` : ''}</span>`,
+          html: `<span style="background:${c}">${esc(mapPrice(price))}${g.items.length > 1 ? `<b>${g.items.length}</b>` : ''}${badge}</span>`,
           iconSize: [0, 0],
           iconAnchor: [0, 0],
           tooltipAnchor: [0, -10],
         }),
         keyboard: false,
-        zIndexOffset: g.strong ? 500 : 0,
+        zIndexOffset,
+      });
+    } else if (g.items.length === 1 && badge) {
+      // 신규 한 건: 딱지를 붙이려고 동그라미를 글자 없는 묶음 표시로 그린다(크기는 아래 동그라미와 같음).
+      const size = g.strong ? 14 : 10;
+      marker = L.marker([g.lat, g.lng], {
+        icon: L.divIcon({
+          className: `stack one${g.strong ? ' strong' : ''}`,
+          html: `<span style="background:${c}">${badge}</span>`,
+          iconSize: [size, size],
+          iconAnchor: [size / 2, size / 2],
+        }),
+        keyboard: false,
+        zIndexOffset,
       });
     } else if (g.items.length === 1) {
       marker = L.circleMarker([g.lat, g.lng], {
@@ -379,12 +504,12 @@ function drawDots(fit: boolean) {
       marker = L.marker([g.lat, g.lng], {
         icon: L.divIcon({
           className: `stack${g.strong ? ' strong' : ''}${dim && !g.strong ? ' dim' : ''}`,
-          html: `<span style="background:${c}">${g.items.length}</span>`,
+          html: `<span style="background:${c}">${g.items.length}${badge}</span>`,
           iconSize: [size, size],
           iconAnchor: [size / 2, size / 2],
         }),
         keyboard: false,
-        zIndexOffset: g.strong ? 500 : 0,
+        zIndexOffset,
       });
     }
     (marker as L.Marker).bindTooltip(tooltip(g.items), { direction: 'top' });
@@ -450,7 +575,7 @@ function onZoom() {
 
 function onKey(e: KeyboardEvent) {
   if (e.key !== 'Escape') return;
-  if (picking.value) picking.value = false;
+  if (pinning.value) pinning.value = null;
   else if (big.value) big.value = false;
 }
 
@@ -467,9 +592,12 @@ onMounted(() => {
   // 정비사업 구역은 역보다도 아래 층에 그린다(구역 수가 많아 canvas로).
   map.createPane('zones').style.zIndex = '350';
   zoneRenderer = L.canvas({ pane: 'zones', padding: 0.3 }).addTo(map);
+  // 핀은 지역 이름표(툴팁 층 650)보다 위, 정보 창(700)보다 아래에 그린다(역 자리에 꽂아도 이름표에 가리지 않게).
+  map.createPane('walkpins').style.zIndex = '660';
   stationLayer = L.layerGroup().addTo(map);
   base = L.layerGroup().addTo(map);
   dots = L.layerGroup().addTo(map);
+  pinLayer = L.layerGroup().addTo(map);
   map.on('moveend', drawStations);
   map.on('zoomend', onZoom);
   void loadCatalog()
@@ -482,11 +610,12 @@ onMounted(() => {
       /* 역 목록을 못 받으면 역만 안 보인다 */
     });
   map.on('click', (e: L.LeafletMouseEvent) => {
-    if (!picking.value) return;
-    picking.value = false;
-    emit('pick', { lat: round6(e.latlng.lat), lng: round6(e.latlng.lng) });
+    if (!pinning.value) return;
+    addWalkPin(round6(e.latlng.lat), round6(e.latlng.lng), pinning.value);
+    pinning.value = null;
   });
   drawBase();
+  drawPins();
   if (zonesOn.value) void loadZones();
   drawZones();
   fittedKey = props.fitKey;
@@ -520,6 +649,13 @@ watch(
   () => highlight(true),
 );
 watch([zones, zonesOn], drawZones);
+watch(walkPins, drawPins, { deep: true });
+// 조회나 확장으로 새 매물이 들어오면 그 매물까지 걷는 거리도 다시 묻는다.
+watch(
+  () => props.background,
+  (list) => ensureWalk(list.map((l) => l.id)),
+  { immediate: true },
+);
 watch(
   () => props.visible,
   async (visible) => {
@@ -548,12 +684,12 @@ onBeforeUnmount(() => {
   }
   // 늦게 끝난 역 목록 받기 등이 지운 지도에 그리지 않게 한다.
   map = null;
-  base = dots = stationLayer = zoneLayer = null;
+  base = dots = stationLayer = zoneLayer = pinLayer = null;
 });
 </script>
 
 <template>
-  <div class="ovmap" :class="{ picking, big }">
+  <div class="ovmap" :class="{ picking: pinning, big }">
     <div class="map-wrap">
       <div ref="el" class="map" role="region" aria-label="매물 위치 지도"></div>
       <button
@@ -561,17 +697,23 @@ onBeforeUnmount(() => {
         :title="`${background.length}건, 위치 ${positions}곳${listings.length ? `, 펼친 목록 ${listings.length}건 진하게` : ''}`"
         @click="big = !big"
       >{{ big ? '작게 보기 (Esc)' : '크게 보기' }}</button>
-      <p v-if="picking" class="pick-note">새 지역의 가운데를 누르세요 (Esc 취소)</p>
+      <p v-if="pinning" class="pick-note">{{ pinning === 'mark' ? '표시 핀' : '거리 핀' }}을 꽂을 곳을 누르세요 (Esc 취소)</p>
     </div>
     <div class="legend">
-      <span><i style="background:#e5484d"></i>신규</span>
+      <span :title="`새로 들어온 매물이 있는 자리는 빨간색으로 칠하고, 확대해서 가격이 보이면 오른쪽 위에 NEW 딱지를 붙입니다`"><i style="background:#e5484d"></i>신규<em class="nw-sample">NEW</em></span>
       <span><i style="background:#12825e"></i>가격 변동</span>
       <span><i style="background:#c48a0a"></i>관심</span>
       <span><i style="background:#1f5fbf"></i>나머지</span>
       <span><b class="stack-sample">3</b>같은 건물 매물 수</span>
       <span :title="`확대 ${PRICE_ZOOM.normal}부터(가격대를 펼쳤으면 그 매물은 ${PRICE_ZOOM.strong}부터) 동그라미 대신 가격을 씁니다. 월세는 보증금/월세(만원), 전세는 '전 1.5억'처럼, 같은 자리 여러 건은 가장 싼 것과 건수`"><b class="price-sample">500/40</b>확대하면 가격</span>
-      <span><i class="st-sample"></i>역: 누르면 지역 켜고 끄기</span>
-      <span><i class="pick-sample"></i>찍은 지역: 누르면 끄기</span>
+      <span v-for="a in areas.filter(a => a.region)" :key="a.id"><i :style="{ background: regionColor(a.region!.code) }"></i>{{ a.region!.sigungu }}{{ a.region!.kind === 'dong' ? ' (참고용 구 경계)' : ' 경계' }}</span>
+      <span v-if="areas.some(a => a.region)" :title="regionBoundaries.metadata.attribution">구 경계 {{ regionBoundaries.metadata.date }} · <a href="https://github.com/vuski/admdongkor" target="_blank" rel="noopener">SGIS / admdongkor</a> · CC BY 4.0</span>
+      <span v-if="areas.some(a => a.purpose === 'alert')"><i style="background:transparent;border:2px dashed #087f5b"></i>초록 점선: 알림 구역</span>
+      <span v-for="a in areas.filter(a => a.purpose === 'alert')" :key="`alert-${a.id}`">{{ a.name }} {{ distanceText(a.radiusM) }}</span>
+      <span><i class="st-sample"></i>역: 누르면 이 역 알림 켜고 끄기</span>
+      <span v-if="pinCount('walk')"><b class="pin-sample">핀</b>거리 핀</span>
+      <span v-if="pinCount('mark')"><b class="pin-sample mark">핀</b>표시 핀</span>
+      <span v-if="walkPins.length">핀: 끌어서 옮기기, 누르면 이름과 종류, 빼기</span>
       <template v-if="zonesOn && zones?.count">
         <span v-for="g in ZONE_GROUPS" :key="g.id"><i class="zone-sample" :style="{ background: `${g.color}33`, borderColor: g.color }"></i>{{ g.name }}</span>
         <span
@@ -587,9 +729,32 @@ onBeforeUnmount(() => {
       </template>
     </div>
     <div class="bar">
-      <button v-if="pickable" class="btn btn-sm" :class="{ on: picking }" title="누른 뒤 지도에서 한 곳을 누르면 그 자리를 가운데로 1km 지역이 생깁니다" @click="picking = !picking">
-        {{ picking ? '취소' : '위치 찍어 추가' }}
+      <button
+        class="btn btn-sm" :class="{ on: pinning === 'walk' }" :disabled="pinning !== 'walk' && pinCount('walk') >= pinMax('walk')"
+        :title="pinCount('walk') >= pinMax('walk')
+          ? `거리 핀은 ${pinMax('walk')}개까지 꽂습니다. 핀을 누르면 빼거나 표시 핀으로 바꿀 수 있습니다`
+          : '누른 뒤 지도에서 회사처럼 자주 가는 곳을 누르면 핀이 꽂히고, 매물 카드와 정보 창에 핀까지 걸어서 몇 분인지 보입니다'"
+        @click="pinning = pinning === 'walk' ? null : 'walk'"
+      >
+        {{ pinning === 'walk' ? '취소' : '거리 핀' }}
       </button>
+      <button
+        class="btn btn-sm" :class="{ on: pinning === 'mark' }" :disabled="pinning !== 'mark' && pinCount('mark') >= pinMax('mark')"
+        :title="pinCount('mark') >= pinMax('mark')
+          ? `표시 핀은 ${pinMax('mark')}개까지 꽂습니다`
+          : '누른 뒤 지도에서 누른 자리에 이름 붙은 핀을 꽂습니다(걷는 시간은 재지 않음)'"
+        @click="pinning = pinning === 'mark' ? null : 'mark'"
+      >
+        {{ pinning === 'mark' ? '취소' : '표시 핀' }}
+      </button>
+      <span
+        v-if="walkState.loading" class="zone-note"
+        title="오픈스트리트맵 길 데이터를 처음 받거나 받은 지 30일이 지났으면 30초쯤 걸립니다"
+      >걷는 시간 재는 중…</span>
+      <span v-else-if="walkState.error" class="zone-note err" role="alert">{{ walkState.error }}</span>
+      <span v-else-if="walkState.missing.length" class="zone-note err">
+        {{ walkPins.filter((p) => walkState.missing.includes(p.id)).map((p) => p.name).join(', ') }} 근처에 길이 없어 못 잼
+      </span>
       <label class="zone-toggle" title="재개발과 재건축, 모아타운, 재정비촉진, 공공주택 복합사업 구역을 칠합니다(서울시 서울플랜+ 파일을 넣어야 보임)">
         <input v-model="zonesOn" type="checkbox"> 정비구역 칠하기
       </label>
@@ -656,7 +821,27 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 1px #16202e; border-radius: 1px; transform: rotate(45deg);
 }
 .legend .pick-sample { display: inline-block; width: 9px; height: 9px; margin: 0 6px 0 2px; vertical-align: 0; }
+/* 핀: 크기 0인 표시 칸 위에 이름 상자를 세우고, 아래 꼭지 끝이 핀 자리 */
+:deep(.walk-pin span), .pin-sample {
+  display: inline-block; padding: 2px 8px; border-radius: 8px; white-space: nowrap;
+  background: #6741d9; color: #fff; font: 700 12px/1.4 var(--font); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .4);
+}
+:deep(.walk-pin span) { position: absolute; left: 0; bottom: 9px; transform: translateX(-50%); cursor: grab; }
+:deep(.walk-pin span)::after {
+  content: ''; position: absolute; left: 50%; top: 100%; margin-left: -6px;
+  border: 6px solid transparent; border-top-color: #6741d9; border-bottom: 0;
+}
+/* 표시 핀은 주황 */
+:deep(.walk-pin.mark span), .pin-sample.mark { background: #d9480f; }
+:deep(.walk-pin.mark span)::after { border-top-color: #d9480f; }
+.pin-sample { margin-right: 4px; padding: 0 6px; border-width: 1.5px; font-size: 11px; }
+:deep(.mp-walk) { color: #5235b5; font-weight: 700; }
+:deep(.pin-pop) { flex-wrap: nowrap; }
+:deep(.pin-pop input) {
+  width: 9em; min-height: 32px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; font: 600 13px var(--font);
+}
 :deep(.stack span) {
+  position: relative; box-sizing: border-box;
   display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%;
   color: #fff; font: 700 11px/1 var(--font); border: 1.5px solid #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
 }
@@ -676,6 +861,14 @@ onBeforeUnmount(() => {
 :deep(.price.strong span) { padding: 2px 6px; font-size: 12px; border-width: 2px; }
 :deep(.price.sel span) { outline: 3px solid #16202e; outline-offset: 1px; }
 .price-sample { margin-right: 4px; background: #1f5fbf; box-shadow: 0 0 0 1px #1f5fbf; }
+/* 신규 딱지: 표시 오른쪽 위 모서리에 걸친다. 누르면 아래 표시가 눌리게 한다. */
+:deep(.nw), .nw-sample {
+  padding: 0 3px; border-radius: 4px; border: 1px solid #e5484d; background: #fff;
+  color: #e5484d; font: italic 800 9px/1.25 var(--font); letter-spacing: .02em; white-space: nowrap;
+}
+:deep(.nw) { position: absolute; top: -9px; right: -14px; box-shadow: 0 1px 2px rgba(0, 0, 0, .3); pointer-events: none; }
+:deep(.stack.one .nw) { top: -11px; right: -20px; }
+.nw-sample { display: inline-block; margin-left: 4px; vertical-align: 1px; }
 .legend .st-sample { width: 10px; height: 10px; border: 2px solid #16202e; background: #fff; box-sizing: border-box; }
 :deep(.st-tip) { color: var(--muted); font-size: 12px; }
 :deep(.mp) { display: grid; gap: 8px; max-height: 340px; overflow: auto; font: 13px/1.45 var(--font); }
@@ -694,6 +887,7 @@ onBeforeUnmount(() => {
 :deep(.mp-tag.warn) { background: #fff4d6; color: #8a5a00; cursor: help; }
 :deep(.mp-actions) { display: flex; flex-wrap: wrap; gap: 6px; }
 :deep(.mp-actions button), :deep(.mp-actions a) {
+  display: inline-flex; align-items: center;
   min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font: 600 13px var(--font); cursor: pointer;
 }
 :deep(.mp-more) { color: var(--muted); }

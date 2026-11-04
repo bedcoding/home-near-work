@@ -4,6 +4,7 @@ import * as store from './db.js';
 import { DATA_DIR, ROOT } from './config.js';
 import { isRunning, startRun } from './runner.js';
 import { CAPTURE_SOURCES, type AutoCheckState } from '../shared/types.js';
+import { enqueueScheduledBrowse, resetBrowseAutoSchedule } from './browse-auto.js';
 
 // 정해진 때에 알아서 조회한다. 두 가지가 있다.
 // - 자동 확인(full): 정한 요일(또는 매일)과 시각에 '조회하기'와 같은 조회(모든 사이트와 공고).
@@ -11,6 +12,7 @@ import { CAPTURE_SOURCES, type AutoCheckState } from '../shared/types.js';
 // 그 시각에 서버가 켜져 있으면 서버가 돌린다. 서버가 그 시각 뒤에 켜졌으면 여기서는 돌리지 않는다(바탕 화면 아이콘으로 켜기만 해서는 조회하지 않음).
 // 윈도우에서는 작업 스케줄러에 같은 시각들을 걸어 두어(syncWindowsTask), 그 시각에 또는 놓쳤으면 다음에 컴퓨터를 켤 때
 // 대시보드를 창 없이 켜고 놓친 확인을 돌리게 한다(runMissedCheck, 자동 확인이 먼저).
+// 한 회차는 한 번만 돌린다. 실패하거나 일부만 봐도 다시 돌리지 않고, 실패한 곳은 조회 끝 알림으로 알린다.
 // 설정: auto_check_time('HH:MM' 또는 'off', 없으면 22:30), auto_check_day('0'~'6' 요일, 없거나 'daily'면 매일),
 // auto_check_visible('0'이면 창 없이), auto_check_last_day(마지막으로 처리한 확인 시각의 날짜),
 // notice_check_time('HH:MM', 없거나 'off'면 끔), notice_check_last_day.
@@ -29,6 +31,16 @@ type Kind = 'full' | 'notices';
 const KINDS: Kind[] = ['full', 'notices'];
 const LAST_DAY: Record<Kind, string> = { full: 'auto_check_last_day', notices: 'notice_check_last_day' };
 const KIND_NAME: Record<Kind, string> = { full: '자동 확인', notices: '공고 확인' };
+/** 다른 조회가 끝나기를 기다리는 회차(slot은 확인 시각 ms) */
+const ATTEMPT_KEY: Record<Kind, string> = { full: 'auto_check_attempt', notices: 'notice_check_attempt' };
+type Attempt = { slot: number };
+
+function readAttempt(kind: Kind): Attempt | null {
+  try {
+    const a = JSON.parse(store.getSetting(ATTEMPT_KEY[kind]) ?? 'null') as Attempt | null;
+    return a && Number.isFinite(a.slot) ? a : null;
+  } catch { return null; }
+}
 
 const isTime = (v: unknown): v is string => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
 const isDay = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 6;
@@ -72,41 +84,54 @@ function latestSlot(now: Date, time: string | null, day: number | null): Date | 
 const slotOf = (kind: Kind, now: Date) =>
   kind === 'full' ? latestSlot(now, autoCheckTime(), autoCheckDay()) : latestSlot(now, noticeCheckTime(), null);
 
-/** since(ms) 뒤에 시작한 조회 중 매물 사이트를 모두 돈 것이 있는지(경매만 조회, 탭 하나만 조회, 공고만 확인, 크롬 확장 기록은 뺀다). */
+/**
+ * since(ms) 뒤에 시작한 조회 중 매물 사이트를 돈 것이 있는지(일부만 봤거나 실패하거나 중단한 조회도 친다.
+ * 경매만 조회, 탭 하나만 조회, 공고만 확인, 크롬 확장 기록은 뺀다).
+ */
 function siteRunSince(since: number): boolean {
   return store
-    .listRuns(20)
+    .runsSince(since)
     .some(
       (r) =>
-        Date.parse(r.startedAt) >= since &&
         !r.scope &&
         !r.line &&
-        (r.summary?.sources ?? []).some((s) => s.source !== 'courtauction' && s.source !== 'onbid' && !CAPTURE_SOURCES.includes(s.source)),
+        (r.summary?.sources ?? []).some((s) => s.source !== 'courtauction' && s.source !== 'onbid' && (s.coverage || !CAPTURE_SOURCES.includes(s.source))),
     );
 }
 
 /** since(ms) 뒤에 시작한 조회 중 공고를 모두 모은 것(공고만 확인, 또는 매물 사이트를 돈 조회)이 있는지. */
 function noticeRunSince(since: number): boolean {
-  return siteRunSince(since) || store.listRuns(20).some((r) => r.noticesOnly && Date.parse(r.startedAt) >= since);
+  return siteRunSince(since) || store.runsSince(since).some((r) => r.noticesOnly);
 }
 
 /**
- * 확인 시각 slot의 확인을 한 번만 돌린다. 자동 확인은 매일이면 새 소식이 있을 때만, 요일을 정했으면 새 소식이 없어도 결과 알림을 띄운다.
- * 공고 확인은 창 없이 공고만 모은다(알림은 runner의 noticesOnly 규칙).
+ * 확인 시각 slot의 확인을 한 번만 돌린다. 다른 조회가 돌고 있으면 기다렸다가 다음 tick에 다시 보고,
+ * 시작한 뒤에는 실패하거나 일부만 보거나 중단돼도 다시 돌리지 않는다. 공고 확인은 창 없이 공고만 모은다(알림은 runner의 noticesOnly 규칙).
  */
 function runSlot(kind: Kind, slot: Date): MissedCheckResult {
+  // 확장 순회는 일반 수집기의 최근 실행 여부와 별도로 회차를 관리한다.
+  if (kind === 'full') {
+    try { enqueueScheduledBrowse(slot.getTime()); }
+    catch { console.warn('다방 예약 요청을 보관하지 못했습니다. 예약 조회 상태를 확인해 주세요.'); }
+  }
   const day = localDay(slot);
   if (store.getSetting(LAST_DAY[kind]) === day) return 'done';
-  store.setSetting(LAST_DAY[kind], day);
-  if (isRunning()) {
-    console.log(`${KIND_NAME[kind]}: 다른 조회가 돌고 있어 이번에는 건너뜁니다.`);
-    return 'skipped';
-  }
+  const done = () => {
+    store.setSetting(LAST_DAY[kind], day);
+    store.setSetting(ATTEMPT_KEY[kind], 'null');
+  };
   const since = slot.getTime() - RECENT_RUN_MS;
   if (kind === 'full' ? siteRunSince(since) : noticeRunSince(since)) {
+    done();
     console.log(`${KIND_NAME[kind]}: 확인 시각 무렵에 이미 조회해서 이번에는 건너뜁니다.`);
     return 'skipped';
   }
+  if (isRunning()) {
+    // 놓친 확인으로 시작한 회차도 다음 tick에서 이어 볼 수 있게 기다리는 회차를 남긴다.
+    store.setSetting(ATTEMPT_KEY[kind], JSON.stringify({ slot: slot.getTime() } satisfies Attempt));
+    return 'skipped';
+  }
+  done();
   try {
     if (kind === 'full') startRun(autoVisible(), undefined, { auto: true, quiet: autoCheckDay() === null });
     else startRun(false, undefined, { auto: true, noticesOnly: true });
@@ -122,7 +147,7 @@ function runDue(now: Date, startedBeforeOnly: boolean): MissedCheckResult {
   const results: MissedCheckResult[] = [];
   for (const kind of KINDS) {
     const slot = slotOf(kind, now);
-    if (!slot || (startedBeforeOnly && serverStartedAt > slot.getTime())) continue;
+    if (!slot || (startedBeforeOnly && serverStartedAt > slot.getTime() && readAttempt(kind)?.slot !== slot.getTime())) continue;
     const r = runSlot(kind, slot);
     if (r === 'started') return r;
     results.push(r);
@@ -163,9 +188,11 @@ export async function setAutoCheck(input: { time?: unknown; day?: unknown; visib
   if (input.noticeTime !== undefined) store.setSetting('notice_check_time', input.noticeTime ?? 'off');
   if (typeof input.visible === 'boolean') store.setSetting('auto_check_visible', input.visible ? '1' : '0');
   if (!fullChanged && !noticeChanged) return;
+  if (fullChanged) resetBrowseAutoSchedule();
   const now = new Date();
   for (const kind of KINDS) {
     if (kind === 'full' ? !fullChanged : !noticeChanged) continue;
+    store.setSetting(ATTEMPT_KEY[kind], 'null');
     const slot = slotOf(kind, now);
     if (slot) store.setSetting(LAST_DAY[kind], localDay(slot));
   }

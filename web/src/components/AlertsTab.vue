@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { REST_CHOICES, type AlertSettings, type Area } from '../../../shared/types';
-import { filterSummary, rangeText } from '../../../shared/filters';
+import { filterSummary } from '../../../shared/filters';
 import { manwon } from '../../../shared/format';
 import { api } from '../api';
 import { profile } from '../profile';
 import { M2_PER_PYEONG } from '../format';
 import { LOAN_RATE, LOAN_RATIO } from '../rentRate';
+import { WALK_KMH } from '../../../shared/walk';
+import { alertAreas } from '../../../shared/alert-scope';
 
 // 설정 탭: 조회 방식(창 띄우기, 자동 확인 요일과 시각)과 조회가 끝나면 띄울 알림. 바꾸면 바로 저장한다. 금액은 만원, 빈칸은 제한 없음.
 // 전월세 줄과 매매 목적 줄은 알림이 따로 뜬다. 조회 방식은 App이 저장한다(visible, autoTime, autoDay 이벤트).
-// 월세, 전세, 단기, 매매 줄은 서버가 매물 탭 필터를 받았으면(settings.homeFilter) 켜기만 고르고 조건은 그 필터를 보여 준다.
+// 수집·목록과 독립된 알림 조건. 역별 금액은 지역 관리에서, 공통 금액은 여기서 바꾼다.
 const props = defineProps<{
   settings: AlertSettings;
   /** 지역 전체(필터에서 고른 지역 이름을 찾는 데 씀) */
@@ -29,7 +31,7 @@ const props = defineProps<{
   /** 조회할 때 역, 지역, 구 사이에 쉬는 시간(초) */
   restSeconds: number;
 }>();
-const emit = defineEmits<{ changed: []; visible: [boolean]; autoTime: [string]; autoDay: [number | null]; noticeTime: [string] }>();
+const emit = defineEmits<{ changed: []; visible: [boolean]; autoTime: [string]; autoDay: [number | null]; noticeTime: [string]; manageAreas: [] }>();
 
 /** 요일 고르기 순서(월요일부터): 값과 이름 */
 const AUTO_DAYS = [1, 2, 3, 4, 5, 6, 0].map((d) => ({ value: d, name: `매주 ${'일월화수목금토'[d]}요일` }));
@@ -47,7 +49,7 @@ async function setRest(event: Event) {
 }
 
 type AmountRow = 'monthly' | 'jeonse' | 'short' | 'sale' | 'rooms' | 'auction' | 'aptAuction' | 'shopAuction' | 'landAuction';
-type Flag = 'rentNotices' | 'trustNotices' | 'subscriptions' | 'shopNotices' | 'landNotices' | 'priceChanges' | 'failures' | 'insideAreas' | 'captureSites';
+type Flag = 'rentNotices' | 'trustNotices' | 'subscriptions' | 'shopNotices' | 'landNotices' | 'priceChanges' | 'failures' | 'stationAreasOnly' | 'captureSites';
 type Group = 'rent' | 'buy' | 'common';
 
 /** 매물 줄: 켜기와 상한 칸(key는 그 줄 설정의 값 이름). unit '평'은 평으로 넣고 보이지만 설정에는 ㎡로 저장한다. 없으면 만원. */
@@ -79,12 +81,12 @@ const FLAGS: { key: Flag; name: string; group: Group; title?: string }[] = [
   { key: 'subscriptions', name: '청약', group: 'buy' },
   { key: 'shopNotices', name: '상가 공고', group: 'buy', title: 'LH 상가 공고와 선착순 상가 중 켜 둔 지역 근처 구의 것만 셉니다(구를 모르면 셈)' },
   { key: 'landNotices', name: '토지 공고', group: 'buy', title: 'LH 토지 공고와 선착순 토지 중 켜 둔 지역 근처 구의 것만 셉니다(구를 모르면 셈)' },
-  { key: 'priceChanges', name: '가격 변동', group: 'common', title: '바뀐 가격이 위에서 켠 조건에 맞는 매물만 셉니다' },
+  { key: 'priceChanges', name: '가격 인하', group: 'common', title: '가격이 내려간 뒤 알림 구역·금액 조건에 맞는 매물만 알립니다. 가격 인상과 방향을 판단할 수 없는 변동은 제외합니다' },
   { key: 'failures', name: '수집 실패', group: 'common' },
-  { key: 'insideAreas', name: '경매와 고시원은 반경 안만', group: 'common', title: '경매, 고시원과 쉐어는 켜 둔 지역 반경 안만 셉니다. 월세, 전세, 단기, 매매는 매물 탭 필터의 지역 조건을 씁니다' },
+  { key: 'stationAreasOnly', name: '개별 매물은 알림 역·반경 안만', group: 'common', title: '수집 구와 목록 필터와 별개로 켜 둔 역·반경 안의 매물만 알립니다. 끄면 모든 지역에서 금액 조건에 맞는 매물을 알립니다. 공고·조회 완료·오류 알림은 별도입니다' },
   {
     key: 'captureSites', name: '직접 보는 사이트', group: 'common',
-    title: '바탕 화면 아이콘이나 한 번에 열기로 연 사이트에서 다방 새 방(위 매물 조건에 맞는 것), 직방 새 방, KB와 네이버의 늘어난 매물 수를 알림 하나로 띄웁니다',
+    title: '네이버·다방·직방에서 실제 저장된 매물 중 알림 구역·금액 조건에 맞는 신규·가격 인하 매물만 알립니다. 구역을 확인할 수 없는 지도 집계 증가는 알림 대신 사이트별 기록에 남깁니다',
   },
 ];
 
@@ -94,28 +96,14 @@ const GROUPS: { id: Group; name: string; title: string }[] = [
   { id: 'common', name: '공통', title: '두 알림 모두에 씁니다' },
 ];
 
-/** 매물 탭 필터로 고르는 줄 */
-const HOME_ROWS: AmountRow[] = ['monthly', 'jeonse', 'short', 'sale'];
-const byFilter = (row: AmountRow) => !!props.settings.homeFilter && HOME_ROWS.includes(row);
 
 /** 매물 조건 줄에 보일 필터 조건(금액 칸은 줄마다 따로 보임) */
 const filterText = computed(() => {
   const f = props.settings.homeFilter;
-  if (!f) return '아직 못 받음';
-  return filterSummary(f, props.areas, false).join(', ') || '금액 말고는 조건 없음';
+  if (!f) return '공통 금액 조건만 사용';
+  return filterSummary({ ...f, insideAreas: true, areaIds: [], distanceMax: null }, [], true).join(', ') || '추가 조건 없음';
 });
 
-/** 거래 유형 줄에 보일 필터 금액 조건 */
-function filterAmountText(row: AmountRow): string {
-  const f = props.settings.homeFilter!;
-  const parts =
-    row === 'jeonse'
-      ? [rangeText('전세금', f.depositMin, f.depositMax, manwon)]
-      : row === 'sale'
-        ? [rangeText('매매가', f.priceMin, f.priceMax, manwon)]
-        : [rangeText('보증금', f.depositMin, f.depositMax, manwon), rangeText('월세', f.monthlyMin, f.monthlyMax, manwon)];
-  return parts.filter(Boolean).join(', ') || '금액 제한 없음';
-}
 
 const amountOf = (row: AmountRow, key: string) => (props.settings[row] as unknown as Record<string, number | null>)[key];
 /** 1억 이상이면 읽기 쉬운 금액('2억 5,000만') */
@@ -133,8 +121,8 @@ function setIncome(event: Event) {
   profile.value.income = v == null ? null : Math.round(v);
 }
 
-/** 내 조건의 전세대출 금리(연 %)나 대출 비율(%). 빈칸이면 기본값, 0 이하나 max를 넘으면 칸을 되돌린다. */
-function setLoan(key: 'loanRate' | 'loanRatio', max: number, event: Event) {
+/** 내 조건의 숫자 칸(전세대출 금리 연 %, 대출 비율 %, 걷는 속도 시속 km). 빈칸이면 기본값, 0 이하나 max를 넘으면 칸을 되돌린다. */
+function setNumber(key: 'loanRate' | 'loanRatio' | 'walkKmh', max: number, event: Event) {
   const input = event.target as HTMLInputElement;
   const text = input.value.trim();
   const v = text === '' ? null : Number(text);
@@ -177,7 +165,7 @@ async function setAmount(row: AmountRow, key: string, event: Event, unit?: '평'
 
 async function toggleFlag(key: Flag, event: Event) {
   const input = event.target as HTMLInputElement;
-  if (!(await save({ [key]: input.checked }))) input.checked = props.settings[key];
+  if (!(await save({ [key]: input.checked }))) input.checked = props.settings[key] ?? true;
 }
 </script>
 
@@ -185,6 +173,12 @@ async function toggleFlag(key: Flag, event: Event) {
   <section class="alerts">
     <h2>설정</h2>
     <p v-if="error" class="error">{{ error }}</p>
+    <div class="group">
+      <h3>매물 알림 범위</h3>
+      <p class="muted">수집 구·지도·목록 필터와 별개입니다. 알림 구역 {{ alertAreas(areas).length }}곳에서 공통 또는 역별 금액 조건에 맞는 신규·가격 인하 매물을 알립니다.</p>
+      <p v-if="settings.stationAreasOnly !== false && !alertAreas(areas).length" class="error">켜진 알림 구역이 없어 개별 매물 알림을 보내지 않습니다. 수집·저장은 계속됩니다.</p>
+      <button class="btn btn-sm" @click="emit('manageAreas')">알림 역·반경·역별 금액 관리</button>
+    </div>
 
     <div class="group">
       <h3>조회</h3>
@@ -245,18 +239,17 @@ async function toggleFlag(key: Flag, event: Event) {
       <ul class="list">
         <li
           v-if="g.id === 'rent'" class="row"
-          title="월세, 전세, 단기, 매매 알림은 매물 탭 왼쪽 필터와 같은 조건(금액, 평, 매물 유형, 층, 무옵션, 지역)으로 셉니다. 필터를 바꾸면 알림 조건도 같이 바뀝니다. 거래 유형은 아래 줄 켜기로 고릅니다."
+          title="목록 필터를 바꿔도 알림 조건은 바뀌지 않습니다. 공통 금액은 아래에서, 역별 금액과 반경은 지역 추가·관리에서 설정합니다."
         >
           <strong class="name">매물 조건</strong>
-          <span class="muted filter-text">매물 탭 필터: {{ filterText }}</span>
+          <span class="muted filter-text">독립 알림 조건: {{ filterText }} <button v-if="settings.homeFilter" class="btn btn-sm" @click="save({ homeFilter: null })">추가 조건 해제</button></span>
         </li>
         <li v-for="r in AMOUNT_ROWS.filter((x) => x.group === g.id)" :key="r.row" class="row" :class="{ off: !settings[r.row].on }" :title="r.title">
           <label class="check toggle">
             <input type="checkbox" :checked="settings[r.row].on" @change="toggleRow(r.row, $event)" />
             <strong>{{ r.name }}</strong>
           </label>
-          <span v-if="byFilter(r.row)" class="muted filter-text" title="매물 탭 필터의 금액입니다. 필터에서 바꿉니다">{{ filterAmountText(r.row) }}</span>
-          <span v-else class="fields">
+          <span class="fields">
             <label v-for="f in r.fields" :key="f.key" class="field">
               {{ f.label }}
               <input
@@ -277,7 +270,7 @@ async function toggleFlag(key: Flag, event: Event) {
     </div>
 
     <div class="group">
-      <h3 title="연소득을 넣으면 소득 기준을 넘어 받을 수 없는 정책대출과 지원을 지원 제도 탭과 매물 카드 대출 표시에서 뺍니다. 전세대출 금리와 비율은 매물 카드의 '대출 시 월'에 씁니다. 이 브라우저에만 저장합니다.">내 조건</h3>
+      <h3 title="연소득을 넣으면 소득 기준을 넘어 받을 수 없는 정책대출과 지원을 지원 제도 탭과 매물 카드 대출 표시에서 뺍니다. 전세대출 금리와 비율은 매물 카드의 '대출 시 월'에, 걷는 속도는 지도 핀까지 걷는 시간에 씁니다. 이 브라우저에만 저장합니다.">내 조건</h3>
       <ul class="list">
         <li class="row" :class="{ off: profile.income == null }" title="세전 연소득, 결혼했으면 부부 합산. 비우면 거르지 않습니다.">
           <strong class="name">연소득</strong>
@@ -308,13 +301,23 @@ async function toggleFlag(key: Flag, event: Event) {
           <span class="fields">
             <label class="field">
               금리
-              <input type="number" min="0.1" step="0.1" :placeholder="String(LOAN_RATE.rate)" :value="profile.loanRate ?? ''" aria-label="전세대출 금리(연 %)" @change="setLoan('loanRate', 30, $event)" />
+              <input type="number" min="0.1" step="0.1" :placeholder="String(LOAN_RATE.rate)" :value="profile.loanRate ?? ''" aria-label="전세대출 금리(연 %)" @change="setNumber('loanRate', 30, $event)" />
               %
             </label>
             <label class="field">
               대출 비율
-              <input type="number" min="1" step="5" :placeholder="String(LOAN_RATIO)" :value="profile.loanRatio ?? ''" aria-label="보증금 중 대출로 낼 몫(%)" @change="setLoan('loanRatio', 100, $event)" />
+              <input type="number" min="1" step="5" :placeholder="String(LOAN_RATIO)" :value="profile.loanRatio ?? ''" aria-label="보증금 중 대출로 낼 몫(%)" @change="setNumber('loanRatio', 100, $event)" />
               %
+            </label>
+          </span>
+        </li>
+        <li class="row" :title="`지도에 꽂은 핀까지 매물에서 걸어가는 시간에 씁니다. 비우면 시속 ${WALK_KMH}km(분당 약 ${Math.round((WALK_KMH * 1000) / 60)}m). 신호 대기와 오르막은 안 셉니다.`">
+          <strong class="name">걷는 속도</strong>
+          <span class="fields">
+            <label class="field">
+              시속
+              <input type="number" min="1" step="0.5" :placeholder="String(WALK_KMH)" :value="profile.walkKmh ?? ''" aria-label="걷는 속도(시속 km)" @change="setNumber('walkKmh', 15, $event)" />
+              km
             </label>
           </span>
         </li>

@@ -3,9 +3,11 @@ import type { SiteCaptureLine, SiteCaptureReport, SiteReport } from '../shared/t
 import { kbAreaCount, naverClusterCounts } from './capture-news.js';
 import { parseDabangRoomList } from './dabang-parse.js';
 import * as store from './db.js';
-import { zigbangStationName } from './link-hints.js';
+import { zigbangStationName, zigbangStations } from './link-hints.js';
 import { parseNaverList } from './naver-parse.js';
 import { parseZigbangStationIds } from './zigbang-parse.js';
+import { zigbangAreaCoverage } from './zigbang-client.js';
+import { collectionAreas } from '../shared/regions.js';
 
 // 사이트별 탭의 요약(GET /api/site-report): 소스마다 최근 조회 기록, 크롬 확장 사이트마다 사이트 화면이 센 수와 매물 내용까지 받은 수.
 
@@ -37,7 +39,19 @@ export function siteReport(): SiteReport {
   const since = new Date(Date.now() - DAYS * 86400000).toISOString();
   const captures: SiteReport['captures'] = {};
   for (const site of BROWSE_SITES) captures[site] = captureReport(site, since);
-  return { history: history(), captures };
+  return { history: history(), captures, scopeCoverage: { zigbang: zigbangCoverageRows() } };
+}
+
+/** 직방 서버 수집이 수집 지역마다 고르는 역 수와 역 1km 원들이 덮는 면적 비율. 지역과 역 목록이 그대로면 다시 세지 않는다. */
+let zigbangCoverageCache: { key: string; rows: NonNullable<NonNullable<SiteReport['scopeCoverage']>['zigbang']> } | null = null;
+function zigbangCoverageRows() {
+  const areas = collectionAreas(store.enabledAreas());
+  const stations = zigbangStations();
+  const key = JSON.stringify([areas.map((a) => [a.id, a.name, a.lat, a.lng, a.radiusM, a.region?.code ?? null]), stations.length, stations[0]?.id ?? null]);
+  if (zigbangCoverageCache?.key !== key) {
+    zigbangCoverageCache = { key, rows: areas.map((area) => ({ areaName: area.name, ...zigbangAreaCoverage(area, stations) })) };
+  }
+  return zigbangCoverageCache.rows;
 }
 
 /** 소스마다 그 소스가 들어간 조회(새것부터). 조회 중인 것은 뺀다. */
@@ -295,7 +309,7 @@ function hogangnonoLines(): SiteCaptureLine[] {
   ];
 }
 
-/** 당근: 지도 매물 수와 역 근처 매물 목록(아직 매물로 읽지 않음) */
+/** 당근: 지도 매물 수와 역 근처 매물 목록(주거용만 매물로 저장) */
 function daangnLines(): SiteCaptureLine[] {
   const lines: SiteCaptureLine[] = [];
   const rows = store.capturesSince('daangn', '%graphql%', new Date(Date.now() - DAYS * 86400000).toISOString()).reverse();
@@ -310,9 +324,9 @@ function daangnLines(): SiteCaptureLine[] {
     if (!Array.isArray(conn?.edges)) continue;
     lines.push({
       label: '받은 매물',
-      value: `${n(conn.edges.length)}건, 매물로 안 읽음`,
+      value: `${n(conn.edges.length)}건, 주거용만 저장`,
       at: r.at,
-      tip: '역 근처 매물 목록이 10개씩 오는데, 상가와 사무실이 섞여 있어 아직 대시보드 매물로 읽지 않습니다.',
+      tip: '역 근처 매물 목록이 10개씩 옵니다. 원룸, 투룸, 오피스텔, 아파트, 주택만 대시보드 매물로 저장하고 상가와 사무실은 뺍니다.',
       short: true,
     });
     break;

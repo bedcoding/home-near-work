@@ -83,6 +83,10 @@ a { color: var(--accent); }
 .muted { color: var(--muted); }
 .num { font-variant-numeric: tabular-nums; }
 
+/* 순차 조회와 지역 관리는 같은 폭과 좌우 여백을 사용한다. */
+.management-shell { width: min(calc(100% - 32px), 1440px); margin-inline: auto; }
+@media (max-width: 600px) { .management-shell { width: calc(100% - 24px); } }
+
 /* 접는 카드(details.fold > summary + .fold-body): 제목 줄을 누르면 펼친다. 펼치면 제목 줄 아래에 선을 긋는다. */
 .fold { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .fold > summary {

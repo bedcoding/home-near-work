@@ -45,7 +45,7 @@ function worker({ storageFails = false } = {}) {
     }
   };
   vm.runInContext(source('background.js'), context, { filename: 'background.js' });
-  assert.deepEqual(imported, ['sites.js', 'areas.js', 'browse-queue.js']);
+  assert.deepEqual(imported, ['sites.js', 'areas.js', 'naver-ledger.js', 'vendor/lz-string.js', 'naver-context.js', 'naver-fetch.js', 'browse-queue.js', 'browse-auto.js']);
   assert.equal(listeners.length, 1);
   return (sender = dashboard) => new Promise((resolve, reject) => {
     try {
@@ -61,7 +61,7 @@ test('실제 백그라운드와 순회 모듈이 최초 상태 요청에 명시�
 
 test('실제 백그라운드가 대시보드 외 발신자의 상태 요청에 오류를 반환한다', async () => {
   const response = await worker()({ frameId: 0, url: 'https://example.invalid/' });
-  assert.deepEqual(response, { error: '대시보드에서만 지역 순회를 조작할 수 있습니다.' });
+  assert.deepEqual(response, { error: '대시보드 또는 확장 팝업에서만 지역 순회를 조작할 수 있습니다.' });
 });
 
 test('실제 백그라운드가 저장소 읽기 실패를 응답 없는 상태로 삼키지 않는다', async () => {

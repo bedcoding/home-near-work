@@ -269,6 +269,7 @@
     for (const a of areas) {
       const p = proj.at({ lon: a.lng, lat: a.lat });
       // 메르카토르 지도에서는 그 위도에서 경도 1도 = 111,320m × cos(위도)
+      if (a.region) continue; // District geometry is shown on the dashboard; never substitute a radius.
       const radius = (a.radiusM / (111320 * Math.cos((a.lat * Math.PI) / 180))) * proj.pxPerLon;
       const cx = p.x - r.left;
       const cy = p.y - r.top;
@@ -276,11 +277,15 @@
       circle.setAttribute('cx', String(cx));
       circle.setAttribute('cy', String(cy));
       circle.setAttribute('r', String(radius));
+      if (a.purpose === 'alert') {
+        circle.style.stroke = '#087f5b';
+        circle.style.fill = 'rgba(8,127,91,.045)';
+      }
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       label.setAttribute('x', String(cx));
       label.setAttribute('y', String(Math.max(cy - radius - 6, 16)));
       label.setAttribute('text-anchor', 'middle');
-      label.textContent = `${a.name} ${a.radiusM >= 1000 ? `${a.radiusM / 1000}km` : `${a.radiusM}m`}`;
+      label.textContent = `${a.purpose === 'alert' ? '알림 · ' : ''}${a.name} ${a.radiusM >= 1000 ? `${a.radiusM / 1000}km` : `${a.radiusM}m`}`;
       svg.append(circle, label);
     }
     // 지도 그림(canvas) 바로 다음에 넣어서, 동그라미와 단지 표시보다 아래에 그려지게 한다.

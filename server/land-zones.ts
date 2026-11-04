@@ -22,6 +22,8 @@ export const ZONE_SOURCE = '토지이용계획';
 const TIMEOUT_MS = 20000;
 /** 확인한 필지를 다시 보는 간격(일). 구역 지정은 바뀌므로 한 달마다 다시 본다. 실패한 것은 매번 다시 본다. */
 const RECHECK_DAYS = 30;
+/** 좌표 조회 오류가 이어져도 매번 즉시 부르지 않고 한 시간 뒤에 재시도한다. */
+const POINT_RETRY_MS = 3600000;
 /** 한 번에 보는 필지 수(나머지는 다음에). 필지 하나에 요청 한 번이다. 좌표로 필지를 찾는 단지 수도 같다. */
 const MAX_LOTS = 150;
 /** 요청 사이 쉬는 시간(ms) */
@@ -264,7 +266,7 @@ let running: Promise<string> | null = null;
 
 /**
  * 아직 구역을 안 본(또는 RECHECK_DAYS가 지났거나 실패한) 필지의 토지이용계획을 읽어 저장한다. 그 전에 필지를 아직 못 찾은 네이버 아파트 단지는
- * 단지 좌표로 필지부터 찾는다(찾은 것은 다시 찾지 않고 실패한 것만 다시). 둘 다 한 번에 MAX_LOTS곳까지.
+ * 단지 좌표로 필지부터 찾는다(좌표가 바뀌면 다시, 필지 없음은 30일 뒤, 오류는 한 시간 뒤). 둘 다 한 번에 MAX_LOTS곳까지.
  * 결과 한 줄을 돌려주고 마지막 결과로 남긴다. 키가 없거나 토지이용계획 쪽 키, 서비스 문제면 오류를 던진다
  * (좌표 필지 찾기만 거절되면 그 단지들은 건너뛰고 결과 줄에 까닭을 붙인다). 이미 확인하는 중이면 그 결과를 기다린다.
  */
@@ -295,10 +297,21 @@ async function check(record: RecordRequest): Promise<string> {
   for (const l of buildListingViews()) {
     const z = l.zone;
     if (l.status !== 'active' || !z?.lot) continue;
+    if (z.basis === 'point' && z.point) {
+      const p = found.get(z.lot);
+      const at = Date.parse(p?.checkedAt ?? '');
+      const changed = p?.lat !== z.point.lat || p?.lng !== z.point.lng;
+      const retry = !p || changed || !Number.isFinite(at)
+        || (p.status === 'none' && at <= since)
+        || (p.status === 'error' && Date.now() - at >= POINT_RETRY_MS);
+      if (retry) {
+        points.set(z.lot, z.point);
+        lots.delete(z.lot);
+        continue;
+      }
+    }
     if (z.pnu) {
       if (due(z.lot)) lots.set(z.lot, z.pnu);
-    } else if (z.basis === 'point' && z.point && (!found.has(z.lot) || found.get(z.lot)!.status === 'error')) {
-      points.set(z.lot, z.point);
     }
   }
   const pointCount = { ok: 0, none: 0, failed: 0 };
@@ -310,16 +323,16 @@ async function check(record: RecordRequest): Promise<string> {
       store.savePointParcel(lot, point, p);
       if (p.status === 'ok' && p.pnu) {
         pointCount.ok++;
-        if (due(lot)) lots.set(lot, p.pnu);
+        if (found.get(lot)?.pnu !== p.pnu || due(lot)) lots.set(lot, p.pnu);
       } else pointCount.none++;
     } catch (e) {
       const message = errText(e);
+      pointCount.failed++;
+      store.savePointParcel(lot, point, { status: 'error', pnu: null, addr: null, error: message, checkedAt: new Date().toISOString() });
       if (e instanceof ZoneError && e.fatal) {
         pointStop = message;
         break;
       }
-      pointCount.failed++;
-      store.savePointParcel(lot, point, { status: 'error', pnu: null, addr: null, error: message, checkedAt: new Date().toISOString() });
     }
     await wait(PAUSE_MS);
   }

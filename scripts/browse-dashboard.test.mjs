@@ -99,3 +99,42 @@ test('messages from another window or origin cannot ask the worker to start a to
   await settle();
   assert.equal(h.requests.length, before);
 });
+
+test('Naver tab and filter requests keep their identity and start passes the chosen tab and key', async () => {
+  const tabs = [{ id: 99, title: 'Synthetic map', active: false }];
+  const h = harness(async (message) => message.type === 'naver-filter-tabs' ? { tabs }
+    : message.type === 'naver-filter-state' ? { context: { key: 'synthetic-key', tabId: message.tabId, conditions: [] } } : { state: null });
+  await settle();
+  h.receive('naver-filter-tabs', { data: { source: 'hnw-dashboard', type: 'naver-filter-tabs', requestId: 'synthetic-tabs' } });
+  await settle();
+  assert.deepEqual(h.messages.at(-1), { source: 'hnw-extension', type: 'naver-filter', requestId: 'synthetic-tabs', requestType: 'naver-filter-tabs', tabs, targetOrigin: 'http://localhost:8787' });
+  h.receive('naver-filter-state', { data: { source: 'hnw-dashboard', type: 'naver-filter-state', tabId: 99, requestId: 'synthetic-filter' } });
+  await settle();
+  assert.deepEqual(h.requests.at(-1), { type: 'naver-filter-state', tabId: 99 });
+  assert.equal(h.messages.at(-1).context.key, 'synthetic-key');
+  h.receive('browse-command', { data: { source: 'hnw-dashboard', type: 'browse-command', command: 'start', sites: ['naver'], areas: [], naverSourceTabId: 99, naverFilterKey: 'synthetic-key', requestId: 'synthetic-start' } });
+  await settle();
+  assert.equal(h.requests.at(-1).naverSourceTabId, 99);
+  assert.equal(h.requests.at(-1).naverFilterKey, 'synthetic-key');
+});
+
+test('a worker reply without the requested Naver field gives recovery steps instead of an empty list', async () => {
+  const h = harness(async () => ({ state: null }));
+  await settle();
+  h.receive('naver-filter-tabs', { data: { source: 'hnw-dashboard', type: 'naver-filter-tabs', requestId: 'synthetic-old' } });
+  await settle();
+  assert.equal(h.messages.at(-1).type, 'naver-filter');
+  assert.equal(h.messages.at(-1).requestId, 'synthetic-old');
+  assert.match(h.messages.at(-1).error, /새로고침/);
+  assert.equal(Object.hasOwn(h.messages.at(-1), 'tabs'), false);
+});
+
+test('saving a Naver preset forwards the tab, key and regions and returns the saved preset', async () => {
+  const h = harness(async (message) => message.type === 'naver-preset-save' ? { preset: { areaIds: message.areaIds, updatedAt: 1, summary: 'Synthetic', conditions: [] } } : { state: null });
+  await settle();
+  h.receive('naver-preset-save', { data: { source: 'hnw-dashboard', type: 'naver-preset-save', tabId: 99, filterKey: 'synthetic-key', areaIds: [7], requestId: 'synthetic-preset' } });
+  await settle();
+  assert.deepEqual(h.requests.at(-1), { type: 'naver-preset-save', tabId: 99, filterKey: 'synthetic-key', areaIds: [7] });
+  assert.equal(h.messages.at(-1).requestType, 'naver-preset-save');
+  assert.deepEqual(h.messages.at(-1).preset.areaIds, [7]);
+});

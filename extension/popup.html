@@ -7,16 +7,49 @@
   </head>
   <body>
     <header>
-      <h1>회사근처 내집마련</h1>
+      <h1>회사근처 내집마련 <span id="version" class="version"></span></h1>
       <p class="hint">켠 사이트에서 지도 동그라미를 누르면 '봤음'이 붙습니다.</p>
     </header>
+
+    <section class="collect" aria-labelledby="collect-title">
+      <div class="sec-head"><h2 id="collect-title">네이버 자동수집</h2><a href="http://localhost:8787/" target="_blank" rel="noopener">지역 관리 ↗</a></div>
+      <p class="hint">필터를 적용해 둔 네이버 매물 탭을 고르세요. 확인한 조건을 유지한 전용 창에서 선택 지역을 수집합니다.</p>
+      <div class="collect-filter">
+        <label for="collect-source">필터를 읽을 네이버 탭</label>
+        <select id="collect-source" aria-describedby="collect-filter"><option value="">네이버 탭을 찾는 중입니다.</option></select>
+        <div class="collect-source-actions"><button id="collect-source-refresh">탭 목록 새로고침</button><a href="https://fin.land.naver.com/map" target="_blank" rel="noopener">네이버 지도 열기 ↗</a></div>
+        <strong>시작 전에 인식한 필터 확인</strong>
+        <p id="collect-filter" role="status">현재 네이버 필터를 읽는 중입니다.</p>
+        <dl id="collect-filter-conditions" hidden></dl>
+        <button id="collect-filter-read">현재 필터 다시 읽기</button>
+      </div>
+      <div id="collect-areas" class="collect-areas"></div>
+      <button id="collect-start" class="primary" disabled>필터 확인 후 수집 가능</button>
+      <button id="collect-preset-save" disabled>이 조건과 지역을 예약용으로 저장</button>
+      <p id="collect-preset-notice" class="hint" role="status" hidden></p>
+      <p id="collect-empty" class="hint" role="status" hidden></p>
+      <p id="collect-error" role="alert" hidden></p>
+      <div id="collect-progress" aria-live="polite" hidden>
+        <p id="collect-run" class="hint"></p>
+        <strong id="collect-state"></strong>
+        <progress id="collect-bar" max="1" value="0" aria-label="지역 수집 진행"></progress>
+        <p id="collect-counts"></p><p id="collect-detail"></p>
+        <ul id="collect-results" class="collect-results"></ul>
+        <div class="collect-actions"><button id="collect-pause">중단</button><button id="collect-resume">이어하기</button><button id="collect-retry">미확인 지역 다시 수집</button></div>
+        <details><summary>최근 로그</summary><ol id="collect-log"></ol></details>
+      </div>
+      <p class="hint">팝업을 닫아도 계속합니다. 전용 조회 창은 열어 두세요. 받은 주변 매물도 저장하며, 접근 제한이 나오면 멈춥니다.</p>
+      <p class="hint">페이지 수신과 서버 저장을 확인한 뒤 3~5초를 랜덤으로 기다리고 다음 페이지를 요청합니다.</p>
+      <p class="hint">이어하기는 중단된 지역을 첫 페이지부터 새로 확인합니다. 완료한 지역은 유지합니다.</p>
+      <p class="hint">이어하기와 미확인 재수집은 해당 조회에 저장한 필터를 사용합니다. 조건을 바꾸려면 현재 필터로 새 수집을 시작하세요.</p>
+    </section>
 
     <section class="go">
       <div class="sec-head">
         <h2>바로 가기</h2>
         <select id="go-area" aria-label="어느 지역으로 열지" title="네이버와 피터팬은 이 지역 가운데로, 집토스는 가까운 역 페이지로 엽니다"></select>
       </div>
-      <button id="open-all" class="primary open-all" autofocus>한 번에 열기</button>
+      <button id="open-all" class="primary open-all">한 번에 열기</button>
       <p id="open-all-hint" class="hint open-hint"></p>
       <div id="go-links" class="go-links"></div>
     </section>
@@ -47,6 +80,8 @@
     <button id="snapshot" class="quiet">지금 화면 구조 보내기</button>
     <script src="sites.js"></script>
     <script src="areas.js"></script>
+    <script src="naver-ledger.js"></script>
     <script src="popup.js"></script>
+    <script src="popup-collect.js"></script>
   </body>
 </html>

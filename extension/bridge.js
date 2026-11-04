@@ -53,7 +53,7 @@ function snapshotKind(url) {
     return null;
   }
   if (!HNW_SITE) return null;
-  if (HNW_SITE.id === 'naver') return { articleClusters: 'map', clusteredArticles: 'list' }[name] || null;
+  if (HNW_SITE.id === 'naver') return { articleClusters: 'map', clusteredArticles: 'list', boundedArticles: 'list', legalDivisionArticleList: 'list' }[name] || null;
   return 'page';
 }
 

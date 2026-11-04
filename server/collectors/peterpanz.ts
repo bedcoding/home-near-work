@@ -153,14 +153,19 @@ export const peterpanz: Collector = {
     let bounds: any = null;
     let firstPageUrl: string | null = null;
     let orderId: string | null = null;
+    let blockedStatus: number | null = null;
     const pending: Promise<void>[] = [];
     const onResponse = (r: Response) => {
       const url = r.url();
       if (!url.includes(LIST_API)) return;
       pending.push(
         (async () => {
+          if (r.status() === 403 || r.status() === 429) {
+            blockedStatus = r.status();
+            return;
+          }
           const data: any = await r.json().catch(() => null);
-          if (!data) {
+          if (!data || r.status() >= 400 || data.totalCount == null || !Number.isFinite(Number(data.totalCount))) {
             session.record('peterpanz', 'data', url, r.status(), '응답을 읽지 못함');
             return;
           }
@@ -187,6 +192,7 @@ export const peterpanz: Collector = {
     };
     const settle = async () => {
       await Promise.allSettled(pending.splice(0));
+      if (blockedStatus) throw new BlockedError(`피터팬이 목록 요청을 막았습니다(HTTP ${blockedStatus}). 우회하지 않고 멈춥니다.`);
     };
 
     page.on('response', onResponse);
@@ -239,7 +245,12 @@ export const peterpanz: Collector = {
           const cover = coverage(area, bounds);
           if (cover) {
             ctx.log(`피터팬: ${area.name} ${cat.label} 지도 범위 남북 ${cover.heightKm.toFixed(1)}km × 동서 ${cover.widthKm.toFixed(1)}km, 목록 전체 ${total}건`);
-            if (cover.minMargin < area.radiusM) ctx.log(`피터팬: 지도 범위가 반경 ${area.radiusM}m를 다 덮지 못합니다(가장 짧은 쪽 ${Math.round(cover.minMargin)}m). 반경을 줄이면 빠짐이 없습니다`);
+            if (cover.minMargin < area.radiusM) {
+              ctx.log(`피터팬: 지도 범위가 반경 ${area.radiusM}m를 다 덮지 못합니다(가장 짧은 쪽 ${Math.round(cover.minMargin)}m)`);
+              ctx.partial(`피터팬 ${area.name} ${cat.label}: 지도 범위가 설정 반경을 덮지 못함`, false);
+            }
+          } else {
+            ctx.partial(`피터팬 ${area.name} ${cat.label}: 지도 조회 범위를 확인하지 못함`);
           }
 
           // 3) 목록을 휠로 내려 끝까지 불러온다. 새로 읽힌 카드는 차례로 칠한다.
@@ -286,6 +297,10 @@ export const peterpanz: Collector = {
                 return { status: r.status, json: type.includes('json') ? await r.json() : null };
               }, next.toString());
               if (res.status === 403 || res.status === 429) throw new BlockedError(`피터팬이 요청을 막았습니다(HTTP ${res.status}). 우회하지 않고 멈춥니다.`);
+              if (res.status >= 400 || !res.json || res.json.houses == null) {
+                ctx.partial(`피터팬 ${area.name} ${cat.label}: ${pageIndex}쪽 응답을 읽지 못함`);
+                break;
+              }
               const houses = Object.values(res.json?.houses ?? {}).flatMap((g: any) => Object.values(g ?? {}).flat()) as any[];
               for (const h of houses) if (h?.hidx) current.set(String(h.hidx), h);
               pagesLoaded = pageIndex;
@@ -294,6 +309,7 @@ export const peterpanz: Collector = {
             }
           }
           ctx.log(`피터팬: ${area.name} ${cat.label} 목록 ${total}건 중 ${current.size}건 읽음`);
+          if (current.size < total) ctx.partial(`피터팬 ${area.name} ${cat.label}: 전체 ${total}건 중 ${current.size}건만 읽음`);
 
           const shot = await session.screenshot('peterpanz', `${area.name}-${cat.label}`);
           for (const raw of current.values()) {

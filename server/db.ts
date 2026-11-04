@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { DATA_DIR, DB_PATH, RUNS_DIR } from './config.js';
 import { DEFAULT_AREAS, findStation } from './stations.js';
@@ -34,6 +35,16 @@ fs.mkdirSync(RUNS_DIR, { recursive: true });
 export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+
+const dataSession = randomUUID();
+let fileRevision = 0;
+/** DB 밖의 지도 파일 등도 저장을 마친 뒤 화면 갱신에 포함한다. */
+export function touchDataRevision() { fileRevision++; }
+/** 같은 연결의 쓰기와 다른 연결의 커밋을 모두 감지한다. */
+export function dataRevision(): string {
+  const { changes } = db.prepare('SELECT total_changes() AS changes').get() as { changes: number };
+  return `${dataSession}:${changes}:${db.pragma('data_version', { simple: true })}:${fileRevision}`;
+}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS areas (
@@ -190,6 +201,15 @@ if (!(db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]).some((c
 }
 
 export const nowIso = () => new Date().toISOString();
+if (!(db.prepare('PRAGMA table_info(areas)').all() as { name: string }[]).some((c) => c.name === 'region')) {
+  db.exec('ALTER TABLE areas ADD COLUMN region TEXT');
+}
+if (!(db.prepare('PRAGMA table_info(areas)').all() as { name: string }[]).some((c) => c.name === 'purpose')) {
+  db.exec("ALTER TABLE areas ADD COLUMN purpose TEXT; UPDATE areas SET purpose = CASE WHEN region IS NULL THEN 'alert' ELSE 'collection' END");
+}
+if (!(db.prepare('PRAGMA table_info(areas)').all() as { name: string }[]).some((c) => c.name === 'alert_limits')) {
+  db.exec('ALTER TABLE areas ADD COLUMN alert_limits TEXT');
+}
 /** days일 전 시각(ISO) */
 const daysAgoIso = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
 
@@ -201,6 +221,33 @@ const newsSince = () => daysAgoIso(NEWS_DAYS);
 // ---------- 설정 값 ----------
 
 db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+
+// 다방 방의 지번 주소. 목록 응답에는 주소가 없어서 카드의 '주소 보기'를 누를 때 방 하나씩 받아 둔다.
+// 매물 데이터(listings.data)와 따로 두어 다음 수집이 목록 응답으로 매물을 덮어써도 지워지지 않는다.
+db.exec(`
+CREATE TABLE IF NOT EXISTS dabang_addresses (
+  listing_id TEXT PRIMARY KEY,
+  room_id TEXT NOT NULL,
+  address TEXT NOT NULL,
+  lat REAL,
+  lng REAL,
+  fetched_at TEXT NOT NULL
+)`);
+
+/** 받아 둔 다방 주소(매물 id → 주소) */
+export function dabangAddressMap(): Map<string, string> {
+  return new Map((db.prepare('SELECT listing_id, address FROM dabang_addresses').all() as { listing_id: string; address: string }[]).map((r) => [r.listing_id, r.address]));
+}
+
+export function getDabangAddress(listingId: string): string | null {
+  return (db.prepare('SELECT address FROM dabang_addresses WHERE listing_id = ?').get(listingId) as { address: string } | undefined)?.address ?? null;
+}
+
+export function saveDabangAddress(listingId: string, roomId: string, address: string, lat: number | null, lng: number | null) {
+  db.prepare(`INSERT INTO dabang_addresses (listing_id, room_id, address, lat, lng, fetched_at) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(listing_id) DO UPDATE SET room_id = excluded.room_id, address = excluded.address, lat = excluded.lat, lng = excluded.lng, fetched_at = excluded.fetched_at`)
+    .run(listingId, roomId, address, lat, lng, new Date().toISOString());
+}
 
 // 공고(가격 없는 공매, 임대 공고). 곳마다 처음 모은 것은 기준으로만 저장하고(is_new 0), 그 뒤 새로 보인 것만 새 공고로 친다.
 db.exec(`
@@ -549,6 +596,8 @@ export function saveZoneCheck(lot: string, pnu: string, c: LandZoneCheck) {
 
 /** 좌표로 찾은 필지 하나 */
 export interface PointParcel {
+  lat?: number;
+  lng?: number;
   status: 'ok' | 'none' | 'error';
   pnu: string | null;
   addr: string | null;
@@ -558,19 +607,23 @@ export interface PointParcel {
 
 /** 네이버 단지 좌표로 찾은 필지(key → 결과) */
 export function pointParcels(): Map<string, PointParcel> {
-  const rows = db.prepare('SELECT key, status, pnu, addr, error, checked_at FROM point_parcels').all() as {
-    key: string; status: PointParcel['status']; pnu: string | null; addr: string | null; error: string | null; checked_at: string;
+  const rows = db.prepare('SELECT key, lat, lng, status, pnu, addr, error, checked_at FROM point_parcels').all() as {
+    key: string; lat: number; lng: number; status: PointParcel['status']; pnu: string | null; addr: string | null; error: string | null; checked_at: string;
   }[];
-  return new Map(rows.map((r) => [r.key, { status: r.status, pnu: r.pnu, addr: r.addr, error: r.error, checkedAt: r.checked_at }]));
+  return new Map(rows.map((r) => [r.key, { lat: r.lat, lng: r.lng, status: r.status, pnu: r.pnu, addr: r.addr, error: r.error, checkedAt: r.checked_at }]));
 }
 
 /** 좌표로 찾은 필지를 저장한다(같은 key는 바꾼다). */
 export function savePointParcel(key: string, point: { lat: number; lng: number }, p: PointParcel) {
-  db.prepare(
+  db.transaction(() => {
+    // 필지가 달라지거나 확인 불가로 바뀌면 이전 필지의 구역 결과를 재사용하지 않는다.
+    db.prepare('DELETE FROM land_zones WHERE lot = ? AND (pnu IS NOT ? OR ? <> \'ok\')').run(key, p.pnu, p.status);
+    db.prepare(
     `INSERT INTO point_parcels (key, lat, lng, status, pnu, addr, error, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(key) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, status = excluded.status, pnu = excluded.pnu,
        addr = excluded.addr, error = excluded.error, checked_at = excluded.checked_at`,
-  ).run(key, point.lat, point.lng, p.status, p.pnu, p.addr, p.error, p.checkedAt);
+    ).run(key, point.lat, point.lng, p.status, p.pnu, p.addr, p.error, p.checkedAt);
+  })();
 }
 
 /** 단지 세대수를 넣거나 고친다. households가 null이면 지운다. */
@@ -856,8 +909,8 @@ export function ackNotices(ids?: number[]) {
 export const areasUpdatedAt = () => getSetting('areas_updated_at');
 const touchAreas = () => setSetting('areas_updated_at', nowIso());
 
-interface AreaRow { id: number; name: string; lat: number; lng: number; radius_m: number; enabled: number }
-const toArea = (r: AreaRow): Area => ({ id: r.id, name: r.name, lat: r.lat, lng: r.lng, radiusM: r.radius_m, enabled: !!r.enabled });
+interface AreaRow { id: number; name: string; lat: number; lng: number; radius_m: number; enabled: number; region: string | null; purpose: Area['purpose']; alert_limits: string | null }
+const toArea = (r: AreaRow): Area => ({ id: r.id, name: r.name, lat: r.lat, lng: r.lng, radiusM: r.radius_m, enabled: !!r.enabled, purpose: r.purpose ?? (r.region ? 'collection' : 'alert'), alertLimits: r.alert_limits ? JSON.parse(r.alert_limits) : null, ...(r.region ? { region: JSON.parse(r.region) } : {}) });
 
 export function listAreas(): Area[] {
   return (db.prepare('SELECT * FROM areas ORDER BY id').all() as AreaRow[]).map(toArea);
@@ -869,8 +922,8 @@ export function enabledAreas(): Area[] {
 
 export function createArea(input: Omit<Area, 'id'>): Area {
   const info = db
-    .prepare('INSERT INTO areas (name, lat, lng, radius_m, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(input.name, input.lat, input.lng, Math.round(input.radiusM), input.enabled ? 1 : 0, nowIso());
+    .prepare('INSERT INTO areas (name, lat, lng, radius_m, enabled, created_at, region, purpose, alert_limits) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(input.name, input.lat, input.lng, Math.round(input.radiusM), input.enabled ? 1 : 0, nowIso(), input.region ? JSON.stringify(input.region) : null, input.region ? 'collection' : 'alert', input.alertLimits ? JSON.stringify(input.alertLimits) : null);
   touchAreas();
   return toArea(db.prepare('SELECT * FROM areas WHERE id = ?').get(info.lastInsertRowid) as AreaRow);
 }
@@ -879,8 +932,9 @@ export function updateArea(id: number, patch: Partial<Omit<Area, 'id'>>): Area |
   const current = db.prepare('SELECT * FROM areas WHERE id = ?').get(id) as AreaRow | undefined;
   if (!current) return null;
   const next = { ...toArea(current), ...patch };
-  db.prepare('UPDATE areas SET name = ?, lat = ?, lng = ?, radius_m = ?, enabled = ? WHERE id = ?')
-    .run(next.name, next.lat, next.lng, Math.round(next.radiusM), next.enabled ? 1 : 0, id);
+  next.purpose = next.region ? 'collection' : 'alert';
+  db.prepare('UPDATE areas SET name = ?, lat = ?, lng = ?, radius_m = ?, enabled = ?, region = ?, purpose = ?, alert_limits = ? WHERE id = ?')
+    .run(next.name, next.lat, next.lng, Math.round(next.radiusM), next.enabled ? 1 : 0, next.region ? JSON.stringify(next.region) : null, next.purpose, next.alertLimits ? JSON.stringify(next.alertLimits) : null, id);
   touchAreas();
   return next;
 }
@@ -954,6 +1008,16 @@ export function finishRun(id: number, status: 'done' | 'error' | 'stopped', summ
 
 export function listRuns(limit = 30): RunInfo[] {
   return (db.prepare('SELECT * FROM runs ORDER BY id DESC LIMIT ?').all(limit) as RunRow[]).map(toRun);
+}
+
+/** 예약 확인은 확장 기록 수와 상관없이 해당 시간대의 조회를 모두 확인한다. */
+export function runsSince(since: number): RunInfo[] {
+  return (db.prepare('SELECT * FROM runs WHERE started_at >= ? ORDER BY id DESC').all(new Date(since).toISOString()) as RunRow[]).map(toRun);
+}
+
+export function runInfo(id: number): RunInfo | null {
+  const row = db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as RunRow | undefined;
+  return row ? toRun(row) : null;
 }
 
 export function getRun(id: number): RunDetail | null {

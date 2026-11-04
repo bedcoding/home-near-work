@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { hasRegions, regionRelation, selectedArea } from '../../../shared/regions';
 import { DEAL_LABEL, SOURCE_LABEL, type Area, type ListingView, type PriceOption, type TradeRef, type Verdict } from '../../../shared/types';
 import { ago, dateTime, distanceText, manwon, money, nearest, perPyeong, priceAmount, priceText, pyeong, pyeongExact } from '../format';
 import { auctionSiteLinks, claimsChip, isAuction, saleDateOf, saleDay, type ExpectedPrice } from '../auction';
@@ -9,10 +10,13 @@ import { isRoomStay, roomRange as rangeOf, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
 import { redevChip } from '../zones';
 import { loanView } from '../loans';
-import { cannotGet } from '../profile';
+import { cannotGet, profile } from '../profile';
+import { walkTimes } from '../walk';
+import { WALK_KMH } from '../../../shared/walk';
 import { convertedRent, loanMonthly } from '../rentRate';
 import { ledgerChips } from '../ledger';
 import CountTooltip from './CountTooltip.vue';
+import { dabangAddressBusy, dabangAddressErrors, dabangAddresses, loadDabangAddress } from '../dabangAddress';
 
 const props = defineProps<{
   listing: ListingView;
@@ -26,7 +30,13 @@ const props = defineProps<{
 const emit = defineEmits<{ open: []; verdict: [Verdict | null]; source: []; raw: []; select: [] }>();
 
 const l = computed(() => props.listing);
+// 다방은 목록에 주소가 없다. '주소 보기'를 누르면 그 방 하나의 지번 주소만 받아 온다.
+const addressText = computed(() => l.value.address ?? dabangAddresses.get(l.value.id) ?? '주소 모름');
+const canLoadAddress = computed(() => l.value.source === 'dabang' && !l.value.address && !dabangAddresses.has(l.value.id));
 const near = computed(() => nearest(props.listing, props.areas));
+const regionMode = computed(() => hasRegions(props.areas));
+const relation = computed(() => regionRelation(props.listing, props.areas));
+const scopeLabel = computed(() => selectedArea(props.listing, props.areas)?.name ?? (relation.value === 'unknown' ? '지역 모름' : '주변'));
 const kind = computed(() => kindOf(props.listing));
 /** 정비사업 구역 안이면 물딱지 표시(지금 사면 조합원이 못 되는지와 판 사람 조건) */
 const redev = computed(() => redevChip(props.listing, kind.value === 'land'));
@@ -46,6 +56,16 @@ const roomRange = computed(() => rangeOf(props.listing));
 const converted = computed(() => (room.value ? null : convertedRent(props.listing)));
 /** 보증금을 전세대출로 낼 때 매달 나가는 돈(월세 + 이자) */
 const loanCost = computed(() => (room.value ? null : loanMonthly(props.listing)));
+/** 지도에 꽂은 핀마다 걸어서 몇 분(핀이 없거나 이 매물까지 못 쟀으면 빈 목록) */
+const walks = computed(() => walkTimes(props.listing.id));
+/** 걷는 시간 칸의 설명: 핀마다 길을 따라 잰 거리와 시간, 잰 방법 */
+const walkTip = computed(() =>
+  [
+    ...walks.value.map((w) => `${w.pin.name}까지 길을 따라 ${distanceText(w.meters)}, 걸어서 ${w.minutes}분`),
+    `걷는 속도 시속 ${profile.value.walkKmh ?? WALK_KMH}km(설정 탭 내 조건에서 바꿈). 오픈스트리트맵 길로 잰 값이라 신호 대기, 오르막, 단지 출입문은 안 셉니다.`,
+    '다방처럼 좌표를 흐리게 주는 사이트는 조금 다를 수 있습니다.',
+  ].join('\n'),
+);
 /** 매물 위치를 가운데로 여는 네이버 부동산 지도(그 자리 단지와 실거래가 확인용). */
 const naverMapUrl = computed(() =>
   l.value.lat != null && l.value.lng != null ? `https://fin.land.naver.com/map?center=${naverCenter(l.value.lat, l.value.lng)}&zoom=16` : null,
@@ -168,7 +188,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 
 <template>
   <article
-    class="card" :class="{ selected, discarded: l.verdict === 'discard', gone: l.status === 'gone', 'no-thumb': noThumb }"
+    class="card" :class="{ selected, discarded: l.verdict === 'discard', meh: l.verdict === 'meh', gone: l.status === 'gone', 'no-thumb': noThumb }"
     @click="emit('select')"
   >
     <div v-if="!noThumb" class="thumb" :style="l.thumbnail ? { backgroundImage: `url(${JSON.stringify(l.thumbnail)})` } : undefined">
@@ -202,9 +222,18 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
           </div>
         </template>
         <div class="stat dist">
-          <b>{{ near ? distanceText(near.distance) : '?' }}</b>
-          <small :title="near?.area.name">{{ near ? near.area.name : '위치 모름' }}</small>
+          <b>{{ regionMode ? scopeLabel : near ? distanceText(near.distance) : '?' }}</b>
+          <small :title="near?.area.name">{{ regionMode ? (relation === 'selected' ? '선택한 지역' : '기본 목록 밖') : near ? near.area.name : '위치 모름' }}</small>
         </div>
+        <CountTooltip v-if="walks.length" :text="walkTip" :max-width="460">
+          <div v-if="walks.length === 1" class="stat walk">
+            <b>{{ walks[0].minutes }}분</b>
+            <small>{{ walks[0].pin.name }}까지</small>
+          </div>
+          <div v-else class="stat walk many">
+            <span v-for="w in walks" :key="w.pin.id"><b>{{ w.minutes }}분</b><small>{{ w.pin.name }}</small></span>
+          </div>
+        </CountTooltip>
         <div v-if="expect?.length" class="expect">
           <div v-for="(e, i) in expect" :key="e.label" class="stat" :class="{ first: i === 0 }" :title="e.title">
             <b><span v-if="i === 0" class="deal">예상가</span>{{ manwon(e.price) }}</b>
@@ -228,6 +257,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
         </template>
         <span v-if="tradeChip" class="chip trade-chip" :class="tradeChip.tone" :title="tradeChip.title">{{ tradeChip.text }}</span>
         <span v-if="l.verdict === 'star'" class="chip chip-star">★ 관심</span>
+        <span v-else-if="l.verdict === 'meh'" class="chip chip-muted">별로</span>
         <span v-if="l.relistedOf" class="chip chip-muted" :title="`원래 매물: ${l.relistedOf}`">재등록이라 숨김</span>
         <span v-else-if="l.verdict === 'discard'" class="chip chip-muted">버림</span>
         <span v-if="l.similarToDiscarded" class="chip chip-warn">버림한 매물과 비슷</span>
@@ -250,7 +280,13 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       </div>
 
       <div class="meta muted">
-        <span class="addr">{{ l.address ?? '주소 모름' }}</span>
+        <span class="addr">{{ addressText }}</span>
+        <button
+          v-if="canLoadAddress" type="button" class="btn btn-ghost btn-sm addr-load" :disabled="dabangAddressBusy.has(l.id)"
+          :title="dabangAddressErrors.get(l.id) ?? '다방에서 이 방의 지번 주소를 받아 옵니다(한 번 받으면 저장됩니다)'"
+          @click.stop="loadDabangAddress(l.id)"
+        >{{ dabangAddressBusy.has(l.id) ? '받는 중' : dabangAddressErrors.has(l.id) ? '다시 받기' : '주소 보기' }}</button>
+        <span v-if="dabangAddressErrors.has(l.id)" class="addr-error">{{ dabangAddressErrors.get(l.id) }}</span>
         <span v-for="x in extras" :key="x">{{ x }}</span>
       </div>
 
@@ -270,7 +306,13 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       <button class="btn btn-sm" :class="{ on: l.verdict === 'star' }" title="관심 (S)" @click="emit('verdict', l.verdict === 'star' ? null : 'star')">
         {{ l.verdict === 'star' ? '관심 해제' : '★ 관심' }}
       </button>
-      <button class="btn btn-sm" title="버림 (X)" @click="emit('verdict', l.verdict === 'discard' ? null : 'discard')">
+      <button
+        class="btn btn-sm" :class="{ on: l.verdict === 'meh' }" title="별로: 목록에 남기되 흐리게 맨 뒤로 (B)"
+        @click="emit('verdict', l.verdict === 'meh' ? null : 'meh')"
+      >
+        {{ l.verdict === 'meh' ? '별로 해제' : '별로' }}
+      </button>
+      <button class="btn btn-sm" title="버림: 없어진 매물, 목록에서 숨김 (X)" @click="emit('verdict', l.verdict === 'discard' ? null : 'discard')">
         {{ l.verdict === 'discard' ? '되돌리기' : '✕ 버림' }}
       </button>
     </div>
@@ -300,6 +342,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 .card:hover { border-color: var(--line-strong); }
 .card.selected { border-color: var(--ink); box-shadow: 0 0 0 2px var(--ink) inset; }
 .card.discarded, .card.gone { opacity: .72; }
+.card.meh:not(.selected) { opacity: .55; }
 .thumb {
   grid-area: thumb;
   width: 112px; height: 84px; border-radius: 8px; background: var(--surface-2) center/cover no-repeat;
@@ -326,6 +369,11 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 .stat.floor { min-width: 52px; }
 .stat.dist { width: 80px; }
 .stat.floor b, .stat.dist b { font-weight: 700; color: var(--ink-2); }
+.stat.walk { min-width: 56px; cursor: help; }
+.stat.walk b { color: #5235b5; }
+/* 핀이 여럿이면 핀마다 한 줄('27분 회사')로 쌓는다 */
+.stat.walk.many span { display: flex; align-items: baseline; gap: 4px; }
+.stat.walk.many b { font-size: 15px; }
 /* 경매 탭 예상 낙찰가: 숫자 줄 아래 같은 모양(큰 숫자, 아래 작은 설명)의 둘째 줄. 첫 칸은 가격 칸과 같은 너비라 설명이 길면 칸 안에서 줄을 바꾼다. */
 .expect { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 16px; }
 .expect .stat.first { width: 160px; }
@@ -348,6 +396,8 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 .title { flex: 1 1 0; min-width: 6em; margin-left: 4px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .source { margin-left: auto; font-size: 13px; font-weight: 600; }
 .meta { display: flex; flex-wrap: wrap; gap: 0 14px; font-size: 13px; }
+.meta .addr-load { min-height: 0; padding: 0 6px; margin-left: -10px; font-size: 12px; line-height: 1.6; }
+.meta .addr-error { color: var(--new); }
 
 .more { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
 .more .btn { min-height: 30px; padding: 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; }

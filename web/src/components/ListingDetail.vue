@@ -51,6 +51,7 @@ const heading = computed(() => {
         <button type="button" class="detail-open" @click="emit('open')">원본 열기 <span aria-hidden="true">↗</span></button>
         <div class="detail-decisions">
           <button type="button" :class="{ active: listing.verdict === 'star' }" :aria-pressed="listing.verdict === 'star'" @click="emit('verdict', listing.verdict === 'star' ? null : 'star')">{{ listing.verdict === 'star' ? '★ 관심 해제' : '☆ 관심' }}</button>
+          <button type="button" :class="{ active: listing.verdict === 'meh' }" :aria-pressed="listing.verdict === 'meh'" @click="emit('verdict', listing.verdict === 'meh' ? null : 'meh')">{{ listing.verdict === 'meh' ? '별로 해제' : '별로' }}</button>
           <button type="button" :aria-pressed="listing.verdict === 'discard'" @click="emit('verdict', listing.verdict === 'discard' ? null : 'discard')">{{ listing.verdict === 'discard' ? '되돌리기' : '버림' }}</button>
         </div>
       </div>

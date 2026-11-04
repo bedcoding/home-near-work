@@ -1,5 +1,5 @@
 import type { BadgeTone, BrowserSession } from '../browser.js';
-import type { Area, NormalizedListing, SourceId } from '../../shared/types.js';
+import type { Area, CollectionCoverage, NormalizedListing, SourceId } from '../../shared/types.js';
 
 export interface CollectContext {
   runId: number;
@@ -17,7 +17,10 @@ export interface CollectContext {
    * 일부(고른 구 하나 등)를 보지 못했지만 나머지는 계속 모을 때 부른다. 이번 결과는 다 돈 것으로 보지 않아
    * 안 보인 매물을 '사라짐'으로 두지 않는다(못 본 구의 물건이 사라진 것처럼 보이지 않게).
    */
-  partial(reason: string): void;
+  partial(reason: string, retryable?: boolean): void;
+  stopped?(): boolean;
+  /** Per-scope progress; IDs are private storage readback evidence and are not sent to the UI. */
+  coverage?(row: CollectionCoverage, sourceIds: string[]): void;
 }
 
 export interface CollectedItem {
@@ -37,6 +40,8 @@ export interface Collector {
   wholeDistrict?: boolean;
   /** 0건이어도 실패로 보지 않는다(빈 방이 없으면 목록이 비는 곳). */
   emptyOk?: boolean;
+  /** Keep unreturned rows until the normal stale timeout when the source's count is not a reliable deletion signal. */
+  retainMissing?: boolean;
   collect(ctx: CollectContext): Promise<CollectedItem[]>;
 }
 

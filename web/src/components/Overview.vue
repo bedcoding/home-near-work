@@ -7,12 +7,13 @@ import {
 import { DEFAULT_FILTERS, dealOptions, passes, type Filters } from '../filters';
 import type { CatalogStation } from '../areaActions';
 import { money, radiusText } from '../format';
+import { primaryAreas } from '../../../shared/regions';
 import CountTooltip from './CountTooltip.vue';
 import ListingCard from './ListingCard.vue';
 import ZoneBanner from './ZoneBanner.vue';
 import OverviewMap from './OverviewMap.vue';
+import { walkPins, walkTimes } from '../walk';
 
-type Point = { lat: number; lng: number };
 const props = defineProps<{ listings: ListingView[]; filters: Filters; areas: Area[]; selectedId: string | null }>();
 const overviewEl = ref<HTMLElement | null>(null);
 const mapPanel = ref<HTMLElement | null>(null);
@@ -57,7 +58,6 @@ const emit = defineEmits<{
   source: [ListingView];
   raw: [ListingView];
   /** 지도에서 위치를 찍음(그 자리를 가운데로 지역 추가) */
-  pick: [Point];
   /** 지도에서 찍은 지역의 가운데 표시를 누름(그 지역 끄기) */
   area: [Area];
   /** 지역 칸을 누름: 볼 지역 번호(빈 배열이면 전체). 왼쪽 필터의 지역과 같은 값이다. */
@@ -149,14 +149,14 @@ const uniq = (entries: Entry[]) => [...new Map(entries.map((e) => [e.listing.id,
 /** 지역 칸의 건수: 그 지역만 골랐을 때 필터를 통과하는 매물 수. */
 const areaChips = computed(() => ({
   all: props.listings.filter((l) => passes(l, { ...props.filters, areaIds: [] }, props.areas)).length,
-  list: props.areas.map((a) => ({
+  list: primaryAreas(props.areas).map((a) => ({
     id: a.id,
-    label: `${a.name} ${radiusText(a.radiusM)}`,
+    label: a.region ? `${a.name} ${a.region.kind === 'gu' ? '전체' : '법정동'}` : `${a.name} ${radiusText(a.radiusM)}`,
     count: props.listings.filter((l) => passes(l, { ...props.filters, areaIds: [a.id] }, props.areas)).length,
     on: props.filters.areaIds.includes(a.id),
   })),
 }));
-const allAreas = computed(() => !props.areas.some((a) => props.filters.areaIds.includes(a.id)));
+const allAreas = computed(() => !primaryAreas(props.areas).some((a) => props.filters.areaIds.includes(a.id)));
 /** 지역이 이보다 많으면(노선 하나를 켠 때 등) 칸 대신 고르기 상자로 보인다(매물이 많은 지역 먼저). */
 const AREA_CHIP_MAX = 10;
 const areaOptions = computed(() => [...areaChips.value.list].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ko')));
@@ -252,9 +252,46 @@ watch(
 );
 defineExpose({ pickDeal, openNews });
 
-/** 새 소식이 먼저, 그다음 싼 순서(전월세는 환산 월세 → 보증금). */
+/** 목록 순서: 빈 글자면 가격순, 거리 핀 id면 그 핀까지 걷는 거리가 가까운 순(localStorage 'hnw-overview-sort') */
+const SORT_KEY = 'hnw-overview-sort';
+const sortPin = ref(readSortPin());
+function readSortPin() {
+  try {
+    return localStorage.getItem(SORT_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+watch(sortPin, (id) => {
+  try {
+    localStorage.setItem(SORT_KEY, id);
+  } catch {
+    // 저장소를 못 쓰면 이번 화면에서만 쓴다.
+  }
+});
+/** 거리순으로 고를 수 있는 핀(거리 핀만) */
+const distancePins = computed(() => walkPins.value.filter((p) => p.kind !== 'mark'));
+/** 지금 거리순으로 보는 핀 id(고른 핀을 뺐으면 null, 가격순) */
+const sortPinId = computed(() => distancePins.value.find((p) => p.id === sortPin.value)?.id ?? null);
+/** 매물에서 고른 핀까지 걷는 거리(m, 못 잰 매물은 Infinity) */
+function pinMeters(l: ListingView) {
+  return walkTimes(l.id).find((w) => w.pin.id === sortPinId.value)?.meters ?? Infinity;
+}
+/** 거리순이면 가까운 순(못 잰 매물은 뒤), 같으면 0 */
+function byPin(a: ListingView, b: ListingView) {
+  if (!sortPinId.value) return 0;
+  const d = pinMeters(a) - pinMeters(b);
+  return Number.isNaN(d) ? 0 : d;
+}
+
+/** 별로로 표시한 매물은 맨 뒤 */
+const byMeh = (a: ListingView, b: ListingView) => Number(a.verdict === 'meh') - Number(b.verdict === 'meh');
+
+/** 별로는 맨 뒤. 가격순이면 새 소식이 먼저, 그다음 싼 순서(전월세는 환산 월세 → 보증금). 거리순이면 고른 핀에 가까운 순서, 같으면 가격순. */
 function sortEntries(a: Entry, b: Entry) {
   return (
+    byMeh(a.listing, b.listing) ||
+    byPin(a.listing, b.listing) ||
     Number(hasNews(b.listing)) - Number(hasNews(a.listing)) ||
     (a.value ?? Infinity) - (b.value ?? Infinity) ||
     (a.option.deposit ?? Infinity) - (b.option.deposit ?? Infinity) ||
@@ -326,7 +363,7 @@ const NEWS_BAND: Band = { id: NEWS_ID, label: '새 소식', range: '가격대와
 const newsRow = computed(() => {
   const entries = uniq(byDeal.value.get(deal.value) ?? [])
     .filter((e) => hasNews(e.listing))
-    .sort((a, b) => Number(b.listing.isNew) - Number(a.listing.isNew) || b.listing.firstSeenAt.localeCompare(a.listing.firstSeenAt));
+    .sort((a, b) => byMeh(a.listing, b.listing) || byPin(a.listing, b.listing) || Number(b.listing.isNew) - Number(a.listing.isNew) || b.listing.firstSeenAt.localeCompare(a.listing.firstSeenAt));
   return entries.length ? rowOf(NEWS_BAND, entries, saved.open[deal.value] ?? {}, 0) : null;
 });
 /** 화면에 그리는 줄: 새 소식 줄(있으면) 다음 가격대 줄 */
@@ -487,7 +524,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
         :aria-selected="c.deal === deal" :aria-keyshortcuts="String(i + 1)" @click="pickCard(c.deal)"
       >
         <span class="deal-label">{{ c.label }}</span>
-        <CountTooltip class="deal-total num" :focusable="false" :text="`신규 ${c.news}건\n가격 변동 ${c.changed}건\n반경 밖 ${c.outside}건\n숫자 ${i + 1}번 키로 선택`">{{ c.total }}건</CountTooltip>
+        <CountTooltip class="deal-total num" :focusable="false" :text="`신규 ${c.news}건\n가격 변동 ${c.changed}건\n선택 지역 밖 ${c.outside}건\n숫자 ${i + 1}번 키로 선택`">{{ c.total }}건</CountTooltip>
       </button>
     </div>
 
@@ -535,6 +572,13 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
                   <span v-if="p.news" class="chip chip-new">신규 {{ p.news }}</span>
                   <span v-if="p.changed" class="chip chip-down">변동 {{ p.changed }}</span>
                 </button>
+                <div v-if="distancePins.length && r.shown.length > 1" class="sort" role="group" aria-label="목록 순서">
+                  <button class="sort-btn" :class="{ on: !sortPinId }" :aria-pressed="!sortPinId" title="새 소식 먼저, 그다음 싼 순서" @click="sortPin = ''">가격순</button>
+                  <button
+                    v-for="p in distancePins" :key="p.id" class="sort-btn" :class="{ on: sortPinId === p.id }" :aria-pressed="sortPinId === p.id"
+                    :title="`${p.name}까지 걷는 거리가 가까운 순서(거리를 못 잰 매물은 뒤)`" @click="sortPin = p.id"
+                  >{{ p.name }} 가까운 순</button>
+                </div>
               </div>
               <div v-if="r.shown.length" class="list">
                 <ListingCard
@@ -552,7 +596,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
       <aside ref="mapPanel" class="ov-map" :style="mapPanelHeight ? { '--map-panel-height': `${mapPanelHeight}px` } : undefined">
         <OverviewMap
           :listings="visible" :background="mapBackground" :areas="areas" :selected-id="selectedId" :fit-key="mapFitKey"
-          @select="(l) => reveal([l])" @reveal="reveal" @open="(l) => emit('open', l)" @pick="(p) => emit('pick', p)" @area="(a) => emit('area', a)"
+          @select="(l) => reveal([l])" @reveal="reveal" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />
       </aside>
@@ -565,6 +609,13 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 .ov-controls { display: contents; }
 .small { font-size: 13px; }
 
+.sort { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-left: auto; }
+.sort-btn {
+  min-height: 30px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--surface); font: 600 13px var(--font); color: var(--ink-2); cursor: pointer;
+}
+.sort-btn:hover { border-color: var(--ink-2); }
+.sort-btn.on { background: var(--ink); border-color: var(--ink); color: #fff; }
 .deals { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
 .deal {
   display: grid; gap: 2px; justify-items: start; align-content: start;

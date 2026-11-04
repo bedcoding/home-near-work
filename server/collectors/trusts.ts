@@ -28,6 +28,8 @@ interface BoardSpec {
   label: string;
   /** GET 검색 주소 */
   searchUrl?: (keyword: string) => string;
+  /** 기존 검색 주소에 쓰인 쪽 번호. 화면에 실제로 있는 다음 링크만 따라간다. */
+  pageParam?: 'page' | 'pageIndex';
   /** 검색이 POST 양식인 곳: 목록 주소와 검색 칸, 검색 버튼 */
   form?: { url: string; input: string; button: string };
   /** 게시판 한 줄 */
@@ -42,6 +44,27 @@ interface BoardSpec {
 
 /** 오늘부터 이만큼 지난 공고는 버린다(검색이 몇 년 치를 다 돌려주는 곳이 많아서). */
 const KEEP_DAYS = 365;
+const BOARD_MAX_PAGES = 20;
+
+/** 다음 쪽 링크는 같은 게시판과 검색 조건일 때만 허용한다. 주소를 만들어 요청하지 않는다. */
+export function nextBoardPage(currentUrl: string, hrefs: string[], pageParam: string) {
+  const current = new URL(currentUrl);
+  const currentPage = Number(current.searchParams.get(pageParam) ?? '1');
+  let hasMore = false;
+  let nextUrl: string | null = null;
+  for (const href of hrefs) {
+    let link: URL;
+    try { link = new URL(href, current); } catch { continue; }
+    if (link.origin !== current.origin || link.pathname !== current.pathname) continue;
+    const n = Number(link.searchParams.get(pageParam));
+    if (!Number.isInteger(n) || n <= currentPage) continue;
+    hasMore = true;
+    if (n !== currentPage + 1) continue;
+    const sameSearch = [...current.searchParams].every(([key, value]) => key === pageParam || link.searchParams.get(key) === value);
+    if (sameSearch) nextUrl = link.href;
+  }
+  return { nextUrl, hasMore };
+}
 
 /** '2026-10-01 10:14', '2026.10.02', '2026. 10. 02' → '2026-10-01' */
 function isoDate(text: string | null | undefined): string | null {
@@ -116,29 +139,54 @@ function boardCollector(spec: BoardSpec): NoticeCollector {
           await searched;
           session.record(spec.id, 'action', page.url(), null, `검색어 ${keyword}`);
         }
-        await page.waitForSelector(spec.row, { timeout: 15000 }).catch(() => null);
-        const rows = await readBoard(ctx, spec);
-        const found = rows
-          .map((r) => ({ ...r, id: spec.idPattern.exec(r.href)?.[1] ?? null }))
-          .filter((r): r is typeof r & { id: string } => !!r.id);
-        if (!found.length) {
-          const body = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
-          if (!/없습니다|없어요|0\s*건|검색\s*결과/.test(body)) throw new Error('공매 목록을 읽지 못했습니다. 사이트 화면 구조가 바뀌었을 수 있습니다.');
-        }
-        session.record(spec.id, 'data', page.url(), null, `'${keyword}' ${found.length}건`);
-        for (const r of found) {
-          const title = r.title.replace(/\s+N$/, '').trim();
-          const postedAt = isoDate(r.date);
-          if (!inGu(title, gu) || (postedAt && postedAt < cutoff)) continue;
-          out.set(r.id, {
-            sourceId: r.id,
-            title,
-            url: spec.detailUrl(r.id),
-            status: r.status || null,
-            kind: r.kind || null,
-            place: null,
-            postedAt,
-          });
+        const seenRows = new Set<string>();
+        for (let pageNo = 1; pageNo <= BOARD_MAX_PAGES; pageNo++) {
+          await page.waitForSelector(spec.row, { timeout: 15000 }).catch(() => null);
+          const rows = await readBoard(ctx, spec);
+          const found = rows
+            .map((r) => ({ ...r, id: spec.idPattern.exec(r.href)?.[1] ?? null }))
+            .filter((r): r is typeof r & { id: string } => !!r.id);
+          if (!found.length) {
+            const body = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
+            if (!/없습니다|없어요|(?:총|검색결과|검색\s*결과)\s*0\s*건/.test(body)) throw new Error('공매 목록을 읽지 못했습니다. 사이트 화면 구조가 바뀌었을 수 있습니다.');
+          }
+          session.record(spec.id, 'data', page.url(), null, `'${keyword}' ${pageNo}쪽 ${found.length}건`);
+          if (pageNo > 1 && found.length && found.every((r) => seenRows.has(r.id))) {
+            ctx.partial(`${spec.label}: 다음 쪽에서 같은 목록이 반환됨`);
+            break;
+          }
+          for (const r of found) {
+            seenRows.add(r.id);
+            const title = r.title.replace(/\s+N$/, '').trim();
+            const postedAt = isoDate(r.date);
+            if (!inGu(title, gu) || (postedAt && postedAt < cutoff)) continue;
+            out.set(r.id, {
+              sourceId: r.id,
+              title,
+              url: spec.detailUrl(r.id),
+              status: r.status || null,
+              kind: r.kind || null,
+              place: null,
+              postedAt,
+            });
+          }
+          if (!spec.pageParam) {
+            ctx.partial(`${spec.label}: 검색 결과 첫 페이지만 확인함`, false);
+            break;
+          }
+          const hrefs = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]')).map((a) => a.href));
+          const { nextUrl, hasMore } = nextBoardPage(page.url(), hrefs, spec.pageParam);
+          if (!nextUrl || pageNo === BOARD_MAX_PAGES) {
+            if (hasMore) ctx.partial(`${spec.label}: 남은 페이지를 확인하지 못함`);
+            break;
+          }
+          await session.pause(600);
+          const res = await session.goto(spec.id, nextUrl);
+          if (blocked(res?.status())) throw new BlockedError(`HTTP ${res?.status()}`);
+          if (!res || res.status() >= 400) {
+            ctx.partial(`${spec.label}: 다음 페이지를 열지 못함`);
+            break;
+          }
         }
         await session.pause(600);
       }
@@ -187,6 +235,7 @@ export const mghat = boardCollector({
   id: 'mghat',
   label: '무궁화신탁 공매',
   searchUrl: (q) => `http://www.mghat.com/auction/disposal/list.do?type=&field=title&keyword=${encodeURIComponent(q)}&page=1`,
+  pageParam: 'page',
   row: 'table tbody tr',
   fields: { link: 'td.tit a', status: 'td.conditions span', date: 'td:nth-child(5)' },
   idPattern: /\/auction\/disposal\/(\d+)\/show\.do/,
@@ -209,6 +258,7 @@ export const wooriat = boardCollector({
   id: 'wooriat',
   label: '우리자산신탁 공매',
   searchUrl: (q) => `https://www.wooriat.com/item/vendue/list?page=1&sortStatus=&searchWord=${encodeURIComponent(q)}`,
+  pageParam: 'page',
   row: '.board_list_type1 table tbody tr',
   fields: { link: 'td.tit3 a', status: 'td.state span', date: 'td:nth-child(5)' },
   idPattern: /\/item\/vendue\/detail\/(\d+)/,
@@ -230,6 +280,7 @@ export const kyobotrust = boardCollector({
   id: 'kyobotrust',
   label: '교보자산신탁 공매',
   searchUrl: (q) => `https://www.kyobotrust.co.kr/front/bbsList.do?bbsId=BBS_0005&pageIndex=1&searchOp6=&searchCnd=1&searchWrd=${encodeURIComponent(q)}`,
+  pageParam: 'pageIndex',
   row: '.boardThumb > a',
   fields: { link: '', title: 'p.title', status: '.tag', date: 'p.date' },
   idPattern: /fnViewArticle\('(\d+)'/,
@@ -241,6 +292,7 @@ export const koramco = boardCollector({
   id: 'koramco',
   label: '코람코자산신탁 공매',
   searchUrl: (q) => `https://www.koramco.com/ko/pubsaleList?page=1&etc_cd1=&keyword=${encodeURIComponent(q)}`,
+  pageParam: 'page',
   row: '.article ul.list > li',
   fields: { link: 'a', title: 'div.subject', status: 'p.category span', date: 'p.date' },
   idPattern: /post_id=(\d+)/,
@@ -315,7 +367,10 @@ export const shinhantrust: NoticeCollector = {
           postedAt,
         });
       }
-      if ((data!.totalElements ?? 0) > data!.results.length) ctx.log(`신한자산신탁 공매: '${keyword}' ${data!.totalElements}건 중 첫 쪽 ${data!.results.length}건만 읽었습니다`);
+      if ((data!.totalElements ?? 0) > data!.results.length) {
+        ctx.log(`신한자산신탁 공매: '${keyword}' ${data!.totalElements}건 중 첫 쪽 ${data!.results.length}건만 읽었습니다`);
+        ctx.partial(`신한자산신탁 공매: 전체 ${data!.totalElements}건 중 첫 ${data!.results.length}건만 확인함`, false);
+      }
       await session.pause(600);
     }
     return [...out.values()];

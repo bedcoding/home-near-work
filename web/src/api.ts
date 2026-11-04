@@ -1,5 +1,6 @@
 import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, LineViewSetting, RedevZonesView, RentView, RunDetail, RunInfo, RunScope, SiteReport, SourceId, Station, Verdict } from '../../shared/types';
 import type { Filters } from '../../shared/filters';
+import type { WalkPin, WalkView } from '../../shared/walk';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -22,6 +23,8 @@ export const api = {
   raw: (id: string) => request<{ explain: ExplainRow[]; raw: unknown }>('GET', `/api/listings/${enc(id)}/raw`),
   setVerdict: (id: string, verdict: Verdict | null) => request('POST', `/api/listings/${enc(id)}/verdict`, { verdict }),
   ack: (id: string) => request('POST', `/api/listings/${enc(id)}/ack`),
+  /** 다방 매물 하나의 지번 주소를 다방에서 받아 저장한다(카드의 '주소 보기') */
+  dabangAddress: (id: string) => request<{ address: string }>('POST', `/api/listings/${enc(id)}/dabang-address`),
   /** 법원경매 물건 상세를 프로그램이 띄운 크롬 창에 연다 */
   openCourt: (id: string) => request('POST', `/api/listings/${enc(id)}/open-court`),
   /** scope를 주면 그 탭에 보이는 사이트와 공고만 조회한다(없으면 전부) */
@@ -29,9 +32,8 @@ export const api = {
   /** 자동 확인 시각(null이면 끄기)과 창 표시를 바꾼다. */
   setAutoCheck: (body: { time?: string | null; day?: number | null; visible?: boolean; noticeTime?: string | null }) => request<AutoCheckState>('PUT', '/api/auto-check', body),
   /** 조회가 끝나면 띄울 알림 설정을 바꾼다(준 값만). 바뀐 전체 설정을 돌려준다. */
-  setAlerts: (body: Partial<AlertSettings>) => request<AlertSettings>('PUT', '/api/alerts', body),
+  setAlerts: (body: Partial<AlertSettings>) => request<AlertSettings>('PUT', '/api/alerts', { ...body, scopeVersion: 2 }),
   /** 매물 알림이 쓸 매물 탭 필터를 알린다. */
-  setAlertFilter: (filter: Filters) => request<AlertSettings>('PUT', '/api/alerts', { homeFilter: filter }),
   /** 노선 탭 '이 노선 조회하기': 노선 역(반경 radiusM)만 매물 사이트로 조회한다. */
   startLineRun: (visible: boolean, line: string, radiusM: number) => request<{ runId: number }>('POST', '/api/runs/line', { visible, line, radiusM }),
   /** 노선 탭에서 고른 노선과 역 반경(line null이면 고르지 않음) */
@@ -41,6 +43,8 @@ export const api = {
   stopRun: () => request('POST', '/api/runs/stop'),  runs: () => request<RunInfo[]>('GET', '/api/runs'),
   run: (id: number) => request<RunDetail>('GET', `/api/runs/${id}`),
   createArea: (area: Omit<Area, 'id'>) => request<Area>('POST', '/api/areas', area),
+  regions: () => request<{ regions: import('../../shared/types').AdministrativeRegion[] }>('GET', '/api/regions'),
+  addRegion: (code: string) => request<Area>('POST', '/api/areas/region', { code }),
   updateArea: (id: number, patch: Partial<Omit<Area, 'id'>>) => request<Area>('PUT', `/api/areas/${id}`, patch),
   deleteArea: (id: number) => request('DELETE', `/api/areas/${id}`),
   /** 예전 '이 노선만 켜기' 전에 켜 둔 지역으로 되돌린다. */
@@ -87,4 +91,6 @@ export const api = {
   checkZones: () => request<{ text: string }>('POST', '/api/plot-zones/check'),
   /** 단지 세대수를 넣거나 고친다(null이면 지움) */
   setHouseholds: (key: string, name: string, households: number | null) => request('PUT', '/api/apt-complexes', { key, name, households }),
+  /** 지도 핀에서 매물까지 길을 따라 걷는 거리(길 데이터를 처음 받을 때는 30초쯤 걸림) */
+  walk: (pins: WalkPin[], marks: WalkPin[] = []) => request<WalkView>('POST', '/api/walk', { pins, marks }),
 };

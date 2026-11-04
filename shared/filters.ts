@@ -1,5 +1,6 @@
 import { manwon } from './format.js';
 import { distanceM } from './geo.js';
+import { hasRegions, primaryAreas, selectedArea } from './regions.js';
 import { KINDS, KIND_LABEL, kindOf, type Kind } from './kinds.js';
 import type { Area, DealType, ListingView, NormalizedListing, PriceOption } from './types.js';
 
@@ -57,7 +58,7 @@ export const FILTER_DEALS: DealType[] = ['monthly', 'jeonse', 'sale', 'short'];
 /** 필터가 보는 매물 칸: 화면의 ListingView, 서버는 저장된 매물에 옵션 정보를 붙인 것 */
 export type FilterTarget = Pick<
   NormalizedListing,
-  'prices' | 'buildingType' | 'areaM2' | 'basement' | 'rooftop' | 'floor' | 'lat' | 'lng' | 'title' | 'address' | 'dong' | 'roomLabel'
+  'prices' | 'buildingType' | 'areaM2' | 'basement' | 'rooftop' | 'floor' | 'lat' | 'lng' | 'title' | 'address' | 'dong' | 'roomLabel' | 'legalDongCode'
 > &
   Pick<ListingView, 'options'>;
 
@@ -132,10 +133,13 @@ export function passes(l: FilterTarget, f: Filters, areas: Area[]): boolean {
   if (f.noOptionsOnly && !isNoOption(l)) return false;
 
   // 고른 지역(없거나 모두 꺼졌으면 켜진 지역 전체)
-  const picked = areas.filter((a) => f.areaIds.includes(a.id));
-  const chosen = picked.length ? picked : areas;
-  if ((f.insideAreas || f.distanceMax != null || picked.length) && l.lat != null && l.lng != null) {
-    const distances = areas.map((a) => ({ a, d: distanceM(a.lat, a.lng, l.lat!, l.lng!) }));
+  const eligible = primaryAreas(areas);
+  const picked = eligible.filter((a) => f.areaIds.includes(a.id));
+  const chosen = picked.length ? picked : eligible;
+  if (hasRegions(areas)) {
+    if ((f.insideAreas || picked.length > 0) && !selectedArea(l, chosen)) return false;
+  } else if (eligible.length && (f.insideAreas || f.distanceMax != null || picked.length) && l.lat != null && l.lng != null) {
+    const distances = eligible.map((a) => ({ a, d: distanceM(a.lat, a.lng, l.lat!, l.lng!) }));
     const mine = distances.filter(({ a }) => chosen.includes(a));
     if (f.insideAreas && !mine.some(({ a, d }) => d <= a.radiusM)) return false;
     // 반경 밖도 볼 때는 가장 가까운 지역이 고른 지역인 매물만 보인다.
@@ -167,13 +171,13 @@ export function rangeText(label: string, min: number | null, max: number | null,
  * 필터 조건을 짧은 글 조각으로(거래 유형 칸은 뺌). prices가 false면 금액 칸도 뺀다. areas는 고른 지역 이름을 찾는 데 쓴다.
  * 예: ['역삼역만', '보증금 1억 이하', '월세 50만 이하', '10~20평', '빌라와 주택, 오피스텔', '반지하 빼기']
  */
-export function filterSummary(f: Filters, areas: Pick<Area, 'id' | 'name' | 'enabled'>[], prices = true): string[] {
+export function filterSummary(f: Filters, areas: Pick<Area, 'id' | 'name' | 'enabled' | 'region'>[], prices = true): string[] {
   const picked = areas.filter((a) => a.enabled && f.areaIds.includes(a.id)).map((a) => a.name);
   const area = rangeText('', f.areaMin, f.areaMax, (v) => `${pyeong(v)}평`)?.trim() ?? null;
   return [
     picked.length ? `${picked.join(', ')}만` : null,
-    f.insideAreas ? null : '반경 밖 포함',
-    f.distanceMax != null ? `역까지 ${f.distanceMax}m` : null,
+    f.insideAreas ? null : areas.some((a) => a.region) ? '주변 함께 저장된 매물 포함' : '반경 밖 포함',
+    f.distanceMax != null && !areas.some((a) => a.region) ? `역까지 ${f.distanceMax}m` : null,
     ...(prices
       ? [rangeText('보증금', f.depositMin, f.depositMax, manwon), rangeText('월세', f.monthlyMin, f.monthlyMax, manwon), rangeText('매매가', f.priceMin, f.priceMax, manwon)]
       : []),

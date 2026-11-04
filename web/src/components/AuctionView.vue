@@ -22,7 +22,6 @@ import ZoneBanner from './ZoneBanner.vue';
 // 신탁 공매 공고), 그 아래 매각기일별 목록과 매매 매물(왼쪽), 지도(오른쪽).
 // 목록 순서는 받은 그대로 쓴다(App의 키보드 이동과 같은 순서: 경매 다음 매매 매물).
 
-type Point = { lat: number; lng: number };
 const props = defineProps<{
   /** 탭 제목(경매, 집터)과 고를 수 있는 종류 */
   title: string;
@@ -76,7 +75,6 @@ const emit = defineEmits<{
   verdict: [ListingView, Verdict | null];
   source: [ListingView];
   raw: [ListingView];
-  pick: [Point];
   area: [Area];
   station: [CatalogStation];
   /** 공매 공고 몇 건만 확인(원문을 열 때) */
@@ -299,7 +297,7 @@ const days = computed(() => {
       <aside class="map">
         <OverviewMap
           :listings="none" :background="all" :areas="areas" :selected-id="selectedId" :fit-key="kind"
-          @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)" @pick="(p) => emit('pick', p)" @area="(a) => emit('area', a)"
+          @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />
       </aside>

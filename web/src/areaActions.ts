@@ -23,6 +23,6 @@ export async function toggleStationArea(all: Area[], station: { name: string; la
 }
 
 export async function setAreaEnabled(all: Area[], area: Area, enabled: boolean): Promise<void> {
-  if (!enabled && area.enabled && all.filter((a) => a.enabled).length <= 1) throw new Error('지역이 하나는 켜져 있어야 합니다.');
+  // All alert circles may be switched off without affecting collection targets.
   await api.updateArea(area.id, { enabled });
 }

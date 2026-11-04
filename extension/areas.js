@@ -7,10 +7,10 @@
 
 /** 목록 전체를 저장하고, 지도에 그릴 켜진 지역을 따로 둔다. edited: 확장에서 바꾼 시각 또는 null(대시보드와 맞춤). */
 async function hnwWriteAreas(list, edited) {
-  const areas = list.map(({ id = null, name, lat, lng, radiusM, enabled = true }) => ({ id, name, lat, lng, radiusM, enabled }));
+  const areas = list.map(({ id = null, name, lat, lng, radiusM, enabled = true, region, purpose, alertLimits }) => ({ id, name, lat, lng, radiusM, enabled, ...(region ? { region } : {}), ...(purpose ? { purpose } : {}), ...(alertLimits !== undefined ? { alertLimits } : {}) }));
   await chrome.storage.local.set({
     'hnw-area-list': areas,
-    'hnw-areas': areas.filter((a) => a.enabled).map(({ name, lat, lng, radiusM }) => ({ name, lat, lng, radiusM })),
+    'hnw-areas': areas.filter((a) => a.enabled).map(({ name, lat, lng, radiusM, region, purpose }) => ({ name, lat, lng, radiusM, ...(region ? { region } : {}), ...(purpose ? { purpose } : {}) })),
     'hnw-areas-edited': edited,
   });
   return areas;

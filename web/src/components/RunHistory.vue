@@ -5,7 +5,7 @@ import { api } from '../api';
 import { dateTime } from '../format';
 
 /** 탭 하나만 돈 조회의 범위 이름 */
-const scopeLabel = (scope: RunScope) => RUN_SCOPES.find((s) => s.id === scope)?.label ?? scope;
+const scopeLabel = (scope: RunScope) => RUN_SCOPES.find((s) => s.id === scope)?.label ?? (scope === 'naver' ? '네이버 시험 조회' : scope);
 
 const props = defineProps<{ refreshKey: number }>();
 const runs = ref<RunInfo[]>([]);
@@ -36,16 +36,16 @@ const kindText: Record<'page' | 'data' | 'action', string> = { page: '페이지'
         <tr v-for="run in runs" :key="run.id">
           <td class="num tight">#{{ run.id }}</td>
           <td class="num tight">{{ dateTime(run.startedAt) }}</td>
-          <td class="words">{{ statusText[run.status] }}<span v-if="run.error" class="muted">, {{ run.error }}</span></td>
+          <td class="words">{{ run.status === 'done' && run.summary?.complete === false ? '일부 확인' : statusText[run.status] }}<span v-if="run.error" class="muted">, {{ run.error }}</span></td>
           <td class="tight">{{ run.auto ? '자동, ' : '' }}{{ run.noticesOnly ? '공고만, ' : '' }}{{ run.scope ? `${scopeLabel(run.scope)}만, ` : '' }}{{ run.line ? `${run.line} 노선, ` : '' }}{{ run.visible ? '보면서' : '조용히' }}</td>
           <td class="words">
             <div v-for="s in run.summary?.sources ?? []" :key="s.source" class="src">
               <strong>{{ SOURCE_LABEL[s.source] }}</strong>
               <template v-if="s.status === 'ok'">
-                지역 안 {{ s.kept }}건, 신규 {{ s.newCount }}, 가격 변동 {{ s.priceChanged }}<span v-if="s.relisted">, 재등록 숨김 {{ s.relisted }}</span>
+                저장 {{ s.kept }}건<span v-if="s.incidentalCount"> (주변·지역 미확인 {{ s.incidentalCount }}건 포함)</span>, 신규 {{ s.newCount }}, 가격 변동 {{ s.priceChanged }}<span v-if="s.relisted">, 재등록 숨김 {{ s.relisted }}</span>
                 <span v-if="s.baselineAreas.length" class="muted">, 기준점: {{ s.baselineAreas.join(', ') }}</span>
               </template>
-              <span v-else class="err">실패: {{ s.error }}</span>
+              <span v-else class="err">일부 확인·오류: {{ s.error }} · 받은 매물 저장 {{ s.kept }}건</span>
             </div>
           </td>
           <td><button class="btn btn-sm" @click="open(run)">자세히</button></td>
@@ -59,6 +59,14 @@ const kindText: Record<'page' | 'data' | 'action', string> = { page: '페이지'
           <h3>조회 #{{ detail.id }}, {{ dateTime(detail.startedAt) }}</h3>
           <button class="btn btn-sm" @click="detail = null">닫기</button>
         </div>
+        <template v-for="source in detail.summary?.sources ?? []" :key="source.source">
+          <template v-if="source.coverage?.length">
+            <h4>{{ SOURCE_LABEL[source.source] }} 범위별 저장 확인</h4>
+            <table class="req"><thead><tr><th>범위·유형</th><th>페이지</th><th>일반 목록 / 표시 총건수</th><th>서버 저장</th><th>상태</th></tr></thead>
+              <tbody><tr v-for="row in source.coverage" :key="`${row.areaId}-${row.category}`"><td>{{ row.areaName }} · {{ row.label }}</td><td>{{ row.pages }} / {{ row.totalPages ?? '?' }}</td><td>{{ row.received }} / {{ row.total ?? '?' }}건</td><td>{{ row.stored }}건</td><td>{{ row.complete ? '전체 확인' : '일부 확인' }} · {{ row.reason }}</td></tr></tbody>
+            </table>
+          </template>
+        </template>
         <h4>그때 화면</h4>
         <div class="shots">
           <a v-for="shot in detail.screenshots" :key="shot.file" :href="shot.file" target="_blank" rel="noopener">

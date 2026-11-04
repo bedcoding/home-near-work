@@ -139,7 +139,7 @@ export const onbid: Collector = {
   wholeDistrict: true,
   emptyOk: true,
   async collect(ctx) {
-    const near = gusFor(ctx.areas);
+    const near = gusFor(ctx.areas, true);
     const aptGus = new Set(ctx.aptGus);
     /** 고른 구 중 근처가 아닌 구: 아파트만 남긴다 */
     const aptOnly = ctx.aptGus.filter((gu) => !near.includes(gu));

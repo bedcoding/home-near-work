@@ -8,18 +8,18 @@ import type { ExplainRow, NormalizedListing, PriceOption } from '../shared/types
 export function parseZigbangStationIds(url: string, body: string): { key: string; subwayId: string; ids: number[] } | null {
   try {
     const u = new URL(url);
-    const m = /\/items\/subways\/(\d+)\/onerooms$/.exec(u.pathname);
+    const m = /\/items\/subways\/([1-9]\d*)\/onerooms$/.exec(u.pathname);
     const items = JSON.parse(body)?.items;
-    if (!m || !Array.isArray(items)) return null;
-    const params = [...u.searchParams].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join('&');
-    const ids = items.map((x: { id?: unknown }) => x?.id).filter((id: unknown): id is number => typeof id === 'number');
+    if (!m || !Array.isArray(items) || items.some((x) => !Number.isSafeInteger(x?.id) || x.id <= 0)) return null;
+    const params = [...u.searchParams].sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv)).map(([k, v]) => `${k}=${v}`).join('&');
+    const ids = [...new Set<number>(items.map((x: { id: number }) => x.id))];
     return { key: `zigbang|${m[1]}|${params}`, subwayId: m[1], ids };
   } catch {
     return null;
   }
 }
 
-const num = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
 
 /**
  * `house/property/v1/items/list` 응답(목록에 보이는 방들의 내용) 한 줄 → 공통 형식. 금액은 만원(manage_cost만 원).
@@ -30,7 +30,7 @@ function toListing(x: Record<string, unknown>, pageUrl: string): NormalizedListi
   const loc = (x.location ?? x.random_location) as { lat?: unknown; lng?: unknown } | undefined;
   const lat = num(loc?.lat);
   const lng = num(loc?.lng);
-  if (id == null || lat == null || lng == null) return null;
+  if (id == null || !Number.isSafeInteger(id) || id <= 0 || lat == null || lng == null || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
   const floorText = typeof x.floor_string === 'string' ? x.floor_string : typeof x.floor === 'string' ? x.floor : '';
   const floor = /^\d+$/.test(floorText) ? Number(floorText) : null;
   const deposit = num(x.deposit);
@@ -81,15 +81,33 @@ function toListing(x: Record<string, unknown>, pageUrl: string): NormalizedListi
   };
 }
 
-/** `house/property/v1/items/list` 응답의 방들. 모양이 다르면 빈 배열. */
-export function parseZigbangItems(body: string, pageUrl: string): { listing: NormalizedListing; raw: unknown }[] {
+/** Preserve failed rows so a malformed detail response cannot prove a complete tour. */
+export function parseZigbangItemRows(body: string, pageUrl: string): {
+  valid: boolean;
+  items: { listing: NormalizedListing; raw: unknown }[];
+  unreadableIds: string[];
+} {
   try {
     const items = JSON.parse(body)?.items;
-    if (!Array.isArray(items)) return [];
-    return items
-      .map((raw) => ({ raw, listing: raw && typeof raw === 'object' ? toListing(raw as Record<string, unknown>, pageUrl) : null }))
-      .filter((x): x is { raw: unknown; listing: NormalizedListing } => x.listing != null);
+    if (!Array.isArray(items)) return { valid: false, items: [], unreadableIds: [] };
+    const parsed: { listing: NormalizedListing; raw: unknown }[] = [];
+    const unreadableIds: string[] = [];
+    for (const raw of items) {
+      const row = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null;
+      const listing = row ? toListing(row, pageUrl) : null;
+      if (listing) parsed.push({ listing, raw });
+      else {
+        const id = num(row?.item_id);
+        if (id != null && Number.isSafeInteger(id) && id > 0) unreadableIds.push(String(id));
+      }
+    }
+    return { valid: true, items: parsed, unreadableIds };
   } catch {
-    return [];
+    return { valid: false, items: [], unreadableIds: [] };
   }
+}
+
+/** `house/property/v1/items/list` 응답의 방들. 모양이 다르면 빈 배열. */
+export function parseZigbangItems(body: string, pageUrl: string): { listing: NormalizedListing; raw: unknown }[] {
+  return parseZigbangItemRows(body, pageUrl).items;
 }

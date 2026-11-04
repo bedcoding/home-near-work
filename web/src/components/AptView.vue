@@ -20,7 +20,6 @@ import { ZONE_CHECKED, ZONE_LINKS, ZONE_RULES } from '../zones';
 // 맨 위에 모을 구 고르기와 살 때 붙는 조건(실거주, 대출, 양도세), 그 아래 이 탭만의 필터(종류, 구, 세대수, 가격)와 목록(왼쪽), 지도(오른쪽).
 // 왼쪽 필터 칸(회사 근처 집 찾는 조건)은 쓰지 않는다. 필터와 접은 칸은 이 브라우저에 기억한다.
 
-type Point = { lat: number; lng: number };
 const props = defineProps<{
   /** 서울 아파트(경매와 공매, 매매 매물, 버림과 사라짐 뺀 것) */
   listings: ListingView[];
@@ -47,7 +46,6 @@ const emit = defineEmits<{
   verdict: [ListingView, Verdict | null];
   source: [ListingView];
   raw: [ListingView];
-  pick: [Point];
   area: [Area];
   station: [CatalogStation];
   /** 법원경매와 공매 공고만 조회 */
@@ -374,7 +372,7 @@ const none: ListingView[] = [];
       <aside class="map">
         <OverviewMap
           :listings="none" :background="shown" :areas="areas" :selected-id="selectedId" :fit-key="fitKey"
-          @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)" @pick="(p) => emit('pick', p)"
+          @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)"
           @area="(a) => emit('area', a)" @station="(s) => emit('station', s)"
         />
       </aside>

@@ -1,7 +1,8 @@
 import { ref, watch } from 'vue';
 
-// 내 조건(설정 탭): 연소득과 가구, 전세대출 금리와 대출 비율. 연소득을 넣으면 소득 기준을 넘어 받을 수 없는 정책대출과 지원을
-// 지원 제도 탭과 매물 카드 대출 표시에서 빼고, 금리와 비율은 매물 카드의 '대출 시 월'에 쓴다. 이 브라우저(localStorage)에만 둔다. 금액은 만원.
+// 내 조건(설정 탭): 연소득과 가구, 전세대출 금리와 대출 비율, 걷는 속도. 연소득을 넣으면 소득 기준을 넘어 받을 수 없는 정책대출과 지원을
+// 지원 제도 탭과 매물 카드 대출 표시에서 빼고, 금리와 비율은 매물 카드의 '대출 시 월'에, 걷는 속도는 지도 핀까지 걷는 시간에 쓴다.
+// 이 브라우저(localStorage)에만 둔다. 금액은 만원.
 
 export interface MyProfile {
   /** 연소득(세전, 결혼했으면 부부 합산). null이면 거르지 않는다. */
@@ -16,10 +17,12 @@ export interface MyProfile {
   loanRate: number | null;
   /** 보증금 중 대출로 낼 몫(%). null이면 기본값(rentRate.ts LOAN_RATIO) */
   loanRatio: number | null;
+  /** 걷는 속도(시속 km). null이면 기본값(shared/walk.ts WALK_KMH) */
+  walkKmh: number | null;
 }
 
 const KEY = 'hnw-my-profile';
-const EMPTY: MyProfile = { income: null, newlywed: false, newborn: false, kids: 0, loanRate: null, loanRatio: null };
+const EMPTY: MyProfile = { income: null, newlywed: false, newborn: false, kids: 0, loanRate: null, loanRatio: null, walkKmh: null };
 
 /** 0보다 크고 max 이하인 숫자면 그 값, 아니면 null */
 const within = (v: unknown, max: number) => (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= max ? v : null);
@@ -36,6 +39,7 @@ function load(): MyProfile {
       kids,
       loanRate: within(v.loanRate, 30),
       loanRatio: within(v.loanRatio, 100),
+      walkKmh: within(v.walkKmh, 15),
     };
   } catch {
     return { ...EMPTY };

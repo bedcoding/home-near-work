@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeBrowseProgress } from '../server/browse-progress.ts';
+import { browseConsole, normalizeBrowseProgress } from '../server/browse-progress.ts';
 
 const input = () => ({
   id: 'synthetic-run:1', status: 'running', phase: 'exploring',
@@ -26,6 +26,13 @@ test('progress preserves counts and coded events with a server-controlled receip
   assert.equal(raw.logs[0].at, 1000);
   assert.equal(raw.totals.responses, 3);
   assert.equal(raw.current.actions, 4);
+});
+
+test('page progress preserves numeric evidence and last successful list time without private region data',()=>{
+  const raw=input(); Object.assign(raw.current,{site:'naver',pages:3,listings:90,total:8000,lastListAt:2500,areaName:'Synthetic private region'});
+  const result=normalizeBrowseProgress(raw,4000);
+  assert.equal(result.current.pages,3); assert.equal(result.current.lastListAt,2500); assert.equal(result.current.areaName,undefined);
+  for(const key of ['pages','listings','total','lastListAt']) rejects({...raw,current:{...raw.current,[key]:-1}});
 });
 
 test('private-looking extra fields are stripped at every nesting level', () => {
@@ -87,4 +94,33 @@ test('an empty run and snapshots without a current job remain valid', () => {
   assert.equal(Object.hasOwn(result, 'current'), false);
   assert.deepEqual(result.logs, []);
   assert.equal(result.totalJobs, 0);
+});
+
+test('extension tour events become one console line each, without region names or events from before the server started', () => {
+  const lines = browseConsole(1500);
+  const base = { id: 'synthetic-run:2', status: 'running', phase: 'saving', createdAt: 1000, updatedAt: 2000, heartbeatAt: 2000, receivedAt: 2000,
+    index: 1, totalJobs: 3, totals: { responses: 3, listings: 40, newCount: 2, changedCount: 1 },
+    current: { site: 'naver', actions: 2, received: 2, pages: 2, listings: 40, total: 120 }, logs: [] };
+  const logs = [
+    { at: 1000, code: 'ready' },
+    { at: 1600, code: 'open', jobIndex: 1, site: 'naver' },
+    { at: 1700, code: 'action', jobIndex: 1, site: 'naver', actions: 1 },
+    { at: 1750, code: 'received', jobIndex: 1, site: 'naver', responses: 1 },
+    { at: 1800, code: 'saved', jobIndex: 1, site: 'naver', responses: 1, listings: 20 },
+    { at: 1900, code: 'saved', jobIndex: 1, site: 'naver', responses: 2, listings: 40 },
+  ];
+  assert.deepEqual(lines({ ...base, logs }), [
+    '[확장 조회] 2/3 네이버: 페이지를 엽니다',
+    '[확장 조회] 2/3 네이버: 서버 저장 확인, 응답 1건, 매물 저장 처리 20건',
+    '[확장 조회] 2/3 네이버: 서버 저장 확인, 응답 2건, 매물 저장 처리 40건, 2페이지, 목록 40/120건',
+  ]);
+  assert.deepEqual(lines({ ...base, logs }), [], 'the same snapshot does not print again');
+  const done = [...logs, { at: 2100, code: 'job-end', jobIndex: 1, site: 'naver', responses: 2, listings: 40 }, { at: 2200, code: 'done' }];
+  assert.deepEqual(lines({ ...base, status: 'done', index: 3, current: undefined, logs: done }), [
+    '[확장 조회] 2/3 네이버: 조회 종료, 응답 2건, 매물 저장 처리 40건',
+    '[확장 조회] 조회 끝, 3개 조회, 신규 2건, 가격 변경 1건',
+  ]);
+  assert.deepEqual(lines({ ...base, id: 'synthetic-run:3', status: 'running', logs: [...done, { at: 2300, code: 'retry' }] }),
+    ['[확장 조회] 미확인 항목을 처음부터 다시 조회합니다'], 'a retried run with a new id keeps earlier events printed once');
+  for (const line of lines({ ...base, logs: [{ at: 2400, code: 'error', jobIndex: 2, site: 'zigbang' }] })) assert.doesNotMatch(line, /undefined|null/);
 });

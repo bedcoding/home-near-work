@@ -67,6 +67,11 @@ export function zigbangStationName(id: string): string | null {
   return read(ZIGBANG_KEY).find((p) => p.id === id)?.name ?? null;
 }
 
+/** 배운 수도권 직방 역 전체(번호, 이름, 위치). 자동조회의 직방 역별 수집이 쓴다. */
+export function zigbangStations(): Place[] {
+  return read(ZIGBANG_KEY);
+}
+
 /** 남아 있는 화면 데이터에서 다시 배운다(서버를 켤 때). */
 export function learnFromStoredCaptures() {
   for (const r of store.capturesMatching('zigbang', '%/common/subway/all%')) learnLinkHints('zigbang', r.url, r.body);

@@ -22,15 +22,16 @@ import { distanceM, nearestArea } from './geo.js';
 import { comparePrices, identityKey, priceSignature } from './identity.js';
 import { notify } from './notify.js';
 import { priceText } from '../shared/format.js';
+import { collectionAreas, primaryAreas, selectedArea } from '../shared/regions.js';
 import {
   inGus, listingSection, nearReason, noticeSection, noticeSourcesOf, regionalSection, RUN_SCOPES, SEOUL_GUS,
-  type Area, type NormalizedListing, type RunProgress, type RunScope, type RunSourceSummary, type RunSummary, type SourceId,
+  type Area, type CollectionCoverage, type NormalizedListing, type RunProgress, type RunScope, type RunSourceSummary, type RunSummary, type SourceId,
 } from '../shared/types.js';
 
 let current: (RunProgress & { log: string[]; session: BrowserSession | null }) | null = null;
 
 export const getProgress = (): RunProgress | null =>
-  current ? { runId: current.runId, message: current.message, log: current.log.slice(-300), stopping: current.stopping } : null;
+  current ? { runId: current.runId, message: current.message, log: current.log.slice(-300), stopping: current.stopping, coverage: current.coverage } : null;
 
 /** 조회 범위(scope, 없으면 전부)에서 돌 매물 사이트와 공고 곳. 공고만 확인은 매물 사이트 없이 공고 전부. */
 export function runPlan(scope: RunScope | undefined, noticesOnly: boolean) {
@@ -49,7 +50,8 @@ export function runPlan(scope: RunScope | undefined, noticesOnly: boolean) {
  */
 export function startRun(visible: boolean, scope?: RunScope, options: { auto?: boolean; quiet?: boolean; noticesOnly?: boolean } = {}): number {
   if (current) throw new Error('이미 조회 중입니다.');
-  const areas = store.enabledAreas();
+  // 구나 동과 지하철역을 둘 다 넘긴다. 사이트마다 쓸 수 있는 쪽을 쓴다(다방은 구 경계나 반경 범위, 직방, 집토스, 피터팬은 역 기준).
+  const areas = collectionAreas(store.enabledAreas());
   if (areas.length === 0) throw new Error('켜진 지역이 없습니다. 지역 탭에서 하나 이상 켜 주세요.');
   const noticesOnly = !!options.noticesOnly;
   const { def, collectors, notices } = runPlan(scope, noticesOnly);
@@ -133,6 +135,8 @@ function classify(listings: NormalizedListing[]): Map<string, BadgeTone> {
 }
 
 export interface ApplyOptions {
+  /** Explicit verified target scope. Non-target rows are retained without new-listing alerts. */
+  admit?: (listing: NormalizedListing) => boolean;
   /**
    * 새로 본 매물을 '신규'로 칠지 정하는 기준을 바꾼다. 주면 지역 기준점 대신 이 함수가 true를 준 매물만 기준점(신규 아님)으로 둔다.
    * 네이버처럼 보는 만큼씩 조금씩 들어오는 소스에 쓴다.
@@ -154,7 +158,7 @@ export interface ApplyOptions {
 
 /**
  * 받은 매물을 저장하고 신규, 가격 변동, 재등록을 판정한다. 모든 소스가 이 함수 하나를 거친다.
- * 켜진 지역 반경(+여유) 밖 매물은 저장하지 않는다. 다만 서울 아파트 탭에서 고른 구의 아파트(aptGu)는 저장한다.
+ * 정상적으로 읽은 매물은 주변 지역도 보관한다. 수집 지역은 기본 목록에, 별도의 역 반경은 알림에 적용한다.
  */
 export function applyResults(
   runId: number,
@@ -197,25 +201,13 @@ export function applyResults(
 
   store.db.transaction(() => {
     for (const { listing, raw, pageUrl, screenshot, aptGu } of unique.values()) {
-      const area = coveringArea(areas, listing.lat, listing.lng);
-      if (!area && !aptGu) {
-        // 반경(+여유) 밖이라 저장하지 않은 매물도 조회 기록에 남겨, 조용히 사라지는 매물이 없게 한다.
-        const near = nearestArea(areas, listing.lat, listing.lng);
-        store.addExcluded(runId, {
-          source,
-          sourceId: listing.sourceId,
-          title: listing.title || listing.roomLabel || '',
-          priceText: listing.prices.map(priceText).join(', ') || '가격 정보 없음',
-          address: listing.address,
-          distanceM: near ? Math.round(near.distance) : null,
-          areaName: near?.area.name ?? null,
-          url: listing.url,
-        });
-        continue;
-      }
+      const area = selectedArea(listing, areas, COLLECT_MARGIN_M);
+      const admitted = options.admit?.(listing);
+      const target = admitted ?? (!!area || !!aptGu);
+      if (!target) summary.incidentalCount = (summary.incidentalCount ?? 0) + 1;
       summary.kept += 1;
-      const baseKey = area ? baseKeyOf(listing) : `${source}:apt`;
-      const spot = area ? area.id : store.aptSpot(aptGu!);
+      const baseKey = area || admitted || !aptGu ? baseKeyOf(listing) : `${source}:apt`;
+      const spot = area ? area.id : aptGu ? store.aptSpot(aptGu) : 0;
       keptPerKey.set(`${baseKey}|${spot}`, (keptPerKey.get(`${baseKey}|${spot}`) ?? 0) + 1);
       const id = `${source}:${listing.sourceId}`;
       seen.add(id);
@@ -231,7 +223,7 @@ export function applyResults(
         if (change) {
           store.addEvent(runId, id, change, { before, after: listing.prices });
           summary.priceChanged += 1;
-          if (!discardedIds.has(id)) options.news?.push({ type: 'listing', listing, changed: true, aptGu });
+          if (!discardedIds.has(id)) options.news?.push({ type: 'listing', listing, changed: true, changeType: change, aptGu });
         }
         continue;
       }
@@ -255,7 +247,10 @@ export function applyResults(
       const gone = store
         .allListings()
         .filter((r) => r.source === source && r.status === 'active' && !seen.has(r.id))
-        .filter((r) => options.goneOutsideRadius || areas.some((a) => r.lat != null && r.lng != null && distanceM(a.lat, a.lng, r.lat, r.lng) <= a.radiusM))
+        .filter((r) => {
+          const listing = r.data ? JSON.parse(r.data) as NormalizedListing : r;
+          return options.goneOutsideRadius || (options.admit ? options.admit(listing as NormalizedListing) : !!selectedArea(listing, areas));
+        })
         .map((r) => r.id);
       store.markGone(gone);
     }
@@ -300,14 +295,20 @@ async function collectNotices(
 ) {
   const gus = gusFor(areas);
   const names = nearNamesFor(areas);
+  let complete = true;
+  let retryable = false;
   for (const nc of collectors) {
-    if (stopped()) break;
+    if (stopped()) return { complete: false, retryable: false };
     const at = new Date().toISOString();
+    const missed: string[] = [];
     try {
-      const items = await nc.collect(ctx, gus);
-      if (stopped()) break;
+      const items = await nc.collect({ ...ctx, partial: (reason, retry = true) => { missed.push(reason); retryable ||= retry; } }, gus);
+      if (stopped()) return { complete: false, retryable: false };
       const saved = store.saveNotices(nc.id, items, at);
-      store.setNoticeStatus(nc.id, { at, ok: true, count: items.length, error: null });
+      const error = missed.length ? `일부를 보지 못함: ${[...new Set(missed)].join(', ')}` : null;
+      if (error) complete = false;
+      store.setNoticeStatus(nc.id, { at, ok: !error, count: items.length, error });
+      if (error) log(`${nc.label}: ${error}`);
       for (const n of saved.added) {
         const section = noticeSection({ source: nc.id, kind: n.kind });
         if (regionalSection(section) && !inGus(n.regions ?? [], gus)) continue;
@@ -315,12 +316,15 @@ async function collectNotices(
       }
       log(`${nc.label}: ${items.length}건${saved.baseline ? ', 처음이라 기준으로만 저장' : `, 새 공고 ${saved.added.length}`}`);
     } catch (e) {
-      if (stopped()) break;
+      if (stopped()) return { complete: false, retryable: false };
+      complete = false;
+      retryable = true;
       const error = e instanceof Error ? e.message.split('\n')[0] : String(e);
       store.setNoticeStatus(nc.id, { at, ok: false, count: 0, error });
       log(`${nc.label} ${e instanceof BlockedError ? '차단' : '오류'}: ${error}`);
     }
   }
+  return { complete, retryable };
 }
 
 /** plan: 돌 매물 사이트와 공고 곳. scope가 있으면 탭 하나만 도는 조회(RUN_SCOPES의 한 줄), line이 있으면 노선 탭의 노선 역만 도는 조회. */
@@ -342,6 +346,8 @@ async function execute(
   const summaries: RunSourceSummary[] = [];
   const news: NewsItem[] = [];
   let session: BrowserSession | null = null;
+  let noticesComplete = false;
+  let retryable = false;
 
   const finish = (status: 'done' | 'error' | 'stopped', errorMessage: string | null) => {
     const tidy = store.tidyListings();
@@ -351,6 +357,8 @@ async function execute(
       sources: summaries,
       newCount: summaries.reduce((n, s) => n + s.newCount, 0),
       changedCount: summaries.reduce((n, s) => n + s.priceChanged, 0),
+      complete: status === 'done' && noticesComplete && summaries.every((s) => s.status === 'ok' && !s.error),
+      retryable,
     };
     store.finishRun(runId, status, summary, errorMessage, state.log);
     return summary;
@@ -360,7 +368,7 @@ async function execute(
     const only = noticesOnly ? '공고만, ' : plan.scope ? `${plan.scope.label} 탭만(${[...collectors, ...plan.notices].map((c) => c.label).join(', ')}), ` : '';
     const where = plan.line
       ? `${plan.line} 노선 역 ${areas.length}곳(반경 ${areas[0]?.radiusM ?? 0}m, ${collectors.map((c) => c.label).join(', ')})`
-      : `지역: ${areas.map((a) => `${a.name} ${a.radiusM}m`).join(', ')}`;
+      : `지역: ${areas.map((a) => a.region ? `${a.name} ${a.region.kind === 'gu' ? '구 전체' : '법정동'}` : `${a.name} ${a.radiusM}m`).join(', ')}`;
     log(`조회 시작, ${auto ? '자동 확인, ' : ''}${only}${where}, ${visible ? '보면서 조회' : '조용히 조회'}, 역, 지역, 구 사이 ${restSeconds()}초 쉼`);
     session = await BrowserSession.open(runId, visible);
     state.session = session;
@@ -368,20 +376,32 @@ async function execute(
     if (state.stopping) await session.close();
     /** 지금 도는 사이트가 일부(고른 구 하나 등)를 보지 못한 까닭 */
     let missed: string[] = [];
+    const coverage = new Map<string, { row: CollectionCoverage; ids: string[] }>();
+    const runCoverage = new Map<string, CollectionCoverage>();
+    let activeSource: SourceId | null = null;
     const ctx: CollectContext = {
       runId,
       areas,
       session,
       log,
       classify,
+      stopped: () => state.stopping,
+      coverage: (row, ids) => {
+        if (!activeSource) return;
+        const scoped = { ...row, source: activeSource };
+        coverage.set(`${row.areaId}:${row.category}`, { row: scoped, ids });
+        runCoverage.set(`${activeSource}:${row.areaId}:${row.category}`, scoped);
+        state.coverage = [...runCoverage.values()];
+      },
       progress: (message: string) => {
         state.message = message;
         void session!.banner(message);
       },
       // 노선 조회는 서울 아파트 탭의 고른 구를 모으지 않는다.
       aptGus: plan.line ? [] : store.aptGus(),
-      partial: (reason: string) => {
+      partial: (reason: string, retry = true) => {
         missed.push(reason);
+        retryable ||= retry;
       },
     };
     for (const collector of collectors) {
@@ -389,11 +409,14 @@ async function execute(
       let items: CollectedItem[] = [];
       let complete = true;
       let error: string | undefined;
-      /** 일부만 못 보고 끝났다(실패로 치지 않음) */
-      let partOnly = false;
       missed = [];
+      coverage.clear();
+      activeSource = collector.id;
       try {
         items = await collector.collect(ctx);
+        if (areas.some((area) => area.region) && ['ziptoss', 'peterpanz'].includes(collector.id)) {
+          ctx.partial('역·지도 범위에서 받은 매물은 저장했으나 선택한 구·동 전체의 확인은 보장하지 않습니다', false);
+        }
         if (state.stopping) {
           // 멈추는 사이에 받은 것은 저장하되 다 돈 것으로 보지 않는다('사라짐' 처리를 하지 않는다).
           complete = false;
@@ -402,33 +425,49 @@ async function execute(
         } else if (items.length === 0 && !collector.emptyOk) {
           // 0건은 사이트 구조가 바뀌었을 가능성이 커서 실패로 본다('사라짐' 처리도 하지 않는다).
           complete = false;
+          retryable = true;
           error = '받은 매물이 0건입니다. 사이트 화면 구조가 바뀌었을 수 있습니다.';
           log(`${collector.label} 경고: ${error}`);
         } else if (missed.length) {
-          // 일부를 못 봤으면 받은 것은 저장하되 '사라짐' 처리는 하지 않는다(실패로는 치지 않는다).
+          // 일부를 못 봤으면 받은 것은 저장하되 '사라짐' 처리는 하지 않고 미완료로 알린다.
           complete = false;
-          partOnly = true;
           error = `일부를 보지 못함: ${[...new Set(missed)].join(', ')}`;
           log(`${collector.label}: ${error}`);
         }
       } catch (e) {
         complete = false;
+        retryable = true;
         // Playwright 오류는 뒤에 브라우저 기록이 여러 줄 붙어서 첫 줄만 남긴다.
         error = state.stopping ? '중단함' : e instanceof Error ? e.message.split('\n')[0] : String(e);
         log(state.stopping ? `${collector.label}: 중단함` : `${collector.label} ${e instanceof BlockedError ? '차단' : '오류'}: ${error}`);
       }
-      const summary = applyResults(runId, collector.id, items, areas, complete, error, {
+      const summary = applyResults(runId, collector.id, items, areas, complete && !collector.retainMissing, error, {
         goneOutsideRadius: !plan.line && collector.wholeDistrict,
         // 노선 조회는 역마다 처음 본 것만이 아니라 모두 기준으로 둔다(회사 근처 신규 알림과 섞이지 않게).
         isBaseline: plan.line ? () => true : undefined,
         news,
-        // 일부만 못 본 것은 실패로 치지 않는다(받은 것은 그대로 쓰고, 기록에 까닭이 남음).
-        status: complete || partOnly ? 'ok' : 'error',
+        status: complete ? 'ok' : 'error',
       });
+      if (coverage.size) {
+        summary.coverage = [...coverage.values()].map(({ row, ids }) => {
+          const stored = ids.filter(id => store.getListing(`${collector.id}:${id}`)?.last_seen_run === runId).length;
+          const saved = stored === ids.length;
+          return { ...row, stored, storageChecked: true, complete: row.complete && saved,
+            reason: saved ? row.reason : `${row.reason} · 서버 저장 ${stored}/${ids.length}건 확인` };
+        });
+        for (const row of summary.coverage) runCoverage.set(`${collector.id}:${row.areaId}:${row.category}`, row);
+        state.coverage = [...runCoverage.values()];
+        if (summary.coverage.some(row => row.stored !== coverage.get(`${row.areaId}:${row.category}`)!.ids.length)) retryable = true;
+        if (summary.coverage.some(row => !row.complete)) {
+          summary.status = 'error';
+          summary.error ||= '일부 범위의 목록 또는 서버 저장을 확인하지 못했습니다';
+        }
+        const storedScopes = summary.coverage.filter(row => row.total != null && row.pages > 0 && row.stored === coverage.get(`${row.areaId}:${row.category}`)!.ids.length).length;
+        log(`${collector.label}: 서버 저장 검증 ${storedScopes}/${summary.coverage.length}개, 전체 목록 확인 ${summary.coverage.filter(row => row.complete).length}/${summary.coverage.length}개`);
+      }
       summaries.push(summary);
       const baseline = summary.baselineAreas.length ? `, 기준점 저장: ${summary.baselineAreas.join(', ')}` : '';
-      const kept = ctx.aptGus.length ? '지역 안과 고른 구 아파트' : '지역 안';
-      log(`${collector.label}: 받은 ${summary.fetched}건, ${kept} ${summary.kept}건, 신규 ${summary.newCount}, 가격 변동 ${summary.priceChanged}, 재등록 숨김 ${summary.relisted}${baseline}`);
+      log(`${collector.label}: 받은 ${summary.fetched}건, 저장 ${summary.kept}건(주변·지역 미확인 ${summary.incidentalCount ?? 0}건), 신규 ${summary.newCount}, 가격 변동 ${summary.priceChanged}, 재등록 숨김 ${summary.relisted}${baseline}`);
     }
     // 법원경매를 돈 조회는 매각 결과(지난 매각기일의 매각대금, 유찰)와 지역별 매각통계도 모은다.
     // 공고만 확인도 매각 결과를 모은 지 오래됐으면(courtResultsDue) 모은다.
@@ -530,7 +569,9 @@ async function execute(
         log(`${ZONE_SOURCE} 재개발 구역 오류: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
       }
     }
-    await collectNotices(ctx, areas, plan.notices, log, () => state.stopping, news);
+    const noticeResult = await collectNotices(ctx, areas, plan.notices, log, () => state.stopping, news);
+    noticesComplete = noticeResult.complete;
+    retryable ||= noticeResult.retryable;
     if (state.stopping) {
       finish('stopped', null);
       log('조회 중단');
@@ -557,7 +598,7 @@ async function execute(
     const covered = coveredRows(collectors.map((c) => c.id), plan.notices.map((nc) => nc.id));
     // 고른 구가 없으면 서울 아파트 경매 줄은 이번에 확인한 것이 아니다.
     if (!ctx.aptGus.length) covered.delete('aptAuction');
-    for (const alert of buildAlerts({ news: shown, sources: summary.sources, areas, settings: alertSettings(), quiet: quiet || noticesOnly, covered })) {
+    for (const alert of buildAlerts({ news: shown, sources: summary.sources, areas: store.enabledAreas(), settings: alertSettings(), quiet: quiet || noticesOnly, covered })) {
       notify(alert.title, alert.message, alert.url);
     }
   } catch (e) {

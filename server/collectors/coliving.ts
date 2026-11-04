@@ -86,7 +86,10 @@ export const betterliving: Collector = {
     const r = await openAndWait(ctx, 'betterliving', 'https://betterliving.kr/find', (x) => x.url().includes('/api/v1/product/public/unit?'), '방 목록');
     const data = (await r.json().catch(() => null)) as { items?: BetterUnit[]; total?: number } | null;
     if (!Array.isArray(data?.items)) throw new Error('방 목록을 읽지 못했습니다. 사이트 화면 구조가 바뀌었을 수 있습니다.');
-    if ((data!.total ?? 0) > data!.items.length) ctx.log(`에피소드: ${data!.total}건 중 ${data!.items.length}건만 받았습니다`);
+    if ((data!.total ?? 0) > data!.items.length) {
+      ctx.log(`에피소드: ${data!.total}건 중 ${data!.items.length}건만 받았습니다`);
+      ctx.partial(`에피소드: 전체 ${data!.total}건 중 ${data!.items.length}건만 읽음`, false);
+    }
     const screenshot = await ctx.session.screenshot('betterliving', '방 찾기');
     const out: CollectedItem[] = [];
     for (const u of data!.items) {
@@ -225,12 +228,14 @@ export const mangrove: Collector = {
         if (blocked(r?.status())) throw new BlockedError(`HTTP ${r?.status()}`);
         await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
         const b = await readMangroveBranch(ctx);
-        const rooms = (Array.isArray(b.rooms) ? b.rooms : []) as MangroveRoom[];
-        session.record('mangrove', 'data', url, r?.status() ?? null, `방 타입 ${rooms.length}개`);
-        if (!rooms.length) {
+        if (!Array.isArray(b.rooms)) {
           ctx.log(`맹그로브: ${url} 방 정보를 찾지 못했습니다`);
+          ctx.partial(`맹그로브 ${url.split('/').pop()}: 방 목록을 읽지 못함`);
           continue;
         }
+        const rooms = b.rooms as MangroveRoom[];
+        session.record('mangrove', 'data', url, r?.status() ?? null, `방 타입 ${rooms.length}개`);
+        if (rooms.length && (b.lat == null || b.lng == null)) ctx.partial(`맹그로브 ${url.split('/').pop()}: 지점 위치를 읽지 못함`);
         const slug = url.split('/').pop()!;
         const branchName = (b.name ?? slug).replace(/\s*[|·-].*$/, '').trim();
         const screenshot = await session.screenshot('mangrove', branchName);
@@ -296,6 +301,7 @@ export const celib: Collector = {
     const { session } = ctx;
     const page = session.page;
     const out: CollectedItem[] = [];
+    if (!CELIB_BRANCHES.length) ctx.partial('셀립: 조회할 지점이 설정되지 않음', false);
     for (const b of CELIB_BRANCHES) {
       ctx.progress(`셀립: ${b.name} 지점 화면`);
       const home = `https://celib.kr/property/${b.slug}`;
@@ -308,7 +314,11 @@ export const celib: Collector = {
       const r = await openAndWait(ctx, 'celib', `https://celib.kr/moving_apply?p=${b.p}`, (x) => x.url().includes('/api/Rooms/get_apply_rooms_v2'), '빈 방 목록');
       const data = (await r.json().catch(() => null)) as { data?: CelibRoom[]; totalItems?: number } | null;
       if (!Array.isArray(data?.data)) throw new Error('빈 방 목록을 읽지 못했습니다. 사이트 화면 구조가 바뀌었을 수 있습니다.');
-      if ((data!.totalItems ?? 0) > data!.data.length) ctx.log(`셀립: ${b.name} ${data!.totalItems}개 중 ${data!.data.length}개만 받았습니다`);
+      if ((data!.totalItems ?? 0) > data!.data.length) {
+        ctx.log(`셀립: ${b.name} ${data!.totalItems}개 중 ${data!.data.length}개만 받았습니다`);
+        ctx.partial(`셀립 ${b.name}: 전체 ${data!.totalItems}개 중 ${data!.data.length}개만 읽음`, false);
+      }
+      if (data!.data.length && !at) ctx.partial(`셀립 ${b.name}: 지점 위치를 읽지 못함`);
       const screenshot = await session.screenshot('celib', b.name);
       for (const room of data!.data) {
         if (!room.room_id) continue;

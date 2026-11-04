@@ -2,15 +2,30 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Area } from '../../../shared/types';
 import { radiusText } from '../format';
+import BrowseAuto from './BrowseAuto.vue';
+import NaverManual from './NaverManual.vue';
 
 const props = defineProps<{
   areas: Area[];
   extension: { version: string; sites: string[]; browse?: boolean; browseError?: string } | null;
+  naverReceivedAt?: string | null;
 }>();
-const emit = defineEmits<{ close: [] }>();
+const emit = defineEmits<{ close: []; manageAreas: [] }>();
 
-interface Receipt { responses: number; listings: number; newCount: number; changedCount: number }
-type JobStatus = 'pending' | 'running' | 'partial' | 'failed' | 'visited' | 'needs-input';
+interface DabangRegionScope { kind: 'dabang-region'; name: string; dong: string; url: string }
+interface Coverage { pages: number; totalPages: number | null; total: number | null; regularUnique: number; complete: boolean; reason: string }
+interface ZigbangCoverage {
+  stationId: string; radiusKm: number; total: number | null; received: number; stored: number;
+  excluded: number; missing: number; unreadable: number; complete: boolean; reason: string;
+}
+interface NaverCoverage { pages: number; total: number | null; received: number; stored: number | null; complete: boolean }
+interface DaangnCoverage { stationPoiId: string | null; pages: number; received: number; stored: number; excluded: number; unreadable: number; complete: boolean; reason: string }
+interface Receipt {
+  responses: number; listings: number; newCount: number; changedCount: number;
+  uniqueListings?: number; excludedOutside?: number; excludedUnknown?: number; retainedOutside?: number; retainedUnknown?: number; coverage?: Coverage;
+  zigbangCoverage?: ZigbangCoverage; naverCoverage?: NaverCoverage; daangnCoverage?: DaangnCoverage;
+}
+type JobStatus = 'pending' | 'running' | 'complete' | 'partial' | 'failed' | 'visited' | 'needs-input';
 interface BrowseJob {
   id: string;
   areaName: string;
@@ -20,6 +35,7 @@ interface BrowseJob {
   status: JobStatus;
   note: string;
   receipt?: Receipt;
+  scope?: DabangRegionScope;
   startedAt?: number;
   actions?: number;
   received?: number;
@@ -58,15 +74,16 @@ interface BrowseState {
 type Command = 'start' | 'pause' | 'resume' | 'retry';
 
 const SITES = [
-  { id: 'naver', name: '네이버', mode: '매물 목록', defaultOn: true },
-  { id: 'dabang', name: '다방', mode: '매물 목록', defaultOn: true },
+  // 네이버는 열어 둔 네이버 탭의 필터가 있어야 해서 처음에는 고르지 않는다.
+  { id: 'naver', name: '네이버', mode: '구나 동 전체', defaultOn: false },
+  { id: 'dabang', name: '다방', mode: '기존 동별 원·투룸', defaultOn: true },
   { id: 'zigbang', name: '직방', mode: '매물 목록', defaultOn: true },
   { id: 'kbland', name: 'KB부동산', mode: '건수 확인', defaultOn: false },
   { id: 'hogangnono', name: '호갱노노', mode: '화면 확인', defaultOn: false },
-  { id: 'daangn', name: '당근', mode: '화면 확인', defaultOn: false },
+  { id: 'daangn', name: '당근', mode: '역 근처 첫 화면 목록', defaultOn: false },
 ];
 const STATUS: Record<JobStatus, string> = {
-  pending: '대기', running: '조회 중', partial: '일부 확인', failed: '실패', visited: '화면 확인', 'needs-input': '직접 확인 필요',
+  pending: '대기', running: '조회 중', complete: '선택 목록 저장 완료', partial: '일부 확인', failed: '실패', visited: '화면 확인', 'needs-input': '직접 확인 필요',
 };
 const HOSTS = new Set(['fin.land.naver.com', 'new.land.naver.com', 'www.dabangapp.com', 'www.zigbang.com', 'kbland.kr', 'hogangnono.com', 'realty.daangn.com']);
 const safeLink = (url: string) => {
@@ -76,6 +93,110 @@ const safeLink = (url: string) => {
   } catch { return null; }
 };
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+function readRegion(value: unknown): DabangRegionScope | null {
+  if (!value || typeof value !== 'object') return null;
+  const x = value as DabangRegionScope;
+  if (x.kind !== 'dabang-region' || typeof x.name !== 'string' || !x.name.trim() || x.name.length > 120
+    || typeof x.dong !== 'string' || !x.dong.trim() || x.dong.length > 60 || typeof x.url !== 'string') return null;
+  try {
+    const url = new URL(x.url);
+    if (url.protocol !== 'https:' || !['www.dabangapp.com', 'dabangapp.com'].includes(url.hostname) || url.username || url.password || url.port
+      || url.pathname !== '/map/onetwo' || url.searchParams.get('search_type') !== 'region' || !/^\d{1,20}$/.test(url.searchParams.get('search_id') || '')) return null;
+  } catch { return null; }
+  return { kind: x.kind, name: x.name.trim(), dong: x.dong.trim(), url: x.url };
+}
+function validCoverage(value: Coverage) {
+  return value && isCount(value.pages) && isCount(value.regularUnique) && (value.totalPages === null || isCount(value.totalPages))
+    && (value.total === null || isCount(value.total)) && typeof value.complete === 'boolean' && typeof value.reason === 'string' && value.reason.length <= 300;
+}
+function validZigbangCoverage(value: ZigbangCoverage) {
+  return value && typeof value.stationId === 'string' && /^\d{1,20}$/.test(value.stationId) && value.radiusKm === 1
+    && (value.total === null || isCount(value.total))
+    && ['received', 'stored', 'excluded', 'missing', 'unreadable'].every((key) => isCount(value[key as keyof ZigbangCoverage]))
+    && typeof value.complete === 'boolean' && typeof value.reason === 'string' && value.reason.length <= 300
+    && (!value.complete || value.total !== null && value.received === value.total && value.stored + value.excluded === value.total && value.missing === 0 && value.unreadable === 0);
+}
+function validReceipt(receipt: Receipt) {
+  return receipt && ['responses', 'listings', 'newCount', 'changedCount'].every((key) => isCount(receipt[key as keyof Receipt]))
+    && ['uniqueListings', 'excludedOutside', 'excludedUnknown', 'retainedOutside', 'retainedUnknown'].every((key) => receipt[key as keyof Receipt] === undefined || isCount(receipt[key as keyof Receipt]))
+    && (receipt.coverage === undefined || validCoverage(receipt.coverage))
+    && (receipt.zigbangCoverage === undefined || validZigbangCoverage(receipt.zigbangCoverage));
+}
+function zigbangStationId(job: BrowseJob) {
+  if (job.site !== 'zigbang') return null;
+  try {
+    const url = new URL(job.url);
+    return url.protocol === 'https:' && url.hostname === 'www.zigbang.com' && !url.username && !url.password && !url.port
+      ? /^\/home\/oneroom\/subways\/(\d{1,20})\/items\/?$/.exec(url.pathname)?.[1] ?? null : null;
+  } catch { return null; }
+}
+function zigbangCoverageFor(job: BrowseJob) {
+  const coverage = job.receipt?.zigbangCoverage;
+  return coverage && coverage.stationId === zigbangStationId(job) ? coverage : null;
+}
+function statusLabel(job: BrowseJob) {
+  if (job.status === 'complete' && job.site === 'daangn') return daangnCoverageFor(job)?.complete ? '역 근처 목록 확인 완료' : STATUS.complete;
+  if (job.status === 'complete' && job.site === 'zigbang') {
+    return zigbangCoverageFor(job)?.complete ? '역 1km 목록 확인 완료' : '이전 조회 결과 · 범위 확인 필요';
+  }
+  return STATUS[job.status];
+}
+function daangnCoverageFor(job: BrowseJob) {
+  const c = job.site === 'daangn' ? job.receipt?.daangnCoverage : undefined;
+  return c && [c.pages, c.received, c.stored, c.excluded, c.unreadable].every(isCount) && typeof c.complete === 'boolean' ? c : null;
+}
+function daangnCoverageText(coverage: DaangnCoverage) {
+  return `${coverage.pages}페이지, 매물 ${coverage.received}건 중 주거용 저장 ${coverage.stored}건, 상가와 사무실 등 ${coverage.excluded}건 제외`;
+}
+function naverCoverageFor(job: BrowseJob) {
+  const c = job.site === 'naver' ? job.receipt?.naverCoverage : undefined;
+  return c && isCount(c.pages) && isCount(c.received) && (c.total === null || isCount(c.total))
+    && (c.stored === null || c.stored === undefined || isCount(c.stored)) && typeof c.complete === 'boolean' ? c : null;
+}
+function naverCoverageText(coverage: NaverCoverage) {
+  return `${coverage.pages}페이지, 목록 수신 ${coverage.received}/${coverage.total ?? '?'}건, 저장 ${coverage.stored ?? '?'}건`;
+}
+function zigbangCoverageText(coverage: ZigbangCoverage) {
+  return `상세 수신 ${coverage.received}/${coverage.total ?? '?'}건 · 저장 ${coverage.stored}건 · 범위 밖 제외 ${coverage.excluded}건`;
+}
+function zigbangMissingText(coverage: ZigbangCoverage) {
+  return `상세 미수신 ${coverage.missing}건 · 읽기 실패 ${coverage.unreadable}건`;
+}
+function zigbangCoverageReason(coverage: ZigbangCoverage) {
+  if (coverage.complete) return '';
+  const reasons: Record<string, string> = {
+    'missing-list': '역 1km의 매물 번호 목록을 아직 받지 못했습니다',
+    'missing-details': '아직 상세를 받지 못한 매물이 있습니다',
+    'unreadable-details': '상세를 읽지 못한 매물이 있습니다',
+    'unverified-storage': '받은 상세의 서버 저장 확인이 남아 있습니다',
+    'station-changed': '조회 중 역이 바뀌었습니다',
+    'radius-mismatch': '역 1km 범위와 다른 응답이 왔습니다',
+    'query-changed': '조회 중 검색 조건이 바뀌었습니다',
+    'unreadable-list': '매물 번호 목록을 읽지 못했습니다',
+    'duplicate-list-id': '매물 번호 목록에 중복이 있어 전체 범위를 확인할 수 없습니다',
+    'list-changed': '조회 중 매물 번호 목록이 바뀌었습니다',
+    'response-status': '정상적으로 받지 못한 응답이 있습니다',
+    'response-scope': '선택한 역 1km의 응답인지 확인이 필요합니다',
+    'coverage-limit': '확인 한도에 도달해 일부만 확인했습니다',
+  };
+  return reasons[coverage.reason] || '역 1km 목록의 상세 수신과 서버 저장을 확인하는 중입니다';
+}
+function coverageText(coverage: Coverage) {
+  return `페이지 ${coverage.pages}/${coverage.totalPages ?? '?'} · 중복 없는 일반 매물 ${coverage.regularUnique}/${coverage.total ?? '?'}건`;
+}
+function coverageReason(coverage: Coverage) {
+  if (coverage.complete) return '';
+  const reasons: Record<string, string> = {
+    'missing-metadata': '페이지 정보 확인 필요', 'missing-pages': '아직 저장되지 않은 페이지가 있습니다',
+    'count-mismatch': '목록 전체 건수와 받은 매물 수가 다릅니다', 'unverified-dong': '동을 확인하지 못한 매물이 있습니다',
+    'unverified-region': '동별 검색 범위 확인 필요', 'query-changed': '조회 중 검색 조건이 바뀌었습니다',
+    'total-changed': '조회 중 전체 매물 수가 바뀌었습니다', 'page-changed': '조회 중 같은 페이지의 매물이 바뀌었습니다',
+    'inconsistent-pages': '페이지 정보가 서로 맞지 않습니다', 'unreadable-row': '읽지 못한 매물이 있습니다',
+    'unreadable-response': '읽지 못한 응답이 있습니다', 'response-scope': '선택한 동의 응답인지 확인 필요',
+    'coverage-limit': '확인 한도에 도달해 일부만 확인했습니다',
+  };
+  return reasons[coverage.reason] || '전체 페이지와 저장 결과를 확인하는 중입니다';
+}
 /** 확장 메시지의 상태만 받아 화면에 쓴다. 원응답이나 지역 좌표는 결과에 표시하지 않는다. */
 function readState(value: unknown): BrowseState | null | undefined {
   if (value === null) return null;
@@ -90,14 +211,68 @@ function readState(value: unknown): BrowseState | null | undefined {
   if (!x.jobs.every((j) => j && typeof j.id === 'string' && typeof j.areaName === 'string' && typeof j.site === 'string' && typeof j.siteName === 'string'
     && typeof j.url === 'string' && Object.hasOwn(STATUS, j.status) && typeof j.note === 'string'
     && ['startedAt', 'actions', 'received', 'lastCaptureAt'].every((k) => j[k as 'startedAt'] === undefined || isCount(j[k as 'startedAt']))
-    && (j.receipt === undefined || j.receipt !== null && ['responses', 'listings', 'newCount', 'changedCount'].every((k) => isCount(j.receipt![k as keyof Receipt]))))) return undefined;
+    && (j.scope === undefined || readRegion(j.scope))
+    && (j.receipt === undefined || validReceipt(j.receipt)))) return undefined;
   return x;
 }
 
 const ready = computed(() => props.extension?.browse === true);
-const sites = computed(() => SITES.filter((s) => props.extension?.sites.includes(s.id)));
+/** 연결된 확장이 0.minor.patch 이상인지 */
+function extensionAtLeast(minor: number, patch: number) {
+  const parts = (props.extension?.version ?? '').split('.').map(Number);
+  return parts.length === 3 && parts.every(Number.isSafeInteger) &&
+    (parts[0] > 0 || parts[1] > minor || parts[1] === minor && parts[2] >= patch);
+}
+// 0.8.22부터 대시보드도 열린 네이버 탭의 필터를 읽어 네이버를 다른 사이트와 함께 시작한다.
+const naverVersionReady = computed(() => extensionAtLeast(8, 22));
+// 수집 지역에 구가 있으면 다방은 위의 구 전체 자동수집이 모은다. 순차 조회에서 또 돌면 같은 매물을 중복 조회하므로 뺀다.
+const dabangByServer = computed(() => props.areas.some((a) => a.enabled && a.purpose !== 'alert' && a.region?.kind === 'gu'));
+// 켜진 구, 동이나 지하철역이 있으면 직방은 '조회하기'와 자동 확인이 지역 안 역들의 1km 원룸을 서버에서 모은다. 순차 조회에서 또 돌면 중복이라 뺀다.
+const zigbangByServer = computed(() => props.areas.some((a) => a.enabled));
+const sites = computed(() => SITES.filter((s) => (s.id !== 'naver' || naverVersionReady.value) && (s.id !== 'dabang' || !dabangByServer.value)
+  && (s.id !== 'zigbang' || !zigbangByServer.value) && props.extension?.sites.includes(s.id)));
+const naverEnabled = computed(() => !!props.extension?.sites.includes('naver'));
+const naverAvailable = computed(() => sites.value.some((s) => s.id === 'naver'));
 const selectedAreas = ref<number[]>([]);
 const selectedSites = ref<string[]>([]);
+const areaScopes = ref<Record<string, DabangRegionScope[]>>({});
+const scopesReady = ref(false);
+const scopesLoading = ref(false);
+const scopeError = ref<string | null>(null);
+let scopeController: AbortController | undefined;
+let scopeTimeout: number | undefined;
+async function loadScopes() {
+  if (scopesLoading.value) return;
+  scopesReady.value = false;
+  scopesLoading.value = true;
+  scopeError.value = null;
+  const controller = new AbortController();
+  scopeController = controller;
+  scopeTimeout = window.setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch('/api/browse/scopes', { signal: controller.signal, cache: 'no-store' });
+    if (!response.ok) throw new Error('scopes unavailable');
+    const data = await response.json();
+    if (!data?.scopes || typeof data.scopes !== 'object' || Array.isArray(data.scopes)) throw new Error('invalid scopes');
+    const next: Record<string, DabangRegionScope[]> = {};
+    for (const [id, regions] of Object.entries(data.scopes)) {
+      if (!/^\d+$/.test(id) || !Array.isArray(regions) || !regions.length || regions.length > 50) throw new Error('invalid scopes');
+      next[id] = regions.map((region) => {
+        const parsed = readRegion(region);
+        if (!parsed) throw new Error('invalid scope');
+        return parsed;
+      });
+    }
+    areaScopes.value = next;
+    scopesReady.value = true;
+  } catch {
+    scopeError.value = '저장된 동별 조회 범위를 불러오지 못했습니다. 범위가 바뀌지 않도록 시작을 멈췄습니다. 서버 연결을 확인하고 다시 불러와 주세요.';
+  } finally {
+    window.clearTimeout(scopeTimeout);
+    scopesLoading.value = false;
+    scopeController = undefined;
+  }
+}
 let initializedAreas = false;
 let initializedSites = false;
 watch(() => props.areas.map((a) => a.id), (ids) => {
@@ -136,7 +311,8 @@ let errorKind: 'command' | 'connection' | null = null;
 let firstRequestAt = 0;
 const running = computed(() => state.value?.status === 'running');
 const activeState = computed(() => pending.value === 'start' && state.value?.id === pendingBaseStateId.value ? null : state.value);
-const incomplete = computed(() => state.value?.jobs.filter((j) => ['partial', 'failed', 'needs-input'].includes(j.status)).length ?? 0);
+const incompleteJobs = computed(() => state.value?.jobs.filter((j) => ['partial', 'failed', 'needs-input'].includes(j.status)) ?? []);
+const incomplete = computed(() => incompleteJobs.value.length);
 const finished = computed(() => activeState.value?.jobs.filter((j) => !['pending', 'running'].includes(j.status)).length ?? 0);
 const current = computed(() => activeState.value?.jobs.find((j) => j.status === 'running'));
 const totals = computed(() => activeState.value?.jobs.reduce((sum, j) => ({
@@ -146,8 +322,45 @@ const totals = computed(() => activeState.value?.jobs.reduce((sum, j) => ({
   changedCount: sum.changedCount + (j.receipt?.changedCount ?? 0),
 }), { responses: 0, listings: 0, newCount: 0, changedCount: 0 }));
 const chosenAreas = computed(() => props.areas.filter((a) => selectedAreas.value.includes(a.id)));
+const chosenSites = computed(() => sites.value.filter((site) => selectedSites.value.includes(site.id)));
+// 확장의 순회 계획과 같은 기준이다. 네이버는 구나 동 전체를, 다른 사이트는 역 지역을 맡는다.
+const covers = (area: Area, site: string) => area.region ? site === 'naver' && area.purpose !== 'alert' : site !== 'naver';
+const plannedJobs = computed(() => chosenAreas.value.flatMap((area) => chosenSites.value.filter((site) => covers(area, site.id)).flatMap((site) => {
+  if (site.id === 'naver') return [{ key: `${area.id}:naver`, areaId: area.id, site: site.id, areaName: area.name, siteName: site.name,
+    label: area.region?.kind === 'gu' ? '구 전체' : '동 전체', detail: '고른 네이버 탭의 필터로 전체 목록을 마지막 페이지까지 확인', scoped: false }];
+  const regions = site.id === 'dabang' ? [...new Map((areaScopes.value[area.id] ?? [])
+    .map((scope) => [new URL(scope.url).searchParams.get('search_id'), scope])).values()] : [];
+  return regions.length
+    ? regions.map((scope) => ({ key: `${area.id}:${site.id}:${scope.url}`, areaId: area.id, site: site.id, areaName: area.name, siteName: site.name, label: scope.dong, detail: scope.name, scoped: true }))
+    : [{ key: `${area.id}:${site.id}`, areaId: area.id, site: site.id, areaName: area.name, siteName: site.name,
+      label: site.id === 'zigbang' ? '역 1km · 원룸' : site.id === 'daangn' ? '역 근처 주거용' : '지도·필터 범위',
+      detail: site.id === 'daangn' ? '가까운 역의 당근 목록 중 화면을 열 때 온 첫 목록에서 원룸, 투룸, 오피스텔, 아파트, 주택만 저장' : site.id === 'zigbang' ? `알려진 역의 1km 원룸 목록. 지역 설정 반경 ${radiusText(area.radiusM)}와 별개이며 사이트의 현재 필터가 적용됩니다.` : `역 중심 반경 ${radiusText(area.radiusM)}의 지도를 열고 사이트의 현재 필터 범위를 조회`, scoped: false }];
+})));
+const naverJobs = computed(() => plannedJobs.value.filter((job) => job.site === 'naver'));
+const startAreas = computed(() => chosenAreas.value.filter((area) => plannedJobs.value.some((job) => job.areaId === area.id)));
+const skippedAreas = computed(() => chosenAreas.value.filter((area) => !plannedJobs.value.some((job) => job.areaId === area.id)));
+const skipNote = computed(() => {
+  if (!skippedAreas.value.length) return '';
+  const notes = [`이번 조회에서 빠지는 지역: ${skippedAreas.value.map((a) => a.name).join(', ')}.`];
+  if (skippedAreas.value.some((a) => a.region)) notes.push(naverAvailable.value
+    ? '구나 동 전체는 네이버를 고르면 함께 조회합니다.'
+    : '구나 동 전체는 네이버로 조회합니다. 확장에서 네이버를 켜 두고 확장이 0.8.22 이상이면 여기서 고를 수 있습니다.', '다방 구 전체 수집은 위에서 따로 실행합니다.');
+  if (skippedAreas.value.some((a) => !a.region)) notes.push('역 지역은 네이버가 아닌 사이트를 하나 이상 골라야 조회합니다.');
+  return notes.join(' ');
+});
+const runExpanded = ref(false);
+watch(() => [activeState.value?.id, activeState.value?.status, pending.value] as const, ([id, status, command], [previousId]) => {
+  if (command || status === 'running' || status === 'paused') runExpanded.value = true;
+  else if (id !== previousId) runExpanded.value = false;
+});
+const runScopeLabel = computed(() => [...new Set(activeState.value?.jobs.map((job) => `${job.areaName} · ${job.siteName}`) ?? [])].join(', '));
+const runDate = computed(() => activeState.value ? new Date(activeState.value.createdAt || activeState.value.updatedAt).toLocaleString('ko-KR', {
+  month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+}) : '');
+const scopeVersionReady = computed(() => !selectedSites.value.includes('dabang') || !chosenAreas.value.some((a) => areaScopes.value[a.id]?.length) || extensionAtLeast(8, 4));
+const zigbangVersionReady = computed(() => !selectedSites.value.includes('zigbang') || extensionAtLeast(8, 9));
 const connectionStale = computed(() => !received.value || !!lastResponse.value && now.value - lastResponse.value > 12000);
-const canStart = computed(() => ready.value && !connectionStale.value && !pending.value && !running.value && chosenAreas.value.length > 0 && selectedSites.value.length > 0);
+const canStart = computed(() => ready.value && scopesReady.value && scopeVersionReady.value && zigbangVersionReady.value && naverSourceReady.value && !connectionStale.value && !pending.value && !running.value && plannedJobs.value.length > 0);
 const stateLabel = computed(() => state.value?.status === 'running' ? '지역을 차례로 확인하고 있습니다' : state.value?.status === 'paused' ? '순회를 멈췄습니다' : state.value?.status === 'done' ? '순회가 끝났습니다' : '대기 중');
 const workerStale = computed(() => activeState.value?.status === 'running' && !!activeState.value.heartbeatAt && now.value - activeState.value.heartbeatAt > 20000);
 const seconds = (since: number, until = now.value) => Math.max(0, Math.floor((until - since) / 1000));
@@ -183,6 +396,100 @@ function localEvent(text: string) {
 let poll: number | undefined;
 let commandTimeout: number | undefined;
 
+// 네이버 필터는 열린 네이버 탭의 주소에서 확장이 읽는다. 대시보드는 탭 목록과 조건 문구, 시작 때 대조할 키만 받는다.
+interface NaverTab { id: number; title: string; active: boolean }
+interface NaverSource { key: string; tabId: number; conditions: { label: string; value: string }[] }
+type NaverRequest = 'naver-filter-tabs' | 'naver-filter-state' | 'naver-preset-save';
+const naverChosen = computed(() => chosenSites.value.some((site) => site.id === 'naver'));
+const naverTabs = ref<NaverTab[]>([]);
+const naverTabId = ref<number | null>(null);
+const naverSource = ref<NaverSource | null>(null);
+const naverBusy = ref<NaverRequest | null>(null);
+const naverError = ref<string | null>(null);
+const naverPresetNotice = ref<string | null>(null);
+let naverRequestId: string | null = null;
+let naverSequence = 0;
+let naverTimeout: number | undefined;
+const naverSourceReady = computed(() => !naverJobs.value.length || !naverBusy.value && !!naverSource.value && naverSource.value.tabId === naverTabId.value);
+// 0.8.23부터 대시보드에서도 읽은 필터와 고른 구나 동을 브라우저 예약 조회용으로 저장한다.
+const naverPresetVersionReady = computed(() => extensionAtLeast(8, 23));
+const canSaveNaverPreset = computed(() => naverPresetVersionReady.value && naverJobs.value.length > 0 && naverSourceReady.value);
+const naverStatus = computed(() => naverBusy.value === 'naver-filter-tabs' ? '열린 네이버 매물 탭을 찾고 있습니다.'
+  : naverBusy.value === 'naver-filter-state' ? '고른 탭의 필터를 읽고 있습니다.'
+  : naverError.value ?? (naverSource.value ? '고른 탭의 주소에서 읽은 조건입니다. 시작할 때 다시 읽어 같을 때만 수집하고, 수집 창의 응답도 같은 조건인지 확인합니다.'
+    : naverTabs.value.length ? '필터를 적용한 네이버 탭을 골라 주세요.'
+    : '네이버 지도에서 구나 동 매물 목록에 필터를 적용한 뒤 탭 목록 새로고침을 눌러 주세요.'));
+function readNaverTabs(value: unknown): NaverTab[] | null {
+  if (!Array.isArray(value) || value.length > 50) return null;
+  const tabs = value as NaverTab[];
+  return tabs.every((t) => t && Number.isSafeInteger(t.id) && t.id > 0 && typeof t.title === 'string' && t.title.length <= 160 && typeof t.active === 'boolean')
+    ? tabs.map(({ id, title, active }) => ({ id, title, active })) : null;
+}
+function readNaverSource(value: unknown): NaverSource | null {
+  const x = value as NaverSource | null;
+  if (!x || typeof x !== 'object' || typeof x.key !== 'string' || !x.key || x.key.length > 20000 || !Number.isSafeInteger(x.tabId) || x.tabId <= 0
+    || !Array.isArray(x.conditions) || x.conditions.length > 60
+    || !x.conditions.every((row) => row && typeof row.label === 'string' && row.label.length <= 80 && typeof row.value === 'string' && row.value.length <= 1000)) return null;
+  return { key: x.key, tabId: x.tabId, conditions: x.conditions.map(({ label, value }) => ({ label, value })) };
+}
+function naverRequest(type: NaverRequest, extra: { tabId?: number; filterKey?: string; areaIds?: number[] } = {}) {
+  if (!ready.value) return;
+  naverRequestId = `${requestPrefix}-naver-${++naverSequence}`;
+  naverBusy.value = type;
+  naverError.value = null;
+  naverPresetNotice.value = null;
+  window.clearTimeout(naverTimeout);
+  naverTimeout = window.setTimeout(() => {
+    naverRequestId = null;
+    naverBusy.value = null;
+    naverError.value = '확장이 네이버 탭 확인에 답하지 않았습니다. 대시보드를 새로고침한 뒤 다시 시도해 주세요.';
+  }, 10000);
+  window.postMessage({ source: 'hnw-dashboard', type, requestId: naverRequestId, ...extra }, location.origin);
+}
+function loadNaverTabs() {
+  naverRequest('naver-filter-tabs');
+}
+function readNaverFilter() {
+  naverSource.value = null;
+  if (naverTabId.value !== null) naverRequest('naver-filter-state', { tabId: naverTabId.value });
+}
+function saveNaverPreset() {
+  if (!canSaveNaverPreset.value || !naverSource.value) return;
+  naverRequest('naver-preset-save', { tabId: naverSource.value.tabId, filterKey: naverSource.value.key, areaIds: naverJobs.value.map((job) => job.areaId) });
+}
+function chooseNaverTab(value: string) {
+  const id = Number(value);
+  naverTabId.value = naverTabs.value.some((tab) => tab.id === id) ? id : null;
+  readNaverFilter();
+}
+function onNaverReply(data: { requestId?: unknown; requestType?: unknown; error?: unknown; tabs?: unknown; context?: unknown; preset?: unknown }) {
+  if (!naverRequestId || data.requestId !== naverRequestId) return;
+  naverRequestId = null;
+  naverBusy.value = null;
+  window.clearTimeout(naverTimeout);
+  if (typeof data.error === 'string') { naverError.value = data.error.slice(0, 300); return; }
+  if (data.requestType === 'naver-filter-tabs') {
+    const tabs = readNaverTabs(data.tabs);
+    if (!tabs) { naverError.value = '네이버 탭 목록을 확인하지 못했습니다. 다시 불러와 주세요.'; return; }
+    const previous = naverTabId.value;
+    naverTabs.value = tabs;
+    // 고른 탭이 닫혔으면 다른 탭으로 바꾸지 않고 다시 고르게 한다.
+    naverTabId.value = tabs.some((tab) => tab.id === previous) ? previous
+      : previous !== null ? null : tabs.find((tab) => tab.active)?.id ?? (tabs.length === 1 ? tabs[0].id : null);
+    readNaverFilter();
+    if (previous !== null && naverTabId.value === null) naverError.value = '고른 네이버 탭이 닫혔습니다. 필터를 적용한 탭을 다시 골라 주세요.';
+  } else if (data.requestType === 'naver-filter-state') {
+    const source = readNaverSource(data.context);
+    if (source && source.tabId === naverTabId.value) naverSource.value = source;
+    else naverError.value = '고른 탭의 필터를 확인하지 못했습니다. 필터를 다시 읽어 주세요.';
+  } else if (data.requestType === 'naver-preset-save') {
+    const preset = data.preset as { areaIds?: unknown } | null;
+    if (preset && Array.isArray(preset.areaIds)) naverPresetNotice.value = '이 조건과 지역을 예약용으로 저장했습니다. 아래 브라우저 예약 조회의 ‘예약 설정’에서 네이버를 켜세요.';
+    else naverError.value = '예약용 저장을 확인하지 못했습니다. 아래 브라우저 예약 조회에서 저장한 필터를 확인해 주세요.';
+  }
+}
+watch(() => naverChosen.value && ready.value, (load) => { if (load) loadNaverTabs(); });
+
 function requestStatus() {
   now.value = Date.now();
   if (!ready.value) return;
@@ -203,8 +510,10 @@ function reconnect() {
   requestStatus();
 }
 function onMessage(event: MessageEvent) {
-  if (event.source !== window || event.origin !== location.origin || event.data?.source !== 'hnw-extension' || event.data.type !== 'browse-status') return;
-  const request = typeof event.data.requestId === 'string' ? requests.get(event.data.requestId) : undefined;
+  if (event.source !== window || event.origin !== location.origin || event.data?.source !== 'hnw-extension') return;
+  if (event.data.type === 'naver-filter') { onNaverReply(event.data); return; }
+  if (event.data.type !== 'browse-status') return;
+  const request =typeof event.data.requestId === 'string' ? requests.get(event.data.requestId) : undefined;
   if (event.data.requestId !== undefined && !request) return;
   const commandReply = !!pendingRequestId.value && event.data.requestId === pendingRequestId.value && event.data.requestType === 'browse-command';
   if (typeof event.data.error === 'string') {
@@ -252,9 +561,13 @@ function command(command: Command) {
     window.postMessage({
       source: 'hnw-dashboard', type: 'browse-command', command, requestId: pendingRequestId.value,
       ...(command === 'start' ? {
-        areas: chosenAreas.value.map(({ id, name, lat, lng, radiusM }) => ({ id, name, lat, lng, radiusM })),
+        areas: startAreas.value.map(({ id, name, lat, lng, radiusM, region }) => ({ id, name, lat, lng, radiusM,
+          ...(region ? { region: { kind: region.kind, code: region.code, name: region.name } }
+            : areaScopes.value[id] ? { dabangRegions: areaScopes.value[id].map(({ kind, name, dong, url }) => ({ kind, name, dong, url })) } : {}),
+        })),
         // Vue의 반응형 배열(Proxy)은 postMessage로 복제할 수 없다.
-        sites: [...selectedSites.value],
+        sites: chosenSites.value.filter((site) => plannedJobs.value.some((job) => job.site === site.id)).map((site) => site.id),
+        ...(naverJobs.value.length && naverSource.value ? { naverSourceTabId: naverSource.value.tabId, naverFilterKey: naverSource.value.key } : {}),
       } : {}),
     }, location.origin);
   } catch {
@@ -274,26 +587,33 @@ function command(command: Command) {
   }, 12000);
 }
 watch(ready, (v) => { if (v) requestStatus(); });
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('message', onMessage);
   requestStatus();
   poll = window.setInterval(requestStatus, 2000);
+  await loadScopes();
 });
 onBeforeUnmount(() => {
   window.removeEventListener('message', onMessage);
   window.clearInterval(poll);
   window.clearTimeout(commandTimeout);
+  window.clearTimeout(naverTimeout);
+  scopeController?.abort();
+  window.clearTimeout(scopeTimeout);
 });
 </script>
 
 <template>
-  <section id="browse-queue" class="browse-queue" aria-labelledby="browse-title">
+  <section id="browse-queue" class="browse-queue management-shell" aria-labelledby="browse-title">
     <div class="heading">
       <div>
-        <h2 id="browse-title">지역 순차 조회</h2>
-        <p class="muted">전용 탭 하나로 선택한 지역을 차례로 엽니다. 네이버, 다방, 직방은 확인 가능한 목록을 펼치거나 내려서 받습니다.</p>
+        <h2 id="browse-title" tabindex="-1">확장프로그램으로 순차 조회</h2>
+        <p class="muted">크롬 확장이 새 전용 창에서 고른 지역과 사이트를 차례로 확인합니다. 다방 구 전체 수집은 위에서 실행할 수 있습니다.</p>
       </div>
-      <button class="btn btn-sm" aria-label="지역 순차 조회 패널 닫기" @click="emit('close')">접기</button>
+      <div class="heading-actions">
+        <button class="btn btn-sm" @click="emit('manageAreas')">지역 추가·관리</button>
+        <button class="btn btn-sm" aria-label="지역 순차 조회 패널 닫기" @click="emit('close')">접기</button>
+      </div>
     </div>
     <p v-if="!extension" class="notice">확장이 설치된 크롬에서 대시보드를 열어 주세요.</p>
     <div v-else-if="!ready" class="notice">
@@ -301,142 +621,309 @@ onBeforeUnmount(() => {
       <button class="btn btn-sm" @click="reconnect">연결 다시 확인</button>
     </div>
     <template v-else>
-      <div v-if="pending || activeState || localEvents.length" class="progress-panel" :class="{ uncertain: connectionStale || workerStale }" aria-label="순차 조회 진행 상황">
-        <div class="progress-heading">
-          <strong role="status" aria-live="polite">{{ progressTitle }}</strong>
-          <span class="elapsed">경과 {{ elapsed }}</span>
-        </div>
-        <p v-if="current" class="current-job">{{ current.areaName }}, {{ current.siteName }}<span v-if="activeState"> ({{ activeState.index + 1 }}/{{ activeState.jobs.length }}번째 항목)</span></p>
-        <p>{{ connectionStale || workerStale ? '마지막 확인 내용: ' : '' }}{{ progressDetail }}</p>
-        <p v-if="pending && activeState" class="help">요청 응답을 기다리는 동안에도 확인된 작업 상태를 계속 갱신합니다.</p>
-        <div v-if="activeState" class="counters">
-          <span>종료한 항목 <b>{{ finished }}/{{ activeState.jobs.length }}</b></span>
-          <span>목록 탐색 <b>{{ actionCount }}회</b></span>
-          <span>브라우저 수신 <b>{{ capturedCount }}건</b></span>
-          <span>서버 수신 확인 <b>{{ totals?.responses ?? 0 }}건</b></span>
-          <span>매물 저장 처리 <b>{{ totals?.listings ?? 0 }}건</b></span>
-        </div>
-        <progress v-if="activeState?.jobs.length" :value="finished" :max="activeState.jobs.length" :aria-label="`${activeState.jobs.length}개 중 ${finished}개 항목 조회 종료`" />
-        <p class="help">{{ lastReplyText }}<template v-if="activeState?.heartbeatAt && activeState.status === 'running'">, 마지막 작업 신호 {{ duration(seconds(activeState.heartbeatAt)) }} 전</template></p>
-        <p v-if="connectionStale || workerStale" class="stale-help">표시된 내용은 마지막으로 확인한 상태입니다. 실제 진행 여부는 아직 확인되지 않았습니다.</p>
-        <details class="activity" open>
-          <summary>활동 로그 <span class="muted">최근 {{ activity.length }}건, 최신순</span></summary>
-          <ol v-if="activity.length" aria-label="조회 활동 로그">
-            <li v-for="(event, index) in activity" :key="`${event.at}-${index}`"><time>{{ timeText(event.at) }}</time><span>{{ event.text }}</span></li>
-          </ol>
-          <p v-else class="help">이 작업의 활동 로그가 아직 없습니다. 항목별 확인 상태를 참고해 주세요.</p>
-        </details>
-      </div>
       <div class="choices">
         <fieldset :disabled="running || !!pending">
-          <legend>지역 <span class="muted">{{ selectedAreas.length }}곳 선택</span></legend>
+          <legend>1. 지역 <span class="muted">{{ selectedAreas.length }}곳 선택</span></legend>
           <p v-if="!areas.length" class="muted">지역 탭에서 조회할 지역을 먼저 켜 주세요.</p>
           <template v-else>
-            <button type="button" class="linkish" @click="selectedAreas = areas.map((a) => a.id)">모두 선택</button>
-            <button type="button" class="linkish" @click="selectedAreas = []">선택 해제</button>
-            <div class="check-list">
-              <label v-for="a in areas" :key="a.id"><input v-model="selectedAreas" type="checkbox" :value="a.id">{{ a.name }} <span class="muted">{{ radiusText(a.radiusM) }}</span></label>
+            <div v-if="areas.length > 1" class="select-actions">
+              <button type="button" @click="selectedAreas = areas.map((a) => a.id)">모두 선택</button>
+              <button type="button" @click="selectedAreas = []">선택 해제</button>
+            </div>
+            <div class="check-list area-list">
+              <label v-for="a in areas" :key="a.id" :class="{ selected: selectedAreas.includes(a.id) }">
+                <input v-model="selectedAreas" type="checkbox" :value="a.id">
+                <span>{{ a.name }}<small>{{ a.region ? `${a.region.kind === 'gu' ? '구 전체' : '법정동 전체'}, ${naverAvailable && a.purpose !== 'alert' ? '네이버로 조회' : '순차 조회 준비 중'}` :selectedSites.includes('dabang') && areaScopes[a.id]?.length ? '다방 동별 범위 지정됨' : `반경 ${radiusText(a.radiusM)}` }}</small></span>
+              </label>
             </div>
           </template>
         </fieldset>
         <fieldset :disabled="running || !!pending">
-          <legend>사이트</legend>
+          <legend>2. 사이트 <span class="muted">{{ selectedSites.length }}곳 선택</span></legend>
           <p v-if="!sites.length" class="muted">확장 아이콘에서 조회할 사이트를 켜 주세요.</p>
-          <div class="check-list">
-            <label v-for="s in sites" :key="s.id"><input v-model="selectedSites" type="checkbox" :value="s.id">{{ s.name }} <span class="muted">{{ s.mode }}</span></label>
+          <div class="check-list site-list">
+            <label v-for="s in sites" :key="s.id" :class="{ selected: selectedSites.includes(s.id) }">
+              <input v-model="selectedSites" type="checkbox" :value="s.id">
+              <span>{{ s.name }}<small>{{ s.mode }}</small></span>
+            </label>
+            <div v-if="dabangByServer" class="icon-site" title="수집 지역의 구는 위의 다방 구 전체 자동수집이 원룸부터 아파트까지 모읍니다. 순차 조회에서 또 돌면 같은 매물을 중복 조회해서 뺐습니다.">
+              <span class="icon-mark" aria-hidden="true"></span>
+              <span>다방<small>구 전체 자동수집이 모음</small></span>
+            </div>
+            <div v-if="zigbangByServer && extension?.sites.includes('zigbang')" class="icon-site" title="켜진 수집 지역은 '조회하기'와 자동 확인이 지역 안 역들의 1km 원룸을 서버에서 모읍니다. 순차 조회에서 또 돌면 같은 매물을 중복 조회해서 뺐습니다.">
+              <span class="icon-mark" aria-hidden="true"></span>
+              <span>직방<small>조회하기가 역 1km 원룸을 모음</small></span>
+            </div>
+            <div v-if="naverEnabled && !naverVersionReady" class="icon-site" title="확장이 0.8.22 이상으로 자동 업데이트되면 여기서 고를 수 있습니다. 그 전에는 확장 아이콘 메뉴에서 시작하세요.">
+              <span class="icon-mark" aria-hidden="true"></span>
+              <span>네이버<small>확장 업데이트 후 선택</small></span>
+            </div>
           </div>
         </fieldset>
       </div>
-      <p class="help">조회 중 전용 탭의 화면이 자동으로 바뀝니다. KB는 건수만, 호갱노노와 당근은 화면 데이터만 확인하며 개별 매물로 정리하지 않습니다.</p>
+
+      <fieldset v-if="naverChosen" class="naver-source" :disabled="running || !!pending">
+        <legend>3. 네이버 필터 <span class="muted">{{ naverSource ? '읽음' : '확인 필요' }}</span></legend>
+        <p class="help">네이버는 열어 둔 네이버 매물 탭에 적용한 가격과 거래 조건 필터를 그대로 씁니다. 네이버에서 필터를 적용한 뒤 그 탭을 고르세요.</p>
+        <div class="naver-source-row">
+          <select aria-label="필터를 읽을 네이버 탭" :disabled="!!naverBusy || !naverTabs.length" @change="chooseNaverTab(($event.target as HTMLSelectElement).value)">
+            <option value="" :selected="naverTabId === null">{{ naverTabs.length ? '필터를 적용한 네이버 탭을 고르세요' : '열린 네이버 매물 탭이 없습니다' }}</option>
+            <option v-for="tab in naverTabs" :key="tab.id" :value="tab.id" :selected="tab.id === naverTabId">{{ tab.title }}</option>
+          </select>
+          <button type="button" class="btn btn-sm" :disabled="!!naverBusy" @click="loadNaverTabs">탭 목록 새로고침</button>
+          <button type="button" class="btn btn-sm" :disabled="!!naverBusy || naverTabId === null" @click="readNaverFilter">필터 다시 읽기</button>
+        </div>
+        <p class="help" :class="{ 'stale-help': naverError && !naverBusy }" role="status">{{ naverStatus }}</p>
+        <dl v-if="naverSource" class="naver-conditions">
+          <template v-for="(row, index) in naverSource.conditions" :key="index"><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></template>
+        </dl>
+        <div v-if="naverPresetVersionReady" class="naver-preset-row">
+          <button type="button" class="btn btn-sm" :disabled="!canSaveNaverPreset" @click="saveNaverPreset">{{ naverBusy === 'naver-preset-save' ? '저장하는 중…' : '이 조건과 지역을 예약용으로 저장' }}</button>
+          <span class="help" role="status">{{ naverPresetNotice || '1번에서 고른 구나 동과 이 필터를 브라우저 예약 조회용으로 저장합니다. 수집은 바로 시작하지 않습니다.' }}</span>
+        </div>
+        <p v-else class="help">예약용 저장은 확장이 0.8.23 이상으로 업데이트되면 여기서 할 수 있습니다. 그 전에는 확장 아이콘 메뉴에서 저장하세요.</p>
+        <p v-if="!naverJobs.length" class="scope-note">네이버는 구나 동 지역을 골라야 조회합니다.</p>
+        <NaverManual :areas="areas" :received-at="naverReceivedAt ?? null" />
+      </fieldset>
+
+      <div class="launch-panel" aria-label="이번 조회 범위">
+        <div class="launch-summary">
+          <div class="section-heading"><h3>이번 조회</h3><span v-if="scopesReady && plannedJobs.length" class="count-badge">예상 {{ plannedJobs.length }}개 조회</span></div>
+          <p v-if="scopesLoading" class="help" role="status">저장된 동별 범위를 불러오는 중입니다.</p>
+          <ol v-else-if="scopesReady && plannedJobs.length" class="planned-jobs">
+            <li v-for="(job, index) in plannedJobs" :key="job.key">
+              <span class="job-number">{{ index + 1 }}</span>
+              <strong :title="job.detail">{{ job.scoped ? job.label : job.areaName }}</strong>
+              <span class="muted">{{ job.siteName }} · {{ job.scoped ? '원/투룸' : job.label }}</span>
+            </li>
+          </ol>
+          <p v-else-if="scopesReady" class="help">지역과 사이트를 각각 하나 이상 선택해 주세요.</p>
+          <p v-if="scopesReady && selectedSites.includes('dabang') && plannedJobs.some((j) => j.scoped)" class="scope-note">지정한 동 안의 원/투룸 목록을 마지막 페이지까지 확인합니다. 다방에 설정된 필터가 적용됩니다.</p>
+          <p v-if="scopesReady && selectedSites.includes('zigbang')" class="scope-note">직방은 알려진 역의 1km 원룸 목록을 조회합니다. 지역 설정 반경과 별개이며 사이트의 현재 필터가 적용됩니다. 역을 찾지 못하면 직접 확인 필요로 남깁니다.</p>
+          <p v-if="scopesReady && naverJobs.length" class="scope-note">네이버는 고른 탭의 필터를 전용 창에 복사해 구나 동 전체 목록을 마지막 페이지까지 확인합니다. 창의 조건이 달라지면 수집을 멈춥니다.</p>
+          <p v-if="skipNote" class="scope-note" role="status">{{ skipNote }}</p>
+        </div>
+        <div class="launch-action">
+          <button class="btn btn-primary start-button" :disabled="!canStart" @click="command('start')">{{ pending === 'start' ? '시작 확인 중…' : running ? '조회 진행 중' : '선택한 범위 조회 시작' }}</button>
+          <span v-if="!received && !error" class="help" role="status">확장프로그램 연결 확인 중…</span>
+          <span v-else-if="state?.status === 'paused'" class="help">새로 시작하면 중단된 순회를 대체합니다.</span>
+          <span v-else-if="naverJobs.length && !naverSourceReady" class="help">위에서 네이버 필터를 읽으면 시작할 수 있습니다</span>
+          <span v-else-if="canStart" class="help">전용 탭 하나에서 순서대로 조회</span>
+        </div>
+      </div>
+      <p v-if="scopesReady && !scopeVersionReady" class="notice" role="alert">동별 조회는 확장 0.8.4 이상이 필요합니다. 확장이 자동 업데이트된 뒤 대시보드를 새로고침해 주세요. 현재 연결: {{ extension?.version }}</p>
+      <p v-if="!zigbangVersionReady" class="notice" role="alert">직방 추가 로딩과 상세 누락 확인은 확장 0.8.9 이상이 필요합니다. 확장이 자동 업데이트된 뒤 대시보드를 새로고침해 주세요. 현재 연결: {{ extension?.version }}</p>
+      <div v-if="scopeError" class="notice" role="alert">
+        <p>{{ scopeError }}</p>
+        <button class="btn btn-sm" :disabled="scopesLoading" @click="loadScopes">조회 범위 다시 불러오기</button>
+      </div>
+      <div v-if="error" class="notice" role="alert">
+        <p>{{ error }}</p>
+        <button class="btn btn-sm" :disabled="!!pending" @click="reconnect">연결 다시 확인</button>
+      </div>
+
+      <section v-if="pending || activeState || localEvents.length" class="run-panel" :class="{ live: pending || activeState?.status !== 'done', uncertain: connectionStale || workerStale }" aria-label="조회 진행과 최근 결과">
+        <button v-if="activeState?.status === 'done' && !pending" class="run-toggle" :aria-expanded="runExpanded" aria-controls="browse-run-body" @click="runExpanded = !runExpanded">
+          <span class="run-toggle-title"><strong>최근 조회 결과</strong><span class="help">{{ runDate }}</span><span class="result-badge" :class="{ attention: incomplete }">{{ incomplete ? `미완료 작업 ${incomplete}개` : `${activeState.jobs.length}개 조회 종료` }}</span></span>
+          <span class="previous-scope">{{ runScopeLabel }}</span>
+          <span class="toggle-label">{{ runExpanded ? '접기 ▴' : '펼치기 ▾' }}</span>
+        </button>
+        <div v-if="runExpanded || pending || activeState?.status !== 'done'" id="browse-run-body" class="run-body">
+          <div class="progress-panel" aria-label="순차 조회 진행 상황">
+            <div class="progress-heading">
+              <strong role="status" aria-live="polite">{{ progressTitle }}</strong>
+              <span class="elapsed">경과 {{ elapsed }}</span>
+            </div>
+            <p v-if="current" class="current-job">{{ current.areaName }} · {{ current.siteName }}<span v-if="activeState"> ({{ activeState.index + 1 }}/{{ activeState.jobs.length }})</span></p>
+            <p v-if="current?.scope" class="help">{{ current.scope.name }} · 원/투룸 · 사이트에 설정된 필터</p>
+            <p v-if="current && zigbangStationId(current)" class="help">직방 역 1km · 원룸 · 사이트에 설정된 필터</p>
+            <p v-if="current?.site === 'naver'" class="help">네이버 구나 동 전체, 고른 탭에서 읽은 필터</p>
+            <p v-if="current && naverCoverageFor(current)" class="page-progress">{{ naverCoverageText(naverCoverageFor(current)!) }}</p>
+            <p v-if="current && daangnCoverageFor(current)" class="page-progress">{{ daangnCoverageText(daangnCoverageFor(current)!) }}</p>
+            <p v-if="current?.receipt?.coverage" class="page-progress">{{ coverageText(current.receipt.coverage) }}</p>
+            <template v-if="current && zigbangCoverageFor(current)">
+              <p class="page-progress">{{ zigbangCoverageText(zigbangCoverageFor(current)!) }}</p>
+              <p class="help">{{ zigbangMissingText(zigbangCoverageFor(current)!) }}</p>
+            </template>
+            <p class="progress-detail">{{ connectionStale || workerStale ? '마지막 확인 내용: ' : '' }}{{ progressDetail }}</p>
+            <progress v-if="activeState?.jobs.length" :value="finished" :max="activeState.jobs.length" :aria-label="`${activeState.jobs.length}개 중 ${finished}개 항목 조회 종료`" />
+            <div v-if="activeState" class="counters">
+              <span>조회 종료 <b>{{ finished }} / {{ activeState.jobs.length }}</b></span>
+              <span>신규 매물 <b>{{ totals?.newCount ?? 0 }}건</b></span>
+              <span>가격 변경 <b>{{ totals?.changedCount ?? 0 }}건</b></span>
+              <span>서버 수신 <b>{{ totals?.responses ?? 0 }}건</b></span>
+            </div>
+            <div class="run-actions">
+              <button v-if="running" class="btn btn-sm" :disabled="!!pending" @click="command('pause')">{{ pending === 'pause' ? '중단하는 중…' : '조회 중단' }}</button>
+              <button v-if="activeState?.status === 'paused'" class="btn btn-sm" :disabled="!!pending || !received" @click="command('resume')">{{ pending === 'resume' ? '이어가는 중…' : '중단한 조회 이어하기' }}</button>
+              <p class="help">{{ lastReplyText }}<template v-if="activeState?.heartbeatAt && activeState.status === 'running'"> · 작업 신호 {{ duration(seconds(activeState.heartbeatAt)) }} 전</template></p>
+            </div>
+            <p v-if="connectionStale || workerStale" class="stale-help">마지막으로 확인한 상태입니다. 실제 진행 여부는 아직 확인되지 않았습니다.</p>
+          </div>
+          <div v-if="activeState" class="results">
+            <div class="section-heading"><h3>항목별 결과</h3><span class="help">{{ activeState.jobs.length }}개 조회</span></div>
+            <div class="job-results">
+              <article v-for="j in activeState.jobs" :key="j.id" class="job-result">
+                <div class="job-heading"><strong>{{ j.areaName }}</strong><span class="result-badge" :class="j.status === 'complete' && j.site === 'zigbang' && !zigbangCoverageFor(j)?.complete ? 'attention' : j.status">{{ statusLabel(j) }}</span></div>
+                <p class="help">{{ j.siteName }}<template v-if="j.scope"> · {{ j.scope.name }} · 원/투룸</template><template v-else-if="zigbangStationId(j)"> · 역 1km · 원룸 · 사이트 필터</template></p>
+                <template v-if="j.receipt">
+                  <p v-if="j.receipt.coverage" class="page-progress">{{ coverageText(j.receipt.coverage) }}</p>
+                  <p v-if="j.receipt.coverage && !j.receipt.coverage.complete" class="stale-help">{{ coverageReason(j.receipt.coverage) }}</p>
+                  <template v-if="zigbangCoverageFor(j)">
+                    <p class="page-progress">{{ zigbangCoverageText(zigbangCoverageFor(j)!) }}</p>
+                    <p class="help">{{ zigbangMissingText(zigbangCoverageFor(j)!) }}</p>
+                    <p v-if="!zigbangCoverageFor(j)!.complete" class="stale-help">{{ zigbangCoverageReason(zigbangCoverageFor(j)!) }}</p>
+                  </template>
+                  <p v-if="naverCoverageFor(j)" class="page-progress">{{ naverCoverageText(naverCoverageFor(j)!) }}</p>
+                  <p v-if="daangnCoverageFor(j)" class="page-progress">{{ daangnCoverageText(daangnCoverageFor(j)!) }}</p>
+                  <p class="help">서버 응답 {{ j.receipt.responses }}건 · 저장 처리 {{ j.receipt.listings }}건<template v-if="j.receipt.uniqueListings !== undefined"> · 중복 없는 매물 {{ j.receipt.uniqueListings }}건</template></p>
+                  <p v-if="j.scope" class="help">주변 함께 저장 {{ j.receipt.retainedOutside ?? 0 }}건 · 동 미확인 저장 {{ j.receipt.retainedUnknown ?? 0 }}건 · 저장 제외 {{ (j.receipt.excludedOutside ?? 0) + (j.receipt.excludedUnknown ?? 0) }}건</p>
+                </template>
+                <p v-else class="help">저장 확인 전</p>
+                <p v-if="j.note" class="job-note">{{ j.note }}</p>
+                <a v-if="safeLink(j.url)" :href="safeLink(j.url)!" target="_blank" rel="noopener" class="job-link">{{ j.siteName }}에서 직접 확인 ↗</a>
+              </article>
+            </div>
+            <div v-if="incomplete && !running" class="retry-area">
+              <button class="btn btn-sm" :disabled="!!pending || connectionStale" @click="command('retry')">{{ pending === 'retry' ? '재조회 준비 중…' : `미완료 작업 ${incomplete}개 처음부터 다시 조회` }}</button>
+              <p class="help">아래 지역·사이트의 목록을 처음부터 다시 조회합니다. 이미 저장된 매물은 최신 정보로 갱신합니다.</p>
+              <ul class="retry-targets" aria-label="처음부터 다시 조회할 대상">
+                <li v-for="j in incompleteJobs" :key="j.id">
+                  <strong>{{ j.areaName }} · {{ j.siteName }}</strong><span v-if="j.scope"> · {{ j.scope.dong }}</span>
+                  <span v-if="zigbangCoverageFor(j)" class="help">{{ zigbangMissingText(zigbangCoverageFor(j)!) }}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <details class="activity">
+            <summary>활동 로그 <span class="muted">{{ activity.length }}건 · 최신순</span></summary>
+            <p class="help log-counts">목록 탐색 {{ actionCount }}회 · 브라우저 수신 {{ capturedCount }}건 · 매물 저장 처리 {{ totals?.listings ?? 0 }}건</p>
+            <ol v-if="activity.length" aria-label="조회 활동 로그">
+              <li v-for="(event, index) in activity" :key="`${event.at}-${index}`"><time>{{ timeText(event.at) }}</time><span>{{ event.text }}</span></li>
+            </ol>
+            <p v-else class="help">아직 활동 로그가 없습니다.</p>
+          </details>
+        </div>
+      </section>
+
       <details class="how-it-works">
-        <summary>어떤 원리로 동작하나요?</summary>
+        <summary>조회 방식과 완료 기준</summary>
         <ol>
-          <li>선택한 지역과 사이트를 조회 순서로 만들고, 크롬 확장이 전용 탭 하나에서 지역별 URL을 차례로 엽니다.</li>
-          <li>네이버, 다방, 직방에서 확인 가능한 매물 목록을 펼치거나 내립니다. 이때 페이지가 받은 데이터를 확장이 수신합니다.</li>
-          <li>받은 데이터를 이 PC의 서버에 보내 매물을 정리하고, 서버가 저장을 확인한 건수를 위에 표시합니다.</li>
+          <li>크롬 확장이 전용 탭 하나에서 선택한 지역·사이트의 URL을 차례로 엽니다.</li>
+          <li>네이버, 다방, 직방의 매물 목록을 펼치거나 내리며 페이지가 받은 데이터를 수신합니다.</li>
+          <li>이 PC의 서버에 저장한 결과와 페이지 확인 범위를 표시합니다. 패널을 접어도 조회는 계속됩니다.</li>
         </ol>
-        <p class="help">한 항목에서 최대 2분 또는 40회까지 탐색하고 마지막 응답을 최대 15초 더 기다립니다. 로딩 지연, 로그인이나 인증 화면, 인식하지 못한 목록은 확인할 내용에 표시됩니다. 화면에서 확인한 범위만 처리하므로 지역 전체 매물의 수집 완료를 뜻하지 않습니다.</p>
+        <p>다방 동별 조회는 지정한 동의 원/투룸 목록에 사이트의 현재 필터를 적용합니다. 모든 페이지와 서버 저장을 확인해야 ‘선택 목록 저장 완료’로 표시합니다. ‘일부 확인’에는 누락되거나 확인하지 못한 범위가 남아 있습니다. 저장 처리 건수에는 같은 매물의 갱신이 포함됩니다.</p>
+        <p>직방은 역 1km 원룸 목록의 매물 번호와 받은 상세를 대조합니다. 전체 상세의 서버 저장 또는 설정한 지역 범위 밖 제외까지 확인해야 ‘역 1km 목록 확인 완료’로 표시합니다. 법정동 전체 범위나 지역 설정 반경 전체를 확인했다는 뜻은 아닙니다.</p>
+        <p>동별 다방과 역별 직방 조회는 최대 30분 또는 2,000회, 그 밖의 조회는 최대 2분 또는 40회까지 탐색하며 마지막 응답을 최대 15초 더 기다립니다. 당근은 목록을 자동으로 내리지 않고 화면을 열 때 온 첫 목록에서 주거용 매물만 저장합니다. 목록이 그 안에서 끝난 역만 ‘역 근처 목록 확인 완료’로 표시하고, 나머지는 당근에서 직접 목록을 내려 보면 본 만큼 저장됩니다. KB는 건수만, 호갱노노는 화면 데이터만 확인하며 개별 매물로 정리하지 않습니다.</p>
       </details>
-      <div class="actions">
-        <button class="btn btn-primary" :disabled="!canStart" @click="command('start')">{{ pending === 'start' ? '시작하는 중…' : state ? '선택한 조건으로 새 순회' : '선택 지역 조회 시작' }}</button>
-        <button v-if="running" class="btn" :disabled="!!pending" @click="command('pause')">{{ pending === 'pause' ? '중단하는 중…' : '중단' }}</button>
-        <button v-if="state?.status === 'paused'" class="btn" :disabled="!!pending || !received" @click="command('resume')">{{ pending === 'resume' ? '이어가는 중…' : '이어하기' }}</button>
-        <button v-if="incomplete && !running" class="btn" :disabled="!!pending" @click="command('retry')">{{ pending === 'retry' ? '재시도 준비 중…' : `미확인 ${incomplete}곳 다시 조회` }}</button>
-        <button v-if="error" class="btn" :disabled="!!pending" @click="reconnect">연결 다시 확인</button>
-        <span v-if="!received && !error" class="muted" role="status">확장프로그램 상태 확인 중…</span>
-        <span v-else-if="!state" class="muted">{{ chosenAreas.length }}개 지역 × {{ selectedSites.length }}개 사이트</span>
-      </div>
-      <p v-if="error" class="notice" role="alert">{{ error }}</p>
-      <div v-if="activeState" class="results">
-        <div class="result-summary" role="status" aria-live="polite">
-          <strong>항목별 확인 결과</strong>
-          <span v-if="totals && totals.responses">신규 {{ totals.newCount }}건, 가격 변경 {{ totals.changedCount }}건</span>
-        </div>
-        <p class="help">순회가 끝나도 해당 지역의 매물이 모두 수집된 것은 아닙니다. 저장 처리 건수에는 같은 매물의 갱신이 포함됩니다. 패널을 접어도 순회는 계속됩니다.</p>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th scope="col">지역과 사이트</th><th scope="col">확인 상태</th><th scope="col">서버 저장 결과</th><th scope="col">확인할 내용</th></tr></thead>
-            <tbody>
-              <tr v-for="j in activeState.jobs" :key="j.id" :class="j.status">
-                <th scope="row">{{ j.areaName }}<small>{{ j.siteName }}</small></th>
-                <td>{{ STATUS[j.status] }}</td>
-                <td><template v-if="j.receipt">응답 {{ j.receipt.responses }}건<small>매물 저장 처리 {{ j.receipt.listings }}건</small></template><span v-else class="muted">저장 확인 전</span></td>
-                <td>{{ j.note }} <a v-if="safeLink(j.url)" :href="safeLink(j.url)!" target="_blank" rel="noopener">직접 열기 ↗</a></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
     </template>
+    <BrowseAuto :areas="areas" :scopes="areaScopes" :scopes-ready="scopesReady" />
   </section>
 </template>
 
 <style scoped>
-.browse-queue { margin: 14px 0; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); display: grid; gap: 14px; }
-.heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-h2 { margin: 0 0 6px; font-size: 18px; }
-p { margin: 0; line-height: 1.55; }
-.choices { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-fieldset { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
-legend { font-weight: 700; padding: 0 4px; }
-legend .muted { font-weight: 400; font-size: 13px; }
-.linkish { margin: 0 12px 8px 0; }
-.check-list { display: flex; flex-wrap: wrap; gap: 8px 18px; max-height: 190px; overflow-y: auto; }
-.check-list label { display: flex; align-items: center; gap: 5px; min-height: 30px; font-size: 14px; }
-.check-list input { margin: 0 3px 0 0; }
-.check-list .muted { font-size: 12px; }
+.browse-queue { margin-block: 18px; padding: 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); display: grid; gap: 20px; font-size: 16px; scroll-margin-top: calc(var(--app-header-height, 80px) + 16px); }
+.heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.heading-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+h2 { margin: 0 0 6px; font-size: 22px; }
+h3 { margin: 0; font-size: 16px; }
+p { margin: 0; line-height: 1.6; }
+.heading p { font-size: 14px; }
+.choices { display: grid; grid-template-columns: 1fr 1.2fr; gap: 20px; }
+fieldset { min-width: 0; margin: 0; padding: 12px 16px 16px; border: 1px solid var(--line); border-radius: 10px; }
+legend { font-weight: 700; padding: 0 6px; }
+legend .muted { margin-left: 6px; font-weight: 400; font-size: 13px; }
+.select-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+.select-actions button { min-height: 36px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--surface-2); font-size: 13px; }
+.check-list { display: grid; gap: 8px; max-height: 220px; overflow-y: auto; padding: 3px; }
+.area-list { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.site-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.check-list label { display: flex; align-items: center; gap: 9px; min-height: 58px; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; font-size: 15px; }
+.check-list label:hover { background: var(--surface-2); }
+.check-list label.selected { background: var(--accent-soft); border-color: #b7ccec; }
+.check-list input { width: 17px; height: 17px; flex: none; margin: 0; accent-color: var(--accent); }
+.check-list small { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.icon-site { display: flex; align-items: center; gap: 9px; min-height: 58px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; font-size: 15px; }
+.icon-mark { width: 17px; flex: none; text-align: center; color: var(--muted); font-size: 13px; }
+.naver-source { display: grid; gap: 10px; }
+.naver-source-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.naver-preset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.naver-source-row select { flex: 1 1 260px; min-width: 0; min-height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: inherit; font: inherit; font-size: 14px; }
+.naver-conditions { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; padding: 12px 14px; border-radius: 8px; background: var(--surface-2); font-size: 13px; }
+.naver-conditions dt { color: var(--muted); }
+.naver-conditions dd { margin: 0; }
+fieldset:disabled { opacity: .65; }
+fieldset:disabled label { cursor: default; }
+.launch-panel { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 20px 24px; background: var(--accent-soft); border: 1px solid #c9d8ee; border-radius: 10px; }
+.launch-summary { min-width: 0; display: grid; gap: 12px; }
+.section-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.count-badge { padding: 3px 9px; border-radius: 6px; background: var(--surface); font-size: 13px; color: var(--accent); font-weight: 700; }
+.planned-jobs { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; max-height: 210px; overflow: auto; }
+.planned-jobs li { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; line-height: 1.5; }
+.planned-jobs .muted { font-size: 13px; }
+.job-number { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; color: var(--accent); background: var(--surface); font-size: 12px; font-weight: 700; }
+.scope-note { font-size: 13px; color: var(--ink-2); }
+.launch-action { flex: none; display: grid; justify-items: center; gap: 8px; }
+.start-button { min-height: 48px; padding: 0 22px; font-size: 16px; }
 .help { font-size: 13px; color: var(--muted); }
-.notice { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--up); background: var(--surface); }
-.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.progress-panel { display: grid; gap: 10px; padding: 16px; border: 2px solid var(--primary, #28425e); border-radius: 10px; background: var(--surface); }
+.notice { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 14px 16px; border: 1px solid #ebc6ae; border-radius: 8px; color: var(--up); background: var(--up-soft); font-size: 14px; }
+.notice p { flex: 1 1 340px; }
+.run-panel { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.run-panel.live { border: 2px solid var(--accent); }
+.run-panel.uncertain { border-color: var(--up); }
+.run-toggle { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px 16px; width: 100%; padding: 16px 20px; border: 0; background: var(--surface); text-align: left; }
+.run-toggle:hover { background: var(--surface-2); }
+.run-toggle-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.previous-scope { grid-row: 2; font-size: 13px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.toggle-label { grid-column: 2; grid-row: 1 / 3; font-size: 13px; white-space: nowrap; color: var(--muted); }
+.run-body { padding: 20px; display: grid; gap: 22px; }
+.run-toggle + .run-body { border-top: 1px solid var(--line); }
+.progress-panel { display: grid; gap: 12px; }
 .progress-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.progress-heading strong { font-size: 17px; }
+.progress-heading strong { font-size: 18px; }
 .elapsed { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .current-job { font-weight: 700; }
 .current-job span { font-size: 13px; font-weight: 400; color: var(--muted); }
-.counters { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; }
-.counters b { margin-left: 4px; font-variant-numeric: tabular-nums; }
-progress { width: 100%; height: 9px; accent-color: var(--primary, #28425e); }
-.uncertain { border-color: var(--up); }
+.page-progress { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.progress-detail { font-size: 14px; color: var(--ink-2); }
+.counters { display: flex; flex-wrap: wrap; gap: 12px 28px; padding: 12px 16px; background: var(--surface-2); border-radius: 8px; font-size: 13px; }
+.counters b { margin-left: 8px; font-size: 16px; font-variant-numeric: tabular-nums; }
+progress { width: 100%; height: 10px; accent-color: var(--accent); }
+.run-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.retry-area { display: grid; justify-items: start; gap: 10px; }
+.retry-targets { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.7; }
+.retry-targets .help { display: block; }
 .stale-help { color: var(--up); font-size: 13px; }
-.activity { border-top: 1px solid var(--line); padding-top: 8px; }
-summary { cursor: pointer; font-weight: 600; font-size: 13px; }
-summary .muted { margin-left: 6px; font-weight: 400; }
-.activity ol { list-style: none; max-height: 190px; overflow-y: auto; padding: 0; margin: 8px 0 0; }
-.activity li { display: flex; align-items: baseline; gap: 12px; padding: 4px 0; font-size: 12px; line-height: 1.5; }
+.results { display: grid; gap: 12px; }
+.job-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-height: 520px; overflow-y: auto; }
+.job-result { display: grid; align-content: start; gap: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
+.job-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; font-size: 15px; }
+.result-badge { display: inline-block; padding: 3px 8px; font-size: 12px; font-weight: 600; border-radius: 5px; color: var(--muted); background: var(--surface-2); }
+.result-badge.attention, .result-badge.partial, .result-badge.failed, .result-badge.needs-input { color: var(--up); background: var(--up-soft); }
+.result-badge.complete { color: var(--down); background: var(--down-soft); }
+.result-badge.running { color: var(--accent); background: var(--accent-soft); }
+.job-note { font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
+.job-link { justify-self: start; display: inline-flex; align-items: center; min-height: 36px; font-size: 13px; }
+summary { cursor: pointer; font-weight: 600; font-size: 14px; min-height: 36px; padding: 6px 0; }
+summary .muted { margin-left: 6px; font-weight: 400; font-size: 13px; }
+.activity { border-top: 1px solid var(--line); padding-top: 10px; }
+.activity ol { list-style: none; max-height: 240px; overflow-y: auto; padding: 0; margin: 10px 0 0; }
+.activity li { display: flex; align-items: baseline; gap: 16px; padding: 6px 0; font-size: 13px; line-height: 1.5; }
 .activity time { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.how-it-works ol { padding-left: 22px; margin: 8px 0; font-size: 13px; line-height: 1.7; }
-.results { display: grid; gap: 10px; }
-.result-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; font-size: 14px; }
-.table-wrap { max-height: 400px; overflow: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; vertical-align: top; padding: 10px; border-bottom: 1px solid var(--line); }
-thead th { position: sticky; top: 0; background: var(--surface); white-space: nowrap; }
-tbody th { min-width: 120px; }
-small { display: block; margin-top: 3px; font-size: 12px; font-weight: 400; color: var(--muted); }
-td a { display: inline-block; margin-left: 6px; white-space: nowrap; }
-tr.failed td:nth-child(2), tr.needs-input td:nth-child(2), tr.partial td:nth-child(2) { color: var(--up); font-weight: 700; }
-tr.running td:nth-child(2) { font-weight: 700; }
+.log-counts { margin-top: 8px; }
+.how-it-works { border-top: 1px solid var(--line); padding-top: 10px; }
+.how-it-works ol { padding-left: 22px; margin: 8px 0; font-size: 14px; line-height: 1.8; }
+.how-it-works p { margin-top: 10px; font-size: 13px; color: var(--muted); }
 button:disabled { cursor: not-allowed; }
-@media (max-width: 720px) { .choices { grid-template-columns: 1fr; } .browse-queue { padding: 12px; } table { min-width: 620px; } }
+@media (max-width: 1000px) { .choices { grid-template-columns: 1fr 1.25fr; gap: 12px; } .site-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 720px) {
+  .browse-queue { margin: 12px auto; padding: 16px; gap: 16px; }
+  .choices { grid-template-columns: 1fr; }
+  .launch-panel { align-items: stretch; flex-direction: column; gap: 20px; padding: 16px; }
+  .launch-action { justify-items: stretch; text-align: center; }
+  .job-results { grid-template-columns: 1fr; }
+  .run-body, .run-toggle { padding: 16px; }
+  .activity li { gap: 10px; }
+}
 </style>

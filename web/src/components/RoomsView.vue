@@ -10,7 +10,6 @@ import OverviewMap from './OverviewMap.vue';
 // 고시원과 쉐어 탭: 종류 칸(전체, 고시원과 원룸텔, 쉐어하우스, 코리빙), 목록(왼쪽)과 고른 종류만 그린 지도(오른쪽).
 // 목록 순서는 받은 그대로 쓰고, 고른 종류의 목록을 visible로 알린다(App의 키보드 이동과 같은 순서).
 
-type Point = { lat: number; lng: number };
 const props = defineProps<{
   /** 필터를 통과한 고시원과 쉐어(sortRooms 순서) */
   listings: ListingView[];
@@ -27,7 +26,6 @@ const emit = defineEmits<{
   verdict: [ListingView, Verdict | null];
   source: [ListingView];
   raw: [ListingView];
-  pick: [Point];
   area: [Area];
   station: [CatalogStation];
 }>();
@@ -94,7 +92,7 @@ defineExpose({ pickType });
       <aside class="map">
         <OverviewMap
           :listings="none" :background="shown" :areas="areas" :selected-id="selectedId" :fit-key="type"
-          @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)" @pick="(p) => emit('pick', p)" @area="(a) => emit('area', a)"
+          @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />
       </aside>

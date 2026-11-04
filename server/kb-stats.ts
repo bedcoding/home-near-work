@@ -15,6 +15,8 @@ const FETCHED_KEY = 'kb_stats_fetched_at';
 const STATUS_KEY = 'kb_stats_status';
 /** 받은 지 이만큼 지나면 조회할 때 다시 받는다(주간 통계는 한 주에 한 번 나온다) */
 const MAX_AGE_MS = 3 * 86400000;
+/** 일부 또는 전부 실패한 조회는 다음 자동 조회에서 6시간 간격으로 다시 시도한다. */
+const RETRY_MS = 6 * 3600000;
 const TIMEOUT_MS = 30000;
 const PAUSE_MS = 300;
 
@@ -38,15 +40,31 @@ export const SERIES = [
 ] as const;
 export type SeriesId = (typeof SERIES)[number]['id'];
 
-/** 받을 때가 됐는지: 받은 적이 없거나 받은 지 3일이 지났으면 true. */
+type FetchStatus = { at?: string; ok: boolean; error?: string };
+
+function lastStatus(): FetchStatus | null {
+  try {
+    return JSON.parse(store.getSetting(STATUS_KEY) ?? 'null') as FetchStatus | null;
+  } catch {
+    return null;
+  }
+}
+
+/** 정상 조회는 3일, 일부 또는 전부 실패했으면 마지막 시도에서 6시간 뒤에 다시 받는다. */
 export function kbStatsDue(): boolean {
+  const status = lastStatus();
+  if (status?.ok === false) {
+    const attempted = Date.parse(status.at ?? '');
+    return !Number.isFinite(attempted) || Date.now() - attempted >= RETRY_MS;
+  }
   const at = store.getSetting(FETCHED_KEY);
-  return !at || Date.now() - Date.parse(at) >= MAX_AGE_MS;
+  const fetched = Date.parse(at ?? '');
+  return !Number.isFinite(fetched) || Date.now() - fetched >= MAX_AGE_MS;
 }
 
 /** 시세 통계 탭에 보일 받은 상태 */
 export function kbStatsState(): { fetchedAt: string | null; error: string | null } {
-  const status = JSON.parse(store.getSetting(STATUS_KEY) ?? 'null') as { ok: boolean; error?: string } | null;
+  const status = lastStatus();
   return { fetchedAt: store.getSetting(FETCHED_KEY), error: status && !status.ok ? (status.error ?? '받지 못했습니다.') : null };
 }
 
@@ -200,7 +218,7 @@ async function fetchAndSave(record: RecordRequest): Promise<string> {
   const at = new Date().toISOString();
   store.setSetting(STATUS_KEY, JSON.stringify({ at, ok: !errors.length, ...(errors.length ? { error: errors.join(' / ') } : {}) }));
   if (!saved) throw new Error(errors.join(' / '));
-  store.setSetting(FETCHED_KEY, at);
+  if (!errors.length) store.setSetting(FETCHED_KEY, at);
   const text = `${SERIES.length}개 중 ${saved}개 받음${latestWeek ? `(주간 기준일 ${latestWeek})` : ''}`;
   return errors.length ? `${text}, 실패: ${errors.join(' / ')}` : text;
 }

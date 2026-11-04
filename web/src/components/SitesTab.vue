@@ -8,6 +8,7 @@ import { KIND_LABEL, kindOf } from '../kinds';
 import { NOTICE_HOME } from '../notices';
 import type { SiteLink } from '../siteLinks';
 import CountTooltip from './CountTooltip.vue';
+import { SCOPE_KIND_LABEL, SITE_SCOPES, type ScopeKind } from '../../../shared/site-scopes';
 
 // 사이트별 탭: 사이트를 하나 고르면 모은 매물 수, 마지막으로 받은 때, 사이트 화면이 센 수와 받은 수, 조회 기록, 받은 매물(또는 공고)을 보인다.
 const props = defineProps<{
@@ -34,13 +35,13 @@ interface Site {
 
 const BROWSE: Site[] = [
   { id: 'naver', name: '네이버 부동산', way: 'browse', source: 'naver' },
-  { id: 'dabang', name: '다방', way: 'browse', source: 'dabang' },
-  { id: 'zigbang', name: '직방', way: 'browse', source: 'zigbang' },
   { id: 'kbland', name: 'KB부동산', way: 'browse', source: null },
   { id: 'hogangnono', name: '호갱노노', way: 'browse', source: null },
-  { id: 'daangn', name: '당근부동산', way: 'browse', source: null },
+  { id: 'daangn', name: '당근부동산', way: 'browse', source: 'daangn' },
 ];
 const AUTO: Site[] = [
+  { id: 'dabang', name: '다방', way: 'auto', source: 'dabang', home: 'https://www.dabangapp.com/' },
+  { id: 'zigbang', name: '직방', way: 'auto', source: 'zigbang', home: 'https://www.zigbang.com/' },
   { id: 'peterpanz', name: '피터팬', way: 'auto', source: 'peterpanz' },
   { id: 'ziptoss', name: '집토스', way: 'auto', source: 'ziptoss' },
   { id: 'gobang', name: '고방', way: 'auto', source: 'gobang', home: 'https://gobang.kr/gosi' },
@@ -67,6 +68,22 @@ const WAY_TIP: Record<Way, string> = {
   auto: "'조회하기'와 자동 확인이 이 사이트를 열어 켜 둔 지역 근처 매물을 모읍니다.",
   notice: "'조회하기', 자동 확인, 매일 공고 확인이 이 곳의 공고 목록을 모읍니다.",
 };
+
+// 수집 기준 표: 범위 기준마다 한 줄에 사이트를 늘어놓는다(범위가 넓은 기준부터). 사이트를 누르면 그 사이트를 고른다.
+const KIND_ORDER: ScopeKind[] = ['region', 'site', 'station', 'map', 'count', 'screen'];
+const scopeRows = computed(() => KIND_ORDER.map((kind) => ({
+  kind,
+  sites: ALL.filter((s) => SITE_SCOPES[s.id]?.kind === kind).map((s) => ({ site: s, scope: SITE_SCOPES[s.id] })),
+})).filter((row) => row.sites.length));
+const SCOPE_OPEN_KEY = 'hnw-site-scopes-open';
+function readScopeOpen(): boolean {
+  try { return localStorage.getItem(SCOPE_OPEN_KEY) !== '0'; } catch { return true; }
+}
+const scopeOpen = ref(readScopeOpen());
+function toggleScopes(event: Event) {
+  scopeOpen.value = (event.target as HTMLDetailsElement).open;
+  try { localStorage.setItem(SCOPE_OPEN_KEY, scopeOpen.value ? '1' : '0'); } catch { /* 저장소를 못 쓰면 기억하지 않는다 */ }
+}
 
 const n = (v: number) => v.toLocaleString('ko-KR');
 /** '2026-10-21' → '10.21' */
@@ -219,10 +236,26 @@ const siteNotices = computed(() => {
     .sort((a, b) => (a.current === b.current ? (b.postedAt ?? b.firstSeenAt).localeCompare(a.postedAt ?? a.firstSeenAt) : a.current ? -1 : 1));
 });
 const noticeStat = computed(() => (site.value.way === 'notice' ? props.noticeStatus[noticeId(site.value)] ?? null : null));
+const siteScope = computed(() => SITE_SCOPES[site.value.id] ?? null);
+const scopeCoverage = computed(() => report.value?.scopeCoverage?.[site.value.id] ?? []);
 </script>
 
 <template>
   <section class="sites-tab">
+    <details class="block scope-table" :open="scopeOpen" @toggle="toggleScopes">
+      <summary><h3>사이트별 수집 기준</h3><small class="muted">사이트마다 모으는 범위가 다릅니다. 사이트를 누르면 자세한 기준을 봅니다.</small></summary>
+      <dl class="scopes">
+        <template v-for="row in scopeRows" :key="row.kind">
+          <dt><span class="kind" :class="row.kind">{{ SCOPE_KIND_LABEL[row.kind] }}</span></dt>
+          <dd>
+            <button v-for="x in row.sites" :key="x.site.id" type="button" class="scope-site" :class="{ on: x.site.id === picked }"
+              :aria-pressed="x.site.id === picked" :title="`${x.scope.how} 확인하지 않는 것: ${x.scope.limit}`" @click="picked = x.site.id">
+              {{ x.site.name }}<small>{{ x.scope.short }}, {{ x.scope.by }}</small>
+            </button>
+          </dd>
+        </template>
+      </dl>
+    </details>
     <nav class="site-list" aria-label="사이트">
       <div v-for="g in GROUPS" :key="g.way" class="group">
         <div class="group-head">
@@ -239,7 +272,7 @@ const noticeStat = computed(() => (site.value.way === 'notice' ? props.noticeSta
           :title="rows.get(s.id)?.title" @click="picked = s.id"
         >
           <span class="dot" :class="rows.get(s.id)?.tone" aria-hidden="true"></span>
-          <span class="name">{{ s.name }}</span>
+          <span class="name">{{ s.name }}<small v-if="SITE_SCOPES[s.id]" class="scope-tag">{{ SITE_SCOPES[s.id].short }}</small></span>
           <span class="count">{{ rows.get(s.id)?.count }}</span>
           <span class="when" :class="rows.get(s.id)?.tone">{{ rows.get(s.id)?.when }}</span>
         </button>
@@ -252,6 +285,20 @@ const noticeStat = computed(() => (site.value.way === 'notice' ? props.noticeSta
         <CountTooltip :text="WAY_TIP[site.way]" :max-width="360"><span class="way">{{ WAY_NAME[site.way] }}</span></CountTooltip>
         <a v-if="siteUrl" class="btn btn-sm" :href="siteUrl" target="_blank" rel="noopener">열기 ↗</a>
       </header>
+
+      <div v-if="siteScope" class="block scope-detail">
+        <h3>수집 기준 <span class="kind" :class="siteScope.kind">{{ SCOPE_KIND_LABEL[siteScope.kind] }}</span><small>{{ siteScope.short }}, {{ siteScope.by }}</small></h3>
+        <p>{{ siteScope.how }}</p>
+        <p class="muted"><b>확인하지 않는 것:</b> {{ siteScope.limit }}</p>
+        <ul v-if="scopeCoverage.length" class="coverage">
+          <li v-for="c in scopeCoverage" :key="c.areaName">
+            <span>{{ c.areaName }}</span>
+            <b>{{ c.stations ? `역 ${c.stations}곳` : '고른 역 없음' }}</b>
+            <span>{{ c.percent == null ? '덮는 범위 계산 불가' : `지역 면적의 약 ${c.percent}%를 역 1km 안으로 덮음` }}</span>
+          </li>
+          <li class="muted note">면적 기준이라 산과 공원도 들어간 비율입니다. 매물 기준 비율은 따로 확인하지 않았습니다.</li>
+        </ul>
+      </div>
 
       <div v-if="site.source" class="stats">
         <div class="stat"><b>{{ n(st.active) }}</b><small>지금 있는 매물</small></div>
@@ -388,6 +435,26 @@ h3 small { font-size: 13px; font-weight: 500; color: var(--muted); }
 .dot.warn { background: var(--up); }
 .dot.bad { background: var(--new); }
 
+.site .name small.scope-tag { margin-left: 6px; font-size: 11px; font-weight: 500; color: var(--muted); }
+.scope-table { grid-column: 1 / -1; }
+.scope-table summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; cursor: pointer; }
+.scope-table summary h3 { display: inline; }
+.scopes { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 12px; margin: 10px 0 0; align-items: start; }
+.scopes dt { padding-top: 5px; }
+.scopes dd { margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.scope-site { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.scope-site small { font-size: 12px; font-weight: 500; color: var(--muted); }
+.scope-site:hover, .scope-site.on { background: var(--surface-2); border-color: var(--line-strong); }
+@media (max-width: 520px) { .scopes { grid-template-columns: 1fr; } .scopes dt { padding-top: 0; } }
+.kind { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+.kind.region { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--ink); }
+.kind.site { background: color-mix(in srgb, var(--down) 10%, transparent); color: var(--ink); }
+.kind.station, .kind.map { background: color-mix(in srgb, var(--up) 16%, transparent); color: var(--ink); }
+.scope-detail p { margin: 0; font-size: 14px; line-height: 1.55; }
+.scope-detail h3 small { font-weight: 500; }
+.coverage { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
+.coverage li { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.coverage li.note { font-size: 12px; }
 .site-detail { display: grid; gap: 12px; min-width: 0; }
 .detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .detail-head h2 { margin: 0; font-size: 20px; }

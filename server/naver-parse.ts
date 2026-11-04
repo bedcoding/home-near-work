@@ -9,7 +9,12 @@ import type { DealType, ExplainRow, NormalizedListing, PriceOption } from '../sh
 // 거래 유형 코드. A1 매매, B1 전세, B2 월세, B3 단기.
 const DEALS: Record<string, DealType> = { A1: 'sale', B1: 'jeonse', B2: 'monthly', B3: 'short' };
 // 매물 종류 코드. 모르는 코드는 그대로 보인다.
-const TYPES: Record<string, string> = { A01: '아파트', A04: '재건축', B01: '아파트 분양권', C03: '단독/다가구', D05: '상가주택', E03: '토지' };
+const TYPES: Record<string, string> = {
+  A01: '아파트', A02: '오피스텔', A04: '재건축', A05: '연립', A06: '다세대', A07: '도시형생활주택',
+  B01: '아파트 분양권', B02: '오피스텔 분양권', C01: '원룸', C02: '빌라', C03: '단독/다가구', C04: '전원주택', C06: '한옥주택',
+  D01: '사무실', D02: '상가', D03: '건물', D04: '상가건물', D05: '상가주택',
+  E01: '숙박/콘도', E02: '공장/창고', E03: '토지', E04: '지식산업센터', F01: '재개발', G01: '고시원', Z00: '기타',
+};
 
 /** 원 → 만원 */
 const manwon = (value: unknown) => {
@@ -44,10 +49,12 @@ export function normalizeNaverItem(item: any): NaverItem | null {
       }
     : null;
 
-  // 층은 '7'처럼 숫자일 때도 있고 '저, 중, 고'로만 나올 때도 있다.
+  // 층은 '7'처럼 숫자일 때도 있고 '저, 중, 고'로만 나올 때도 있다. 지하는 'B1'(지하 1층)처럼 온다.
   const fl = rep.articleDetail?.floorDetailInfo ?? {};
   const target = String(fl.targetFloor ?? '');
-  const floorNumber = /^-?\d+$/.test(target) ? Number(target) : null;
+  const plainFloor = /^-?\d+$/.test(target);
+  const underground = /^B(\d+)$/i.exec(target);
+  const floorNumber = plainFloor ? Number(target) : underground ? -Number(underground[1]) : null;
   const complexNumber = toNumber(rep.complexNumber);
   const direction = rep.articleDetail?.direction ?? '';
   const coords = rep.address?.coordinates ?? {};
@@ -65,7 +72,7 @@ export function normalizeNaverItem(item: any): NaverItem | null {
     address: [rep.address?.city, rep.address?.division, rep.address?.sector].filter(Boolean).join(' ') || null,
     dong: rep.address?.sector ?? null,
     // 층이 '중'처럼 나오면 층 숫자로 구분이 안 되므로, 단지, 동에 층 구간과 방향까지 붙여 같은 집을 가린다.
-    buildingKey: complexNumber ? `nv-c${complexNumber}-${rep.dongName ?? ''}-${floorNumber == null ? target : ''}-${direction}` : null,
+    buildingKey: complexNumber ? `nv-c${complexNumber}-${rep.dongName ?? ''}-${plainFloor ? '' : target}-${direction}` : null,
     buildingType: TYPES[rep.realEstateType] ?? rep.realEstateType ?? null,
     roomLabel: null,
     rooms: null,
@@ -100,7 +107,7 @@ export function normalizeNaverItem(item: any): NaverItem | null {
       label: '층',
       raw: `articleDetail.floorInfo="${rep.articleDetail?.floorInfo ?? ''}"`,
       value: floorText(listing),
-      note: '저, 중, 고로만 나오면 층 숫자는 모름으로 둠',
+      note: '저, 중, 고로만 나오면 층 숫자는 모름으로 둠. B1은 지하 1층',
     },
     { label: '관리비', raw: `priceInfo.managementFeeAmount=${p.managementFeeAmount ?? '없음'}원`, value: listing.maintenance != null ? `${money(listing.maintenance)}만` : '모름', note: '원 → 만원으로 바꿈' },
     {
