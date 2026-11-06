@@ -154,7 +154,8 @@ async function collectPeterpanz({ narrow = false, shortList = false, empty = fal
   const locator = { first() { return this; }, isVisible: async () => false, boundingBox: async () => null };
   const ctx = context({
     goto: async () => {
-      const span = narrow ? 0.001 : 0.1;
+      // 줌 15 지도(남북 약 2.7km). narrow는 반경 500m를 다 덮지 못하는 좁은 지도.
+      const span = narrow ? 0.001 : 0.012;
       onResponse({
         url: () => 'https://api.peterpanz.com/houses/area?pageIndex=1', status: () => 200,
         json: async () => ({ totalCount: empty ? 0 : shortList ? 51 : 1, houses: empty ? {} : { group: { rows: [{ hidx: 1, location: { coordinate: { latitude: 1, longitude: 1 } } }] } }, debug: { search: { latitudeFrom: 1 - span, latitudeTo: 1 + span, longitudeFrom: 1 - span, longitudeTo: 1 + span } } }),

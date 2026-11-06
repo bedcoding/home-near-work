@@ -57,7 +57,6 @@ export function restSeconds(): number {
 
 /** 조회용 브라우저 창. 평소 쓰는 크롬과 별개의 프로필로 띄운다. */
 export class BrowserSession {
-  private shotCount = 0;
   private pointer = { x: 640, y: 430 };
 
   private constructor(
@@ -65,6 +64,8 @@ export class BrowserSession {
     readonly page: Page,
     readonly visible: boolean,
     readonly runId: number,
+    /** 스크린샷 번호. 같은 조회에서 연 탭(fork)끼리 함께 센다(파일 이름이 겹치지 않게). */
+    private readonly shots: { count: number } = { count: 0 },
   ) {}
 
   static async open(runId: number, visible: boolean): Promise<BrowserSession> {
@@ -87,6 +88,21 @@ export class BrowserSession {
     const page = context.pages()[0] ?? (await context.newPage());
     await page.evaluate(INIT_SCRIPT).catch(() => {});
     return new BrowserSession(context, page, visible, runId);
+  }
+
+  /**
+   * 같은 조회용 브라우저(쿠키와 프로필 공유)에 탭을 하나 더 연다. 사이트 여러 곳을 동시에 돌 때 사이트마다 탭 하나씩 쓴다.
+   * 다 쓰면 closePage로 닫는다. 조회를 멈추면 close가 브라우저째 닫아 이 탭도 함께 닫힌다.
+   */
+  async fork(): Promise<BrowserSession> {
+    const page = await this.context.newPage();
+    await page.evaluate(INIT_SCRIPT).catch(() => {});
+    return new BrowserSession(this.context, page, this.visible, this.runId, this.shots);
+  }
+
+  /** fork로 연 탭만 닫는다(브라우저는 그대로). */
+  async closePage() {
+    await this.page.close().catch(() => {});
   }
 
   /** 역, 지역, 구 하나를 다 보고 다음으로 넘어가기 전에 쉰다(restSeconds초, 창 없이 돌 때도 줄이지 않음). */
@@ -252,9 +268,9 @@ export class BrowserSession {
     try {
       const dir = path.join(RUNS_DIR, String(this.runId));
       fs.mkdirSync(dir, { recursive: true });
-      this.shotCount += 1;
+      this.shots.count += 1;
       const safe = label.replace(/[^\p{L}\p{N}_-]+/gu, '_').slice(0, 60);
-      const file = `${String(this.shotCount).padStart(2, '0')}-${source}-${safe}.jpg`;
+      const file = `${String(this.shots.count).padStart(2, '0')}-${source}-${safe}.jpg`;
       await this.page.screenshot({ path: path.join(dir, file), type: 'jpeg', quality: 60 });
       const url = `/runs/${this.runId}/${encodeURIComponent(file)}`;
       addScreenshot(this.runId, source, label, url);

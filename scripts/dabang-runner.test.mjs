@@ -34,7 +34,7 @@ async function run({ skipWrite = false, wrongRun = false } = {}) {
   };
   const dependencies = {
     './db.js': store, './collectors/index.js': { COLLECTORS: [collector] }, './collectors/notices.js': { NOTICE_COLLECTORS: [] },
-    './browser.js': { restSeconds: () => 0, BrowserSession: { open: async () => ({ banner: async () => {}, close: async () => {} }) } },
+    './browser.js': { restSeconds: () => 0, BrowserSession: { open: async () => { const tab = { banner: async () => {}, close: async () => {}, closePage: async () => {}, fork: async () => tab }; return tab; } } },
     './collectors/types.js': { BlockedError: class extends Error {} },
     '../shared/types.js': types, '../shared/regions.js': regions, './identity.js': identity,
     './config.js': { COLLECT_MARGIN_M: 500 }, './geo.js': { distanceM: () => 10000 },

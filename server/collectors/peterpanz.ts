@@ -31,6 +31,17 @@ function containsCenter(area: Area, b: any) {
   return !!b && Number(b.latitudeFrom) <= area.lat && area.lat <= Number(b.latitudeTo) && Number(b.longitudeFrom) <= area.lng && area.lng <= Number(b.longitudeTo);
 }
 
+/**
+ * 지도가 역 근처로 열렸는지: 역이 지도 안에 있고, 지도 남북 폭이 고른 줌의 1.5배를 넘지 않는다(줌 15는 약 2.8km, 한 단계마다 2배).
+ * 처음 쓰는 브라우저 탭이나 프로필에서는 주소의 위치와 줌을 무시하고 서울 전체(남북 20km 넘게)가 뜨기도 하는데, 그때도 역은 지도 안이라
+ * 가운데만 보면 통과해서 서울 전체 목록(1만 건 넘게)을 읽게 된다.
+ */
+export function openedNear(area: Area, bounds: any, zoom: number) {
+  if (!containsCenter(area, bounds)) return false;
+  const span = coverage(area, bounds);
+  return !!span && span.heightKm <= 2.8 * 2 ** (15 - zoom) * 1.5;
+}
+
 const PAGE_SIZE = 50;
 const MAX_PAGES = 30;
 const LIST_API = 'api.peterpanz.com/houses/area';
@@ -211,7 +222,7 @@ export const peterpanz: Collector = {
           // 1) 역 위치로 지도를 연다.
           collecting = true;
           ctx.progress(`피터팬, ${area.name}, ${cat.label} 지도 여는 중`);
-          for (let attempt = 1; attempt <= 2; attempt++) {
+          for (let attempt = 1; attempt <= 3; attempt++) {
             const firstList = page.waitForResponse((r) => r.url().includes(LIST_API) && r.url().includes('pageIndex=1'), { timeout: 15000 }).catch(() => null);
             const response = await session.goto('peterpanz', mapUrl(cat, area, zoom));
             const status = response?.status() ?? 0;
@@ -220,8 +231,15 @@ export const peterpanz: Collector = {
             await session.pause(1200);
             await settle();
             // 처음 방문하는 프로필에서는 주소의 위치를 무시하고 기본 화면(서울시청)이 뜨기도 해서, 그러면 한 번 더 연다.
-            if (containsCenter(area, bounds)) break;
-            ctx.log(`피터팬: 지도가 ${area.name}에 열리지 않아 다시 엽니다(${attempt}번째)`);
+            if (openedNear(area, bounds, zoom)) break;
+            const span = coverage(area, bounds);
+            ctx.log(`피터팬: 지도가 ${area.name} 근처로 열리지 않아(${span ? `남북 ${span.heightKm.toFixed(1)}km` : '범위 모름'}) ${attempt < 3 ? '다시 엽니다' : '이 종류는 건너뜁니다'}(${attempt}번째)`);
+          }
+          if (!openedNear(area, bounds, zoom)) {
+            // 엉뚱한 범위(서울 전체 등)의 목록은 읽지 않는다. 다 돈 것으로 치지 않아 안 보인 매물을 사라짐으로 두지도 않는다.
+            ctx.partial(`피터팬 ${area.name} ${cat.label}: 지도가 역 근처로 열리지 않음`);
+            collecting = false;
+            continue;
           }
           await closePopups(session);
 

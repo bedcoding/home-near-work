@@ -24,14 +24,16 @@ import { notify } from './notify.js';
 import { priceText } from '../shared/format.js';
 import { collectionAreas, primaryAreas, selectedArea } from '../shared/regions.js';
 import {
-  inGus, listingSection, nearReason, noticeSection, noticeSourcesOf, regionalSection, RUN_SCOPES, SEOUL_GUS,
-  type Area, type CollectionCoverage, type NormalizedListing, type RunProgress, type RunScope, type RunSourceSummary, type RunSummary, type SourceId,
+  inGus, listingSection, nearReason, noticeSection, noticeSourcesOf, regionalSection, RUN_PARALLEL_SITES, RUN_SCOPES, SEOUL_GUS, SOURCE_LABEL,
+  type Area, type CollectionCoverage, type NormalizedListing, type RunProgress, type RunScope, type RunSiteProgress, type RunSourceSummary, type RunSummary, type SourceId,
 } from '../shared/types.js';
 
 let current: (RunProgress & { log: string[]; session: BrowserSession | null }) | null = null;
 
 export const getProgress = (): RunProgress | null =>
-  current ? { runId: current.runId, message: current.message, log: current.log.slice(-300), stopping: current.stopping, coverage: current.coverage } : null;
+  current
+    ? { runId: current.runId, message: current.message, log: current.log.slice(-300), stopping: current.stopping, coverage: current.coverage, sites: current.sites, noticeCount: current.noticeCount }
+    : null;
 
 /** 조회 범위(scope, 없으면 전부)에서 돌 매물 사이트와 공고 곳. 공고만 확인은 매물 사이트 없이 공고 전부. */
 export function runPlan(scope: RunScope | undefined, noticesOnly: boolean) {
@@ -58,10 +60,13 @@ export function startRun(visible: boolean, scope?: RunScope, options: { auto?: b
   if (collectors.length === 0 && notices.length === 0) throw new Error('조회할 사이트가 없습니다.');
   const auto = !!options.auto;
   const runId = store.createRun(visible, auto, noticesOnly, def?.id ?? null);
-  current = { runId, message: '조회용 브라우저를 여는 중', log: [], stopping: false, session: null };
+  current = { runId, message: '조회용 브라우저를 여는 중', log: [], stopping: false, session: null, sites: waitingSites(collectors), noticeCount: notices.length };
   void execute(runId, visible, areas, { collectors, notices, scope: def ?? null }, { auto, quiet: !!options.quiet, noticesOnly });
   return runId;
 }
+
+/** 도는 매물 사이트를 모두 '대기'로 */
+const waitingSites = (collectors: Collector[]): RunSiteProgress[] => collectors.map((c) => ({ source: c.id, status: 'waiting', message: null }));
 
 /** 노선 탭 '이 노선 조회하기'가 도는 매물 사이트(역 위치로 찾는 곳) */
 export const LINE_SOURCES: SourceId[] = ['ziptoss', 'peterpanz'];
@@ -77,7 +82,7 @@ export function startLineRun(visible: boolean, line: string, radiusM: number): n
   const collectors = COLLECTORS.filter((c) => LINE_SOURCES.includes(c.id));
   if (!collectors.length) throw new Error('조회할 사이트가 없습니다.');
   const runId = store.createRun(visible, false, false, null, line);
-  current = { runId, message: '조회용 브라우저를 여는 중', log: [], stopping: false, session: null };
+  current = { runId, message: '조회용 브라우저를 여는 중', log: [], stopping: false, session: null, sites: waitingSites(collectors), noticeCount: 0 };
   void execute(runId, visible, areas, { collectors, notices: [], scope: null, line }, { auto: false, quiet: true, noticesOnly: false });
   return runId;
 }
@@ -366,56 +371,78 @@ async function execute(
 
   try {
     const only = noticesOnly ? '공고만, ' : plan.scope ? `${plan.scope.label} 탭만(${[...collectors, ...plan.notices].map((c) => c.label).join(', ')}), ` : '';
+    const sitesText = collectors.length
+      ? `매물 사이트 ${collectors.length}곳(${collectors.map((c) => c.label).join(', ')})을 ${Math.min(RUN_PARALLEL_SITES, collectors.length)}곳씩 동시에, 공고 ${plan.notices.length}곳, `
+      : '';
     const where = plan.line
       ? `${plan.line} 노선 역 ${areas.length}곳(반경 ${areas[0]?.radiusM ?? 0}m, ${collectors.map((c) => c.label).join(', ')})`
       : `지역: ${areas.map((a) => a.region ? `${a.name} ${a.region.kind === 'gu' ? '구 전체' : '법정동'}` : `${a.name} ${a.radiusM}m`).join(', ')}`;
-    log(`조회 시작, ${auto ? '자동 확인, ' : ''}${only}${where}, ${visible ? '보면서 조회' : '조용히 조회'}, 역, 지역, 구 사이 ${restSeconds()}초 쉼`);
+    log(`조회 시작, ${auto ? '자동 확인, ' : ''}${only}${sitesText}${where}, ${visible ? '보면서 조회' : '조용히 조회'}, 역, 지역, 구 사이 ${restSeconds()}초 쉼`);
     session = await BrowserSession.open(runId, visible);
     state.session = session;
     // 브라우저를 여는 사이에 멈춤을 눌렀으면 바로 닫는다.
     if (state.stopping) await session.close();
-    /** 지금 도는 사이트가 일부(고른 구 하나 등)를 보지 못한 까닭 */
-    let missed: string[] = [];
-    const coverage = new Map<string, { row: CollectionCoverage; ids: string[] }>();
     const runCoverage = new Map<string, CollectionCoverage>();
-    let activeSource: SourceId | null = null;
-    const ctx: CollectContext = {
+    const rootSession = session;
+    /** 브라우저 탭(tab)마다 쓰는 수집 맥락. site를 주면 그 사이트의 진행, 일부 못 봄, 범위 확인을 그 사이트 몫으로 받는다. */
+    const makeCtx = (
+      tab: BrowserSession,
+      site?: { progress: RunSiteProgress; missed: string[]; coverage: Map<string, { row: CollectionCoverage; ids: string[] }> },
+    ): CollectContext => ({
       runId,
       areas,
-      session,
+      session: tab,
       log,
       classify,
       stopped: () => state.stopping,
       coverage: (row, ids) => {
-        if (!activeSource) return;
-        const scoped = { ...row, source: activeSource };
-        coverage.set(`${row.areaId}:${row.category}`, { row: scoped, ids });
-        runCoverage.set(`${activeSource}:${row.areaId}:${row.category}`, scoped);
+        if (!site) return;
+        const scoped = { ...row, source: site.progress.source };
+        site.coverage.set(`${row.areaId}:${row.category}`, { row: scoped, ids });
+        runCoverage.set(`${site.progress.source}:${row.areaId}:${row.category}`, scoped);
         state.coverage = [...runCoverage.values()];
       },
       progress: (message: string) => {
-        state.message = message;
-        void session!.banner(message);
+        if (site) {
+          site.progress.message = message;
+          updateMessage();
+        } else state.message = message;
+        void tab.banner(message);
       },
       // 노선 조회는 서울 아파트 탭의 고른 구를 모으지 않는다.
       aptGus: plan.line ? [] : store.aptGus(),
       partial: (reason: string, retry = true) => {
-        missed.push(reason);
+        site?.missed.push(reason);
         retryable ||= retry;
       },
+    });
+    /** 사이트 진행을 한 줄로(몇 곳 끝났고 지금 어디를 도는지) */
+    const updateMessage = () => {
+      const sites = state.sites ?? [];
+      const doing = sites.filter((s) => s.status === 'running').map((s) => SOURCE_LABEL[s.source]);
+      const ended = sites.filter((s) => s.status === 'done' || s.status === 'error').length;
+      state.message = doing.length
+        ? `매물 사이트 ${sites.length}곳 중 ${ended}곳 끝, 지금 ${doing.join(', ')}`
+        : `매물 사이트 ${sites.length}곳 중 ${ended}곳 끝`;
     };
-    for (const collector of collectors) {
-      if (state.stopping) break;
+
+    /** 사이트 하나를 돈다. 사이트마다 조회용 브라우저 탭을 따로 열어 쓰고, 끝나면 닫는다. */
+    const runOne = async (collector: Collector, progress: RunSiteProgress): Promise<RunSourceSummary> => {
+      const missed: string[] = [];
+      const coverage = new Map<string, { row: CollectionCoverage; ids: string[] }>();
       let items: CollectedItem[] = [];
       let complete = true;
       let error: string | undefined;
-      missed = [];
-      coverage.clear();
-      activeSource = collector.id;
+      let tab: BrowserSession | null = null;
+      progress.status = 'running';
+      progress.message = '조회용 탭을 여는 중';
+      updateMessage();
+      log(`${collector.label}: 시작`);
       try {
-        items = await collector.collect(ctx);
+        tab = await rootSession.fork();
+        items = await collector.collect(makeCtx(tab, { progress, missed, coverage }));
         if (areas.some((area) => area.region) && ['ziptoss', 'peterpanz'].includes(collector.id)) {
-          ctx.partial('역·지도 범위에서 받은 매물은 저장했으나 선택한 구·동 전체의 확인은 보장하지 않습니다', false);
+          missed.push('역과 지도 범위에서 받은 매물은 저장했으나 선택한 구나 동 전체를 다 봤는지는 보장하지 않습니다');
         }
         if (state.stopping) {
           // 멈추는 사이에 받은 것은 저장하되 다 돈 것으로 보지 않는다('사라짐' 처리를 하지 않는다).
@@ -440,6 +467,8 @@ async function execute(
         // Playwright 오류는 뒤에 브라우저 기록이 여러 줄 붙어서 첫 줄만 남긴다.
         error = state.stopping ? '중단함' : e instanceof Error ? e.message.split('\n')[0] : String(e);
         log(state.stopping ? `${collector.label}: 중단함` : `${collector.label} ${e instanceof BlockedError ? '차단' : '오류'}: ${error}`);
+      } finally {
+        await tab?.closePage();
       }
       const summary = applyResults(runId, collector.id, items, areas, complete && !collector.retainMissing, error, {
         goneOutsideRadius: !plan.line && collector.wholeDistrict,
@@ -453,7 +482,7 @@ async function execute(
           const stored = ids.filter(id => store.getListing(`${collector.id}:${id}`)?.last_seen_run === runId).length;
           const saved = stored === ids.length;
           return { ...row, stored, storageChecked: true, complete: row.complete && saved,
-            reason: saved ? row.reason : `${row.reason} · 서버 저장 ${stored}/${ids.length}건 확인` };
+            reason: saved ? row.reason : `${row.reason}, 서버 저장 ${stored}/${ids.length}건 확인` };
         });
         for (const row of summary.coverage) runCoverage.set(`${collector.id}:${row.areaId}:${row.category}`, row);
         state.coverage = [...runCoverage.values()];
@@ -465,10 +494,37 @@ async function execute(
         const storedScopes = summary.coverage.filter(row => row.total != null && row.pages > 0 && row.stored === coverage.get(`${row.areaId}:${row.category}`)!.ids.length).length;
         log(`${collector.label}: 서버 저장 검증 ${storedScopes}/${summary.coverage.length}개, 전체 목록 확인 ${summary.coverage.filter(row => row.complete).length}/${summary.coverage.length}개`);
       }
-      summaries.push(summary);
       const baseline = summary.baselineAreas.length ? `, 기준점 저장: ${summary.baselineAreas.join(', ')}` : '';
-      log(`${collector.label}: 받은 ${summary.fetched}건, 저장 ${summary.kept}건(주변·지역 미확인 ${summary.incidentalCount ?? 0}건), 신규 ${summary.newCount}, 가격 변동 ${summary.priceChanged}, 재등록 숨김 ${summary.relisted}${baseline}`);
+      log(`${collector.label}: 받은 ${summary.fetched}건, 저장 ${summary.kept}건(주변이나 지역 미확인 ${summary.incidentalCount ?? 0}건), 신규 ${summary.newCount}, 가격 변동 ${summary.priceChanged}, 재등록 숨김 ${summary.relisted}${baseline}`);
+      progress.status = summary.status === 'ok' && !summary.error ? 'done' : 'error';
+      progress.message = summary.error ?? `${summary.kept}건, 신규 ${summary.newCount}`;
+      updateMessage();
+      return summary;
+    };
+
+    // 매물 사이트는 RUN_PARALLEL_SITES곳씩 동시에 돈다(사이트마다 탭 하나). 한 곳이 끝나면 다음 사이트를 시작한다.
+    const results: RunSourceSummary[] = [];
+    let nextSite = 0;
+    const worker = async () => {
+      while (!state.stopping && nextSite < collectors.length) {
+        const i = nextSite++;
+        results[i] = await runOne(collectors[i], state.sites![i]);
+      }
+    };
+    const lanes = Math.min(RUN_PARALLEL_SITES, collectors.length);
+    if (lanes) {
+      updateMessage();
+      void session.banner(`사이트마다 탭을 열어 ${lanes}곳씩 동시에 조회합니다`);
+      await Promise.all(Array.from({ length: lanes }, worker));
     }
+    for (const s of state.sites ?? []) {
+      if (s.status === 'waiting') {
+        s.status = 'skipped';
+        s.message = '중단해서 돌지 않음';
+      }
+    }
+    summaries.push(...results.filter(Boolean));
+    const ctx = makeCtx(session);
     // 법원경매를 돈 조회는 매각 결과(지난 매각기일의 매각대금, 유찰)와 지역별 매각통계도 모은다.
     // 공고만 확인도 매각 결과를 모은 지 오래됐으면(courtResultsDue) 모은다.
     if (!state.stopping && (collectors.some((c) => c.id === 'courtauction') || (noticesOnly && courtResultsDue()))) {

@@ -787,7 +787,8 @@ onBeforeUnmount(() => {
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 12px 40px rgba(22, 32, 46, .3);
 }
 /* 지도 칸: 오른쪽 위 구석에 크게 보기 버튼, 위치 찍는 중이면 위 가운데에 안내(지도 조작은 막지 않음). 지도 컨트롤(z-index 1000) 위에 둔다. */
-.map-wrap { position: relative; display: grid; min-height: 280px; }
+/* isolation: 지도 안의 z-index(지도 칸 400, 컨트롤 1000)가 위쪽 머리말 메뉴(조회하기 ▾ 등)를 덮지 않게 지도 안에 가둔다. */
+.map-wrap { position: relative; display: grid; min-height: 280px; isolation: isolate; }
 .map { min-height: 280px; border: 1px solid var(--line-strong); border-radius: 12px; }
 .big-btn { position: absolute; top: 10px; right: 10px; z-index: 1001; box-shadow: 0 1px 4px rgba(22, 32, 46, .18); }
 .pick-note {

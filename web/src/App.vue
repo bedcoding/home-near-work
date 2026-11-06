@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
-  COLLECT_MARGIN_M, hasHomeListings, inGus, nearReason, NOTICE_SHORT, noticeSection, noticeSourcesOf, RUN_SCOPES, SOURCE_LABEL,
+  COLLECT_MARGIN_M, hasHomeListings, inGus, nearReason, NOTICE_SHORT, noticeSection, noticeSourcesOf, RUN_ALL_SOURCES, RUN_PARALLEL_SITES, RUN_SCOPES, SOURCE_LABEL,
+  type RunSiteProgress,
   type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type DealType, type ExplainRow, type HouseTradeSummary, type ListingView, type MarketView as MarketData,
   type NoticeSection, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type RunScope, type SourceId, type Verdict,
 } from '../../shared/types';
@@ -774,6 +775,15 @@ const runScopes = computed(() => [
   }),
   { id: 'market' as const, label: '시세 통계', what: 'KB 지수, 국토부 아파트 실거래', title: '시세 통계 탭의 \'지금 받기\'와 같습니다', here: tab.value === 'market' },
 ]);
+/** '조회하기'(전부 조회)가 도는 곳: 매물 사이트(시작 순서)와 공고 곳 */
+const runAllSites = RUN_ALL_SOURCES.map((id) => SOURCE_LABEL[id]).join(', ');
+const runAllNotices = [...new Set(Object.values(NOTICE_SHORT))];
+const runAllTitle =
+  `매물 사이트 ${RUN_ALL_SOURCES.length}곳을 ${RUN_PARALLEL_SITES}곳씩 동시에 돕니다: ${runAllSites}\n` +
+  `그다음 실거래와 시세 자료(받을 때가 된 것만), 공고 ${runAllNotices.length}곳을 받습니다.\n` +
+  '네이버, 당근은 크롬 확장이 모읍니다.';
+/** 조회 중 사이트 상태 이름 */
+const SITE_STATE: Record<RunSiteProgress['status'], string> = { waiting: '대기', running: '도는 중', done: '끝', error: '실패', skipped: '안 돎' };
 function runScope(id: RunScope | 'market') {
   runMenu.value = false;
   if (id === 'market') void fetchMarket();
@@ -1013,7 +1023,7 @@ const filterUse = computed<string[] | 'all'>(() => {
         </div>
       </div>
       <div ref="runMenuEl" class="runall">
-        <button class="btn btn-primary run run-main" :disabled="!!running" title="모든 사이트와 공고를 조회합니다" @click="startRun()">
+        <button class="btn btn-primary run run-main" :disabled="!!running" :title="runAllTitle" @click="startRun()">
           {{ running ? '조회 중…' : '조회하기' }}
         </button>
         <button
@@ -1021,7 +1031,12 @@ const filterUse = computed<string[] | 'all'>(() => {
           title="탭 하나만 조회" @click="runMenu = !runMenu"
         >▾</button>
         <div v-if="runMenu" class="open-menu run-menu">
-          <span class="menu-label" title="'조회하기'는 전부 돕니다. 네이버, 다방, 직방은 '한 번에 열기'로 크롬 확장이 모읍니다.">탭 하나만 조회</span>
+          <span class="menu-label">전부 조회</span>
+          <button class="run-scope" :title="runAllTitle" @click="runMenu = false; startRun()">
+            <span class="run-scope-name">조회하기</span>
+            <span class="run-scope-what">{{ runAllSites }} ({{ RUN_PARALLEL_SITES }}곳씩 동시에), 공고 {{ runAllNotices.length }}곳</span>
+          </button>
+          <span class="menu-label" title="크롬 확장이 모으는 네이버, 당근은 '한 번에 열기'로 엽니다.">탭 하나만 조회</span>
           <button v-for="s in runScopes" :key="s.id" class="run-scope" :class="{ here: s.here }" :title="s.title || undefined" @click="runScope(s.id)">
             <span class="run-scope-name">{{ s.label }}<span v-if="s.here" class="here-chip">지금 탭</span></span>
             <span class="run-scope-what">{{ s.what }}</span>
@@ -1059,6 +1074,16 @@ const filterUse = computed<string[] | 'all'>(() => {
     <div class="spinner" aria-hidden="true"></div>
     <div class="progress-body">
       <strong>{{ running.message }}</strong>
+      <ul v-if="running.sites?.length" class="run-sites" aria-label="사이트별 진행">
+        <li v-for="s in running.sites" :key="s.source" class="run-site" :class="s.status" :title="s.message ?? ''">
+          <span class="run-site-name">{{ SOURCE_LABEL[s.source] }}</span>
+          <span class="run-site-state">{{ s.status === 'done' && s.message ? s.message : SITE_STATE[s.status] }}</span>
+        </li>
+        <li v-if="running.noticeCount" class="run-site notices">
+          <span class="run-site-name">공고</span>
+          <span class="run-site-state">{{ running.noticeCount }}곳, 사이트 다음에</span>
+        </li>
+      </ul>
       <div class="muted small">{{ running.log.slice(-1)[0] ?? '' }}</div>
     </div>
     <button class="btn btn-ghost btn-sm" @click="showLog = !showLog">{{ showLog ? '기록 접기' : '기록 보기' }}</button>
@@ -1322,7 +1347,20 @@ h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
   display: flex; align-items: center; gap: 14px; padding: 12px 24px;
   background: #eef3fb; border-bottom: 1px solid var(--line);
 }
-.progress-body { flex: 1; display: grid; }
+.progress-body { flex: 1; display: grid; gap: 6px; min-width: 0; }
+.run-sites { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.run-site {
+  display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 10px; border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--surface); font-size: 13px; color: var(--muted);
+}
+.run-site-name { font-weight: 700; color: var(--ink-2); }
+.run-site.running { border-color: var(--accent); background: var(--accent-soft); }
+.run-site.running .run-site-state { color: var(--accent); font-weight: 700; }
+.run-site.done .run-site-state { color: var(--ink-2); }
+.run-site.error { border-color: var(--new); }
+.run-site.error .run-site-state { color: var(--new); font-weight: 700; }
+.run-site.skipped, .run-site.waiting { opacity: 0.75; }
+.run-site.notices { border-style: dashed; }
 .progress .stop { border-color: var(--new); color: var(--new); }
 .spinner { width: 22px; height: 22px; border-radius: 50%; border: 3px solid #c8d6ee; border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

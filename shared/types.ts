@@ -111,6 +111,12 @@ const SOURCE_SECTIONS: Record<NoticeSourceId, NoticeSection[]> = {
 export const noticeSourcesOf = (section: NoticeSection) =>
   (Object.keys(SOURCE_SECTIONS) as NoticeSourceId[]).filter((s) => SOURCE_SECTIONS[s].includes(section));
 
+/** '조회하기'(전부 조회)와 자동 확인이 도는 매물 사이트, 시작하는 순서대로(server/collectors/index.ts의 COLLECTORS와 같음). 네이버는 크롬 확장이 모은다. */
+export const RUN_ALL_SOURCES: SourceId[] = ['dabang', 'zigbang', 'ziptoss', 'peterpanz', 'gobang', 'betterliving', 'mangrove', 'celib', 'courtauction', 'onbid'];
+
+/** 조회 때 동시에 도는 매물 사이트 수. 사이트마다 조회용 브라우저 탭을 하나씩 쓰고, 한 사이트 안에서는 지금처럼 쉬어 가며 돈다. */
+export const RUN_PARALLEL_SITES = 3;
+
 /** 탭 하나만 조회하는 범위(조회하기 옆 ▾ 메뉴, 경매 탭의 '경매 조회하기') */
 export type RunScope = 'home' | 'dabang' | 'naver' | 'auction' | 'room' | 'rent' | 'subscription';
 
@@ -950,6 +956,14 @@ export interface CaptureNews {
   hot: boolean;
 }
 
+/** 조회 중 매물 사이트 하나의 상태. 대기, 도는 중, 끝, 실패, 건너뜀(중단해서 시작하지 않음). */
+export interface RunSiteProgress {
+  source: SourceId;
+  status: 'waiting' | 'running' | 'done' | 'error' | 'skipped';
+  /** 그 사이트가 지금 하는 일(도는 중), 끝났으면 결과나 오류 */
+  message: string | null;
+}
+
 export interface RunProgress {
   runId: number;
   message: string;
@@ -957,6 +971,10 @@ export interface RunProgress {
   /** 중단을 눌러 멈추는 중 */
   stopping: boolean;
   coverage?: CollectionCoverage[];
+  /** 이번 조회가 도는 매물 사이트(시작 순서)와 사이트마다 상태. 공고만 확인이면 빈 목록. */
+  sites?: RunSiteProgress[];
+  /** 이번 조회가 받는 공고 곳 수 */
+  noticeCount?: number;
 }
 
 /** 소스 하나를 마지막으로 조회한 결과. */
