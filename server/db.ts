@@ -186,6 +186,8 @@ CREATE TABLE IF NOT EXISTS naver_runs (
   if (!columns.includes('parsed')) db.exec('ALTER TABLE naver_captures ADD COLUMN parsed INTEGER NOT NULL DEFAULT 0');
   if (!columns.includes('site')) db.exec("ALTER TABLE naver_captures ADD COLUMN site TEXT NOT NULL DEFAULT 'naver'");
 }
+// site와 parsed는 큰 응답 본문(body) 뒤에 붙은 칸이라 색인이 없으면 사이트로 거를 때마다 본문까지 전부 읽는다(하드디스크에서 서버 시작이 몇 분씩 걸림).
+db.exec('CREATE INDEX IF NOT EXISTS naver_captures_site ON naver_captures(site, parsed, id)');
 
 // 예전 DB에 없는 원본 데이터(raw) 칸을 붙인다.
 if (!(db.prepare('PRAGMA table_info(listings)').all() as { name: string }[]).some((c) => c.name === 'raw')) {
@@ -233,6 +235,17 @@ CREATE TABLE IF NOT EXISTS dabang_addresses (
   lng REAL,
   fetched_at TEXT NOT NULL
 )`);
+
+/** 조회마다 상태와 시작, 끝 시각(오래된 조회 폴더 정리용) */
+export function runAges(): { id: number; status: string; startedAt: string; finishedAt: string | null }[] {
+  return db.prepare('SELECT id, status, started_at AS startedAt, finished_at AS finishedAt FROM runs').all() as { id: number; status: string; startedAt: string; finishedAt: string | null }[];
+}
+
+/** 폴더를 지운 조회의 스크린샷 목록을 지운다(조회 기록 화면에 깨진 그림이 나오지 않게). */
+export function forgetScreenshots(runIds: number[]) {
+  const stmt = db.prepare('DELETE FROM screenshots WHERE run_id = ?');
+  db.transaction(() => { for (const id of runIds) stmt.run(id); })();
+}
 
 /** 받아 둔 다방 주소(매물 id → 주소) */
 export function dabangAddressMap(): Map<string, string> {

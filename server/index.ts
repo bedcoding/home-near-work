@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
@@ -41,6 +42,7 @@ import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, 
 import { siteReport } from './site-report.js';
 import { lastAreaKindError, missingAreaKinds } from '../shared/regions.js';
 import { refreshDabangUrls } from './dabang-links.js';
+import { purgeOldRunFiles, RUN_FILES_KEEP_DAYS, RUN_FILES_PURGED_KEY } from './run-files.js';
 import { dabangNearUrl, parseDabangNear } from './dabang-parse.js';
 import { DABANG_HEADERS } from './dabang-client.js';
 import { CAPTURE_SOURCES, REST_CHOICES, RUN_SCOPES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type SourceId, type Verdict, VERDICTS } from '../shared/types.js';
@@ -55,9 +57,22 @@ if (tidy.stale) console.log(`네이버, 다방, 직방에서 14일 넘게 다시
 if (tidy.purged) console.log(`사라진 지 오래된 매물 ${tidy.purged}건을 지웠습니다.`);
 // 지난번에 받아 두고 아직 매물로 읽지 않은 네이버 응답이 있으면 읽는다.
 processPendingNaverCaptures();
-const naverFloors = refreshNaverFloors();
+/**
+ * 읽는 방식(file)이 지난번과 같으면 이미 한 정리를 건너뛴다. 서버를 켤 때마다 매물 원본 전체를 다시 읽으면
+ * 하드디스크에서는 시작이 오래 걸린다. 읽는 코드가 바뀌면 한 번 다시 돈다.
+ */
+function oncePerVersion(key: string, file: URL, work: () => number): number {
+  let version: string;
+  try { version = createHash('sha1').update(fs.readFileSync(file)).digest('hex'); }
+  catch { return work(); }
+  if (store.getSetting(key) === version) return 0;
+  const changed = work();
+  store.setSetting(key, version);
+  return changed;
+}
+const naverFloors = oncePerVersion('startup_naver_floors_version', new URL('./naver-parse.ts', import.meta.url), refreshNaverFloors);
 if (naverFloors) console.log(`네이버 매물 ${naverFloors}건의 층을 원본에서 다시 읽었습니다.`);
-const dabangUrls = refreshDabangUrls();
+const dabangUrls = oncePerVersion('startup_dabang_urls_version', new URL('./dabang-parse.ts', import.meta.url), refreshDabangUrls);
 if (dabangUrls) console.log(`다방 매물 ${dabangUrls}건의 원본 열기 주소에 방 번호를 붙였습니다.`);
 
 const app = Fastify({ logger: false });
@@ -752,8 +767,26 @@ if (fs.existsSync(WEB_DIST)) {
 
 learnFromStoredCaptures();
 await app.listen({ host: HOST, port: PORT });
-console.log(`회사근처 내집마련: ${DASHBOARD_URL}`);
+// 켜는 데 걸린 시간(모듈 불러오기 포함). 오래 걸리면 위 준비 작업을 살핀다.
+console.log(`회사근처 내집마련: ${DASHBOARD_URL} (켜는 데 ${process.uptime().toFixed(1)}초)`);
 startAutoCheck();
+/** 끝난 지 30일 지난 조회 폴더(스크린샷, 응답 원본)를 지운다. 켠 뒤 잠시 있다가, 그 뒤로는 하루에 한 번. 조회 기록(로그, 요약)은 남는다. */
+function tidyRunFiles() {
+  try {
+    const { removed, bytes } = purgeOldRunFiles({
+      runsDir: RUNS_DIR,
+      runs: store.runAges,
+      forgetScreenshots: store.forgetScreenshots,
+      purgedThrough: () => Number(store.getSetting(RUN_FILES_PURGED_KEY) ?? 0) || 0,
+      setPurgedThrough: (id) => store.setSetting(RUN_FILES_PURGED_KEY, String(id)),
+    });
+    if (removed) console.log(`${RUN_FILES_KEEP_DAYS}일 지난 조회 폴더 ${removed}개(${Math.round(bytes / 1e6)}MB)를 지웠습니다. 조회 기록은 남아 있습니다.`);
+  } catch (e) {
+    console.error('조회 폴더 정리 오류:', e instanceof Error ? e.message : e);
+  }
+}
+setTimeout(tidyRunFiles, 10000);
+setInterval(tidyRunFiles, 86400000);
 setTimeout(() => {
   try {
     refreshTradeSignals();

@@ -5,6 +5,7 @@ import { parseLot, pnuOf } from './lots.js';
 import { zonesAt } from './redev-zones.js';
 import { compareTrades, type TradeMatch } from './trade-compare.js';
 import { manwon } from '../shared/format.js';
+import { RUN_FILES_PURGED_KEY, screenshotPurged } from './run-files.js';
 import { kindOf } from '../shared/kinds.js';
 import {
   isApartmentType, isDetachedHouseType, listingSection, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seniorInRemarks, seoulGuOf, type AptInfo, type AptRegistry, type AuctionResultSummary,
@@ -420,6 +421,8 @@ export function buildListingViews(): ListingView[] {
   }
 
   const dabangAddresses = store.dabangAddressMap();
+  // 30일 지나 폴더를 지운 조회의 스크린샷은 '출처 보기'를 숨긴다.
+  const purgedThrough = Number(store.getSetting(RUN_FILES_PURGED_KEY) ?? 0) || 0;
   // 다방은 목록에 주소가 없어 '주소 보기'로 받아 둔 지번 주소를 채운다(사이트가 준 주소가 있으면 그것을 쓴다).
   const parsed = rows.map((r) => {
     const data = JSON.parse(r.data) as NormalizedListing;
@@ -447,7 +450,10 @@ export function buildListingViews(): ListingView[] {
       priceChange: changes.get(row.id) ?? null,
       relistedOf: reason?.startsWith('relisted:') ? reason.slice('relisted:'.length) : null,
       similarToDiscarded: !verdict && discarded.some((d) => d.row.id !== row.id && looksSimilar(data, d.data)),
-      seenRef: row.seen_ref ? JSON.parse(row.seen_ref) : null,
+      seenRef: (() => {
+        const ref = row.seen_ref ? JSON.parse(row.seen_ref) : null;
+        return ref && screenshotPurged(ref, purgedThrough) ? { ...ref, screenshot: null } : ref;
+      })(),
       auction: row.source === 'courtauction' ? auctionRef(courtRaw.get(row.id), courtClaims) : row.source === 'onbid' ? onbidRef(onbidRaw.get(row.id)) : null,
       options: optionsRef(row.source, optionRaw.get(row.id), data.title ?? ''),
       apt: aptRef(row.id, row.source, data, raw, households, registry),
