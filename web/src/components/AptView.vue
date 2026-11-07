@@ -13,6 +13,8 @@ import HouseholdsChip from './HouseholdsChip.vue';
 import InfoModal from './InfoModal.vue';
 import ListingCard from './ListingCard.vue';
 import OverviewMap from './OverviewMap.vue';
+import SplitHandle from './SplitHandle.vue';
+import { mapShareStyle } from '../mapWidth';
 import RuleList from './RuleList.vue';
 import ZoneBanner from './ZoneBanner.vue';
 import { ZONE_CHECKED, ZONE_LINKS, ZONE_RULES } from '../zones';
@@ -299,7 +301,7 @@ const none: ListingView[] = [];
       </details>
     </div>
 
-    <div class="split">
+    <div class="split" :style="mapShareStyle">
       <div class="col">
         <div class="filters" role="group" aria-label="서울 아파트 필터">
           <fieldset class="kinds">
@@ -382,6 +384,7 @@ const none: ListingView[] = [];
           <template v-else>조건에 맞는 아파트가 없습니다{{ hiddenByHouseholds ? `(세대수로 가림 ${hiddenByHouseholds}건)` : '' }}</template>
         </p>
       </div>
+      <SplitHandle />
       <aside class="map">
         <OverviewMap
           :listings="none" :background="shown" :areas="areas" :selected-id="selectedId" :fit-key="fitKey"
@@ -424,7 +427,7 @@ const none: ListingView[] = [];
 
 
 /* 목록(왼쪽)과 지도(오른쪽, 따라 내려옴). 좁으면 지도가 위로 간다. 경매 탭과 같은 배치. */
-.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 45%); gap: 16px; align-items: start; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 12px clamp(320px, var(--map-share, 50%), calc(100% - 464px)); gap: 16px 6px; align-items: start; }
 .col { display: grid; gap: 14px; min-width: 0; }
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .kinds { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; border: 0; }
@@ -451,6 +454,7 @@ const none: ListingView[] = [];
 .map:has(.ovmap.big) { z-index: 70; }
 @media (max-width: 1280px) {
   .split { grid-template-columns: 1fr; }
+  .split > .split-handle { display: none; }
   .col { display: contents; }
   .map { position: static; order: 1; height: auto; min-height: 0; }
   .filters { order: 0; }

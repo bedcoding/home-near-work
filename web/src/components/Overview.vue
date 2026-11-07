@@ -12,6 +12,8 @@ import CountTooltip from './CountTooltip.vue';
 import ListingCard from './ListingCard.vue';
 import ZoneBanner from './ZoneBanner.vue';
 import OverviewMap from './OverviewMap.vue';
+import SplitHandle from './SplitHandle.vue';
+import { mapShareStyle } from '../mapWidth';
 import { walkPins, walkTimes } from '../walk';
 
 const props = defineProps<{ listings: ListingView[]; filters: Filters; areas: Area[]; selectedId: string | null }>();
@@ -502,7 +504,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 </script>
 
 <template>
-  <section ref="overviewEl" class="overview">
+  <section ref="overviewEl" class="overview" :style="mapShareStyle">
     <div class="ov-controls">
     <div v-if="areas.length > 1" class="area-chips" role="tablist" aria-label="지역">
       <button class="area-chip" :class="{ on: allAreas }" role="tab" :aria-selected="allAreas" @click="emit('areas', [])">
@@ -598,6 +600,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
           </div>
         </div>
       </div>
+      <SplitHandle />
       <aside ref="mapPanel" class="ov-map" :style="mapPanelHeight ? { '--map-panel-height': `${mapPanelHeight}px` } : undefined">
         <OverviewMap
           :listings="mapStrong" :background="mapBackground" :areas="areas" :selected-id="selectedId" :fit-key="mapFitKey"
@@ -633,13 +636,18 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 .deal-total { font-size: 28px; font-weight: 800; line-height: 1.2; letter-spacing: -0.02em; }
 
 /* 가격대 목록(왼쪽)과 지도(오른쪽, 따라 내려옴). 좁으면 지도가 위로 간다. */
-.ov-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 45%); gap: 16px; align-items: start; }
+/* 목록 | 끌어서 폭을 바꾸는 경계 | 지도. 지도 폭은 --map-share(기억한 비율), 목록은 440px, 지도는 320px보다 좁아지지 않는다. */
+.ov-split {
+  display: grid; grid-template-columns: minmax(0, 1fr) 12px clamp(320px, var(--map-share, 50%), calc(100% - 464px)); gap: 16px 6px; align-items: start;
+  --split-top: 92px; --split-height: calc(100vh - 108px);
+}
 .ov-bands { display: grid; gap: 14px; min-width: 0; }
 .ov-map { position: sticky; top: 92px; height: calc(100vh - 108px); min-height: 420px; }
 /* 크게 보기일 때는 위쪽 머리 줄(z-index 20)보다 위에 오게 한다. */
 .ov-map:has(.ovmap.big) { z-index: 70; }
 @media (max-width: 1280px) {
   .ov-split { grid-template-columns: 1fr; }
+  .ov-split > .split-handle { display: none; }
   .ov-map { position: static; order: -1; height: auto; min-height: 0; }
 }
 

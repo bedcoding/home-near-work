@@ -6,6 +6,8 @@ import { ROOM_TYPE_LABEL, ROOM_TYPES, roomTypeOf, type RoomType } from '../rooms
 import CountTooltip from './CountTooltip.vue';
 import ListingCard from './ListingCard.vue';
 import OverviewMap from './OverviewMap.vue';
+import SplitHandle from './SplitHandle.vue';
+import { mapShareStyle } from '../mapWidth';
 
 // 고시원과 쉐어 탭: 종류 칸(전체, 고시원과 원룸텔, 쉐어하우스, 코리빙), 목록(왼쪽)과 고른 종류만 그린 지도(오른쪽).
 // 목록 순서는 받은 그대로 쓰고, 고른 종류의 목록을 visible로 알린다(App의 키보드 이동과 같은 순서).
@@ -80,7 +82,7 @@ defineExpose({ pickType });
       </button>
     </nav>
 
-    <div class="split">
+    <div class="split" :style="mapShareStyle">
       <div class="list">
         <ListingCard
           v-for="l in shown" :key="l.id" :listing="l" :areas="areas" :selected="l.id === selectedId"
@@ -89,6 +91,7 @@ defineExpose({ pickType });
         />
         <p v-if="!shown.length" class="empty muted">조건에 맞는 곳이 없습니다.</p>
       </div>
+      <SplitHandle />
       <aside class="map">
         <OverviewMap
           :listings="none" :background="shown" :areas="areas" :selected-id="selectedId" :fit-key="type"
@@ -116,7 +119,7 @@ defineExpose({ pickType });
 .count { margin: 0 2px 0 4px; font-size: 13px; font-weight: 600; opacity: .75; }
 
 /* 목록(왼쪽)과 지도(오른쪽, 따라 내려옴). 좁으면 지도가 위로 간다. 경매 탭과 같은 배치. */
-.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 45%); gap: 16px; align-items: start; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 12px clamp(320px, var(--map-share, 50%), calc(100% - 464px)); gap: 16px 6px; align-items: start; }
 .list { display: grid; gap: 8px; min-width: 0; container-type: inline-size; }
 .map { position: sticky; top: calc(var(--app-header-height, 76px) + 16px); height: calc(100dvh - var(--app-header-height, 76px) - 32px); min-height: 420px; }
 /* 크게 보기일 때는 위쪽 머리 줄(z-index 20)보다 위에 오게 한다. */
@@ -124,6 +127,7 @@ defineExpose({ pickType });
 .empty { padding: 32px 0; text-align: center; }
 @media (max-width: 1280px) {
   .split { grid-template-columns: 1fr; }
+  .split > .split-handle { display: none; }
   .map { position: static; order: -1; height: auto; min-height: 0; }
 }
 </style>

@@ -17,6 +17,8 @@ import ListingCard from './ListingCard.vue';
 import NoticeList from './NoticeList.vue';
 import OverviewMap from './OverviewMap.vue';
 import RuleList from './RuleList.vue';
+import SplitHandle from './SplitHandle.vue';
+import { mapShareStyle } from '../mapWidth';
 import ZoneBanner from './ZoneBanner.vue';
 
 // 경매 탭(주거, 상가)과 집터 탭(단독, 토지)이 같이 쓴다: 목록 위의 공고 칸(상가와 토지 칸의 LH 공고, 신탁 공매 공고),
@@ -237,7 +239,7 @@ const days = computed(() => {
       </div>
     </div>
 
-    <div class="split">
+    <div class="split" :style="mapShareStyle">
       <div class="days">
         <div class="auction-options">
           <div class="auction-toolbar">
@@ -324,6 +326,7 @@ const days = computed(() => {
         </section>
         <p v-if="!all.length" class="empty muted">{{ EMPTY_TEXT[kind] }}</p>
       </div>
+      <SplitHandle />
       <aside class="map">
         <OverviewMap
           :listings="none" :background="all" :areas="areas" :selected-id="selectedId" :fit-key="kind"
@@ -363,7 +366,7 @@ const days = computed(() => {
 .outside { font-size: 13px; font-weight: 600; color: var(--muted); }
 
 /* 목록(왼쪽)과 지도(오른쪽, 따라 내려옴). 좁으면 지도가 위로 간다. 매물 탭과 같은 배치. */
-.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 45%); gap: 16px; align-items: start; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 12px clamp(320px, var(--map-share, 50%), calc(100% - 464px)); gap: 16px 6px; align-items: start; }
 .days { display: grid; gap: 18px; min-width: 0; }
 .day { display: grid; gap: 8px; }
 .day-head { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; font-size: 17px; font-weight: 800; }
@@ -389,6 +392,7 @@ const days = computed(() => {
 .empty { padding: 32px 0; text-align: center; }
 @media (max-width: 1280px) {
   .split { grid-template-columns: 1fr; }
+  .split > .split-handle { display: none; }
   .days, .auction-options { display: contents; }
   .auction-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; min-width: 0; }
   .map { position: static; order: 1; height: auto; min-height: 0; }

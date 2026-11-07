@@ -322,12 +322,19 @@ html[data-design='workspace'] .hidden-count {
 }
 
 /* 매물 탭: 왼쪽 위 거래 유형 탭, 그 바로 아래 붙은 가격대 칸, 오른쪽 따라 내려오는 지도 */
+/* 목록 | 끌어서 폭을 바꾸는 경계(SplitHandle) | 지도. 지도 폭은 기억한 비율(--map-share, mapWidth.ts), 목록 440px, 지도 320px 이상. */
 html[data-design='workspace'] .overview {
-  grid-template-columns: minmax(0, 1fr) clamp(360px, 42%, 760px);
+  grid-template-columns: minmax(0, 1fr) 12px clamp(320px, var(--map-share, 50%), calc(100% - 464px));
   grid-template-rows: min-content 1fr;
-  grid-template-areas: 'controls map' 'bands map';
-  gap: 0 18px;
+  grid-template-areas: 'controls handle map' 'bands handle map';
+  gap: 0 6px;
   align-items: start;
+}
+
+html[data-design='workspace'] .overview .split-handle {
+  grid-area: handle;
+  --split-top: calc(var(--app-header-height, 80px) + 16px);
+  --split-height: calc(100dvh - 260px);
 }
 
 html[data-design='workspace'] .overview .ov-controls {
@@ -892,6 +899,10 @@ html[data-design='workspace'] .toast.err {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto auto;
     grid-template-areas: 'map' 'controls' 'bands';
+  }
+
+  html[data-design='workspace'] .overview .split-handle {
+    display: none;
   }
 
   html[data-design='workspace'] .overview .ov-map {

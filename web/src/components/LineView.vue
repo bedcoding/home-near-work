@@ -6,6 +6,8 @@ import { dealOptions, type Filters } from '../filters';
 import { distanceM, manwon, radiusText } from '../format';
 import ListingCard from './ListingCard.vue';
 import OverviewMap from './OverviewMap.vue';
+import SplitHandle from './SplitHandle.vue';
+import { mapShareStyle } from '../mapWidth';
 
 // 노선 탭: 노선을 고르면 그 노선 역마다 반경 안 매물(매매와 전월세)을 세어 역끼리 견준다. 켜진 지역(회사 근처)은 건드리지 않는다.
 // - 역 칸: 월세, 전세, 매매 건수와 중간값(월세는 월세, 전세는 전세금, 매매는 매매가). 왼쪽 필터의 거래 유형, 가격, 면적, 유형 조건을 따르고 지역 조건은 뺀다.
@@ -159,7 +161,7 @@ const runNote = computed(
         </button>
       </div>
 
-      <div class="body">
+      <div class="body" :style="mapShareStyle">
         <div class="left">
           <div class="table-wrap">
           <table class="grid">
@@ -199,6 +201,7 @@ const runNote = computed(
             <p v-if="!picked.total" class="muted small">이 역 반경 안 매물이 아직 없습니다</p>
           </div>
         </div>
+        <SplitHandle />
         <aside class="map-side">
           <OverviewMap
             :listings="picked?.listings ?? []" :background="allLine" :areas="stationAreas" :selected-id="selectedId" :list-mode="false"
@@ -224,7 +227,7 @@ p { margin: 0; }
 .chip-btn.on { background: var(--ink); border-color: var(--ink); color: #fff; }
 .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
 .controls select { min-height: 32px; margin-left: 4px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); font: inherit; }
-.body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 40%); gap: 16px; align-items: start; }
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 12px clamp(320px, var(--map-share, 50%), calc(100% - 464px)); gap: 16px 6px; align-items: start; }
 .left { display: grid; gap: 10px; min-width: 0; }
 .map-side { position: sticky; top: calc(var(--app-header-height, 76px) + 16px); height: calc(100dvh - var(--app-header-height, 76px) - 32px); min-height: 420px; }
 .table-wrap { overflow-x: auto; }
@@ -243,6 +246,7 @@ p { margin: 0; }
 .list { display: grid; gap: 10px; }
 @media (max-width: 900px) {
   .body { grid-template-columns: minmax(0, 1fr); }
+  .body > .split-handle { display: none; }
   .map-side { position: static; height: 420px; order: -1; }
 }
 @media (max-width: 520px) {
