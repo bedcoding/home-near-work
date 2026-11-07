@@ -12,14 +12,16 @@ import { ZONE_CHECKED, ZONE_LINKS, ZONE_RULES } from '../zones';
 import AuctionResults from './AuctionResults.vue';
 import CountTooltip from './CountTooltip.vue';
 import HouseTrades from './HouseTrades.vue';
+import InfoModal from './InfoModal.vue';
 import ListingCard from './ListingCard.vue';
 import NoticeList from './NoticeList.vue';
 import OverviewMap from './OverviewMap.vue';
-import RuleFold from './RuleFold.vue';
+import RuleList from './RuleList.vue';
 import ZoneBanner from './ZoneBanner.vue';
 
-// 경매 탭(주거, 상가)과 집터 탭(단독, 토지)이 같이 쓴다: 목록 위의 보조정보(단독주택 실거래, 매각 결과, 상가와 토지 칸의 LH 공고,
-// 신탁 공매 공고), 그 아래 매각기일별 목록과 매매 매물(왼쪽), 지도(오른쪽).
+// 경매 탭(주거, 상가)과 집터 탭(단독, 토지)이 같이 쓴다: 목록 위의 공고 칸(상가와 토지 칸의 LH 공고, 신탁 공매 공고),
+// 그 아래 매각기일별 목록과 매매 매물(왼쪽), 지도(오른쪽).
+// 참고 자료(단독주택 실거래, 매각 결과, 집터 탭의 살 때 붙는 조건과 물딱지, 모듈러 주택)는 제목 줄 버튼의 모달 탭에 둔다.
 // 목록 순서는 받은 그대로 쓴다(App의 키보드 이동과 같은 순서: 경매 다음 매매 매물).
 
 const props = defineProps<{
@@ -32,7 +34,7 @@ const props = defineProps<{
   sales?: ListingView[];
   /** 신탁 공매 공고 칸을 보일지(경매 탭만) */
   trust?: boolean;
-  /** 제목 줄 옆 바깥 사이트 링크(집터 탭의 모듈러 주택 회사) */
+  /** 설명 모달의 모듈러 주택 탭에 보일 바깥 사이트 링크(집터 탭) */
   links?: { label: string; url: string; title: string }[];
   /** '지역 반경 안만' 때문에 가린 경매 수 */
   outside: number;
@@ -110,6 +112,18 @@ const kindNames = computed(() => KIND_NAMES.filter((k) => props.kindIds.includes
 /** 집터 탭(단독, 토지)이면 살 때 붙는 조건과 물딱지 정리 칸을 보인다 */
 const isPlot = computed(() => props.kindIds.includes('house') || props.kindIds.includes('land'));
 const dot = (date: string) => date.replace(/-/g, '.');
+/** 제목 줄 모달의 탭: 단독 칸이면 단독주택 실거래, 매각 결과, 집터 탭이면 살 때 붙는 조건과 물딱지, 모듈러 주택 */
+const infoTabs = computed(() => [
+  ...(props.kind === 'house' ? [{ id: 'trades', label: '오래된 단독주택 실거래' }] : []),
+  { id: 'results', label: '매각 결과' },
+  ...(isPlot.value
+    ? [
+        { id: 'rules', label: '살 때 붙는 조건', sub: `토지거래허가, 대출, 양도세. ${dot(APT_CHECKED)} 조사` },
+        { id: 'zone', label: '물딱지와 현금청산', sub: `${ZONE_RULES.length}가지, ${dot(ZONE_CHECKED)} 법령 확인` },
+      ]
+    : []),
+  ...(props.links?.length ? [{ id: 'modular', label: '모듈러 주택' }] : []),
+]);
 /** 지도에 진하게 보일 펼친 목록(이 탭들은 없음). 같은 배열을 써서 다시 그릴 일을 줄인다. */
 const none: ListingView[] = [];
 const sales = computed(() => props.sales ?? []);
@@ -168,24 +182,55 @@ const days = computed(() => {
   <section class="auction">
     <div class="auction-heading">
       <h2 class="auction-title">{{ title }} <CountTooltip class="current-count" :text="`신규 ${news}건\n가격 변동 ${changed}건\n반경 밖 ${outside}건`"><b class="num">{{ all.length }}</b>건</CountTooltip></h2>
-      <nav v-if="links?.length" class="links" aria-label="모듈러 주택 회사">
-        <span class="links-label">모듈러 주택</span>
-        <a v-for="x in links" :key="x.url" :href="x.url" target="_blank" rel="noopener" :title="x.title">{{ x.label }} ↗</a>
-      </nav>
       <div class="auction-actions">
-        <div v-if="zone" class="zone-row">
-          <span v-if="zone.error" class="zone-msg err" role="alert">{{ zone.error }}</span>
-          <span v-else-if="!zone.key" class="zone-msg muted" title="config/local.json에 vworldKey를 넣으면 재개발 구역을 봅니다(README의 집터 탭)">키 없음</span>
-          <span v-else-if="zone.last" class="zone-msg" :class="zone.last.ok ? 'muted' : 'err'">{{ zoneDay(zone.last.at) }} {{ zone.last.text }}</span>
-          <span v-if="zoneInside" class="chip chip-new" title="이 칸 경매와 공매 중 토지이용계획에 정비구역, 재개발, 재정비촉진, 모아타운, 건축허가 제한이 걸린 물건">구역 안 {{ zoneInside }}건</span>
-          <button
-            type="button" class="btn run" :disabled="!zone.key || zone.checking || running"
-            :title="zone.key
-              ? '이 탭 경매와 공매(단독, 토지)의 지번으로 브이월드 토지이용계획을 읽어 정비구역, 재개발, 재정비촉진, 모아타운, 건축허가 제한이 걸렸는지 봅니다. 경매 조회 때도 알아서 봅니다.'
-              : '브이월드 인증키가 있어야 합니다. config/local.json에 vworldKey를 넣어 주세요(README의 집터 탭).'"
-            @click="emit('zoneCheck')"
-          >{{ zone.checking ? '확인 중…' : '재개발 구역 확인' }}</button>
-        </div>
+        <InfoModal
+          :heading="isPlot ? '집터 설명과 자료' : '매각 결과'" :label="isPlot ? '설명과 자료' : '매각 결과'"
+          :storage-key="isPlot ? 'hnw-plot-info-tab' : 'hnw-auction-info-tab'" :tabs="infoTabs" :title="infoTabs.map((t) => t.label).join(', ')"
+        >
+          <template #trades>
+            <HouseTrades
+              bare :summary="houseTrades" :age="houseAge" :fetching="houseFetching" :error="houseError"
+              @age="(a) => emit('houseAge', a)" @fetch="emit('houseFetch')"
+            />
+          </template>
+          <template #results>
+            <AuctionResults bare :results="results" :stats="regionStats" :compare="compare" :kind="kind" :gus="gus" />
+          </template>
+          <template #rules>
+            <RuleList
+              note="단독주택과 땅을 살 때 붙는 토지거래허가, 대출 전입, 양도세 조건입니다. 조사한 날 기준이라 계약이나 입찰 전에는 구청, 은행, 세무서에 확인하세요."
+              :summary="PLOT_SUMMARY" :items="PLOT_RULES"
+            />
+          </template>
+          <template #zone>
+            <div v-if="zone" class="info-tool">
+              <div class="info-tool-row">
+                <button type="button" class="btn btn-sm" :disabled="!zone.key || zone.checking || running" @click="emit('zoneCheck')">
+                  {{ zone.checking ? '확인 중…' : '재개발 구역 확인' }}
+                </button>
+                <span v-if="zoneInside" class="chip chip-new" title="이 칸 경매와 공매 중 토지이용계획에 정비구역, 재개발, 재정비촉진, 모아타운, 건축허가 제한이 걸린 물건">구역 안 {{ zoneInside }}건</span>
+                <span v-if="zone.error" class="info-msg err" role="alert">{{ zone.error }}</span>
+                <span v-else-if="!zone.key" class="info-msg">브이월드 키 없음</span>
+                <span v-else-if="zone.last" class="info-msg" :class="{ err: !zone.last.ok }">{{ zoneDay(zone.last.at) }} {{ zone.last.text }}</span>
+              </div>
+              <p v-if="zone.key">이 탭 경매와 공매(단독, 토지)의 지번으로 브이월드 토지이용계획을 읽어 정비구역, 재개발, 재정비촉진, 모아타운, 건축허가 제한이 걸렸는지 봅니다. 경매 조회 때도 알아서 봅니다.</p>
+              <p v-else>브이월드 인증키가 있어야 합니다. config/local.json에 vworldKey를 넣어 주세요(README의 집터 탭).</p>
+            </div>
+            <RuleList
+              note="재건축, 재개발, 모아타운 구역 안 집이나 땅을 살 때 조합원이 못 되거나 현금으로 보상받는 경우입니다. 카드의 물딱지 표시는 서울플랜+ 정비구역 파일의 사업 단계로 붙입니다."
+              :items="ZONE_RULES" :links="ZONE_LINKS"
+            />
+          </template>
+          <template #modular>
+            <p class="info-text">헐고 새로 지을 때 견줘 볼 모듈러 주택 회사입니다. 공식 페이지에 모델별 가격이 있는 곳만 모았습니다.</p>
+            <ul class="modular">
+              <li v-for="x in links" :key="x.url">
+                <a :href="x.url" target="_blank" rel="noopener">{{ x.label }} ↗</a>
+                <span>{{ x.title }}</span>
+              </li>
+            </ul>
+          </template>
+        </InfoModal>
         <button class="btn run" :disabled="running" title="법원경매와 온비드, 신탁 공매 공고만 조회합니다(매매와 전월세 사이트, 임대 공고는 건너뜀)" @click="emit('run')">
           {{ running ? '조회 중…' : '경매 조회하기' }}
         </button>
@@ -219,21 +264,6 @@ const days = computed(() => {
             지분 매각 {{ plotShareHidden }}건 뺌
           </p>
           <div class="panels">
-            <HouseTrades
-              v-if="kind === 'house'" :summary="houseTrades" :age="houseAge" :fetching="houseFetching" :error="houseError"
-              @age="(a) => emit('houseAge', a)" @fetch="emit('houseFetch')"
-            />
-            <AuctionResults :results="results" :stats="regionStats" :compare="compare" :kind="kind" :gus="gus" />
-            <RuleFold
-              v-if="isPlot" name="살 때 붙는 조건" :count="`토지거래허가, 대출, 양도세, ${dot(APT_CHECKED)} 조사`" :summary="PLOT_SUMMARY" :items="PLOT_RULES"
-              title="단독주택과 땅을 살 때 붙는 토지거래허가, 대출 전입, 양도세 조건. 조사한 날 기준이라 계약이나 입찰 전에는 구청, 은행, 세무서에 확인하세요."
-              storage-key="hnw-plot-rules-open"
-            />
-            <RuleFold
-              v-if="isPlot" name="물딱지와 현금청산" :count="`${ZONE_RULES.length}가지, ${dot(ZONE_CHECKED)} 법령 확인`" :items="ZONE_RULES" :links="ZONE_LINKS"
-              title="재건축, 재개발, 모아타운 구역 안 집이나 땅을 살 때 조합원이 못 되거나 현금으로 보상받는 경우입니다. 카드의 물딱지 표시는 서울플랜+ 정비구역 파일의 사업 단계로 붙입니다."
-              storage-key="hnw-zone-rules-open"
-            />
             <details v-if="(kind === 'shop' || kind === 'land') && (lhNotices.length || lhOutside || lhFailed.length)" class="fold" :open="lh.open.value" @toggle="lh.onToggle">
               <summary :title="kind === 'land' ? 'LH 토지 공고와 선착순 토지(서울)' : 'LH 상가 공고와 선착순 상가, 임대상가(서울)'">
                 <span class="fold-name">{{ kind === 'land' ? 'LH 토지' : 'LH 상가' }}</span>
@@ -322,15 +352,14 @@ const days = computed(() => {
 .auction-sort { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--muted); font-size: 13px; }
 .auction-sort select { width: auto; min-width: 0; max-width: 100%; min-height: 34px; padding: 0 28px 0 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink-2); font-size: 13px; }
 .auction-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-left: auto; }
-.links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; font-size: 13px; }
-.links-label { font-size: 12px; color: var(--muted); }
-.links a { color: var(--ink-2); text-decoration: none; white-space: nowrap; }
-.links a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .auction-actions .run { min-height: 34px; padding: 0 12px; font-size: 13px; }
 .plot-hidden { margin: 0; font-size: 13px; color: var(--ink-2); cursor: help; }
-.zone-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 10px; min-width: 0; }
-.zone-msg { font-size: 12px; }
-.zone-msg.err { color: var(--new); font-weight: 600; }
+/* 모달의 모듈러 주택 탭: 회사 링크와 무엇이 열리는지 */
+.modular { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.modular li { display: grid; gap: 2px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; }
+.modular a { font-size: 15px; font-weight: 700; color: var(--accent); text-decoration: none; }
+.modular a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.modular span { font-size: 14px; color: var(--muted); }
 .outside { font-size: 13px; font-weight: 600; color: var(--muted); }
 
 /* 목록(왼쪽)과 지도(오른쪽, 따라 내려옴). 좁으면 지도가 위로 간다. 매물 탭과 같은 배치. */

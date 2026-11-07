@@ -1,4 +1,4 @@
-/** 집터 탭 제목 줄의 모듈러 주택 회사 링크(공식 페이지에 모델별 가격이 있는 곳만). title은 마우스를 올리면 보이는 설명(무엇이 열리는지). */
+/** 집터 탭 설명 모달의 모듈러 주택 탭에 보이는 회사 링크(공식 페이지에 모델별 가격이 있는 곳만). title은 무엇이 열리는지 적은 설명(모달에 그대로 보임). */
 export const MODULAR_LINKS: { label: string; url: string; title: string }[] = [
   { label: 'LG 스마트코티지', url: 'https://thesmartcottage.com/findModel', title: 'LG전자 스마트코티지 모델별 가격(부가세 포함, 토목공사 별도)' },
   { label: '웨이비룸', url: 'https://www.wavyroom.com/kr/product', title: '웨이비룸 모델별 본체 시작가(기초와 토목, 크레인, 가전 별도)' },

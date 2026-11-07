@@ -798,6 +798,8 @@ function scrollToSelected() {
 
 function onKey(e: KeyboardEvent) {
   const tag = (e.target as HTMLElement | null)?.tagName;
+  // 설명 모달(InfoModal)이 떠 있으면 뒤 목록의 단축키(x 버림, s 관심 등)를 쓰지 않는다. Esc는 모달이 알아서 닫는다.
+  if (document.querySelector('dialog[open]')) return;
   if (browseOpen.value) {
     // 모달이 떠 있으면 Esc로 닫기만 하고, 뒤 목록의 단축키는 쓰지 않는다.
     if (e.key === 'Escape') browseOpen.value = false;

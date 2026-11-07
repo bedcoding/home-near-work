@@ -19,6 +19,8 @@ const props = defineProps<{
   kind: AuctionKind;
   /** 켜 둔 지역 근처 구(비었으면 거르지 않음) */
   gus: string[];
+  /** 설명 모달 탭 안에 넣을 때: 접는 칸 없이 내용만(요약은 맨 위 한 줄, 설명은 그 아래 흐린 글) */
+  bare?: boolean;
 }>();
 
 /** 펼쳤을 때 처음 보이는 매각기일 수 */
@@ -248,15 +250,16 @@ const caseText = (r: AuctionResultView) => `${r.caseNo}${r.itemNo !== '1' ? `(${
 </script>
 
 <template>
-  <details class="results fold" :open="open" @toggle="onToggle">
-    <summary :title="headTitle">
-      <span class="fold-name">매각 결과</span>
+  <component :is="bare ? 'div' : 'details'" class="results" :class="bare ? 'bare' : 'fold'" :open="bare ? undefined : open" @toggle="onToggle">
+    <component :is="bare ? 'p' : 'summary'" class="head" :title="bare ? undefined : headTitle">
+      <span v-if="!bare" class="fold-name">매각 결과</span>
       <template v-if="held.length">
-        <span class="muted num fold-count">낙찰 {{ ratios.length }}/{{ held.length }}건</span>
+        <span class="muted num fold-count">최근 1년 낙찰 {{ ratios.length }}/{{ held.length }}건</span>
       </template>
       <span v-else class="muted fold-count">아직 없음</span>
-    </summary>
-    <div class="body fold-body">
+    </component>
+    <p v-if="bare" class="note">{{ headTitle }}</p>
+    <div class="body" :class="{ 'fold-body': !bare }">
       <div v-if="median != null || regionStats.length" class="result-summary">
         <span v-if="median != null" class="num rate" :title="medianTitle">감정가의 {{ pct(median) }}</span>
         <span v-if="regionStats.length" class="stats">
@@ -309,10 +312,13 @@ const caseText = (r: AuctionResultView) => `${r.caseNo}${r.itemNo !== '1' ? `(${
       </template>
       <p v-else class="empty muted">아직 모은 결과가 없습니다.</p>
     </div>
-  </details>
+  </component>
 </template>
 
 <style scoped>
+.bare { display: grid; gap: 10px; }
+.bare .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0; font-size: 14px; }
+.note { margin: 0 0 6px; font-size: 13px; line-height: 1.6; color: var(--muted); white-space: pre-line; }
 .result-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
 .rate { font-size: 15px; font-weight: 800; color: var(--accent); }
 .stats { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 13px; font-weight: 600; }

@@ -101,3 +101,15 @@ a { color: var(--accent); }
 .fold-body { padding: 14px 16px 16px; }
 .fold-name { font-size: 16px; font-weight: 800; }
 .fold-count { font-size: 14px; font-weight: 600; }
+
+/* 설명 모달(InfoModal) 탭 안에서 같이 쓰는 글, 근거 링크, 도구 칸(버튼과 결과 글, 설명 한 줄) */
+.info-text { margin: 0 0 12px; font-size: 15px; line-height: 1.7; color: var(--ink-2); }
+.info-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 0 0 20px; font-size: 13px; line-height: 1.6; }
+.info-links a { color: var(--accent); text-decoration: none; }
+.info-links a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.info-tool { display: grid; gap: 8px; margin: 0 0 22px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.info-tool-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.info-tool-row .btn { min-height: 34px; font-size: 13px; background: var(--surface); }
+.info-tool p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.info-msg { font-size: 13px; color: var(--muted); }
+.info-msg.err { font-weight: 700; color: var(--new); }

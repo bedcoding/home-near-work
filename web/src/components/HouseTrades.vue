@@ -17,6 +17,8 @@ const props = defineProps<{
   fetching: boolean;
   /** '지금 받기'에서 난 오류 */
   error: string | null;
+  /** 설명 모달 탭 안에 넣을 때: 접는 칸 없이 내용만(요약은 맨 위 한 줄, 설명은 그 아래 흐린 글) */
+  bare?: boolean;
 }>();
 const emit = defineEmits<{
   age: [number];
@@ -78,9 +80,9 @@ const cheapText = (t: HouseTradeView) => `${t.dong} ${m2(t.landM2)} ${manwon(t.p
 </script>
 
 <template>
-  <details class="trades fold" :open="open" @toggle="onToggle">
-    <summary :title="headTitle">
-      <span class="fold-name">오래된 단독주택 실거래</span>
+  <component :is="bare ? 'div' : 'details'" class="trades" :class="bare ? 'bare' : 'fold'" :open="bare ? undefined : open" @toggle="onToggle">
+    <component :is="bare ? 'p' : 'summary'" class="head" :title="bare ? undefined : headTitle">
+      <span v-if="!bare" class="fold-name">오래된 단독주택 실거래</span>
       <template v-if="summary?.total">
         <span class="muted num fold-count">서울 {{ count(summary.total) }}건</span>
         <span class="num rate">중간 {{ manwon(summary.medianPrice!) }}</span>
@@ -92,8 +94,9 @@ const cheapText = (t: HouseTradeView) => `${t.dong} ${m2(t.landM2)} ${manwon(t.p
       </template>
       <span v-else class="muted fold-count">{{ summary?.fetchedAt ? '없음' : '아직 안 받음' }}</span>
       <span v-if="errorText" class="failed" :title="errorText">받기 실패</span>
-    </summary>
-    <div class="body fold-body">
+    </component>
+    <p v-if="bare" class="note">{{ headTitle }}</p>
+    <div class="body" :class="{ 'fold-body': !bare }">
       <div class="bar">
         <div class="ages" role="group" aria-label="지은 지">
           <button
@@ -170,10 +173,13 @@ const cheapText = (t: HouseTradeView) => `${t.dong} ${m2(t.landM2)} ${manwon(t.p
       </template>
       <p v-else class="empty muted">{{ summary?.fetchedAt ? '해당 거래 없음' : '아직 안 받음' }}</p>
     </div>
-  </details>
+  </component>
 </template>
 
 <style scoped>
+.bare { display: grid; gap: 10px; }
+.bare .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0; font-size: 14px; }
+.note { margin: 0 0 6px; font-size: 13px; line-height: 1.6; color: var(--muted); white-space: pre-line; }
 .rate { font-size: 15px; font-weight: 800; color: var(--accent); }
 .stats { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 13px; }
 .stat { font-weight: 700; color: var(--ink-2); }

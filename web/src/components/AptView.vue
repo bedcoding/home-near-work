@@ -10,14 +10,16 @@ import { expectedPrices, sortAuctions } from '../auction';
 import { manwon } from '../format';
 import CountTooltip from './CountTooltip.vue';
 import HouseholdsChip from './HouseholdsChip.vue';
+import InfoModal from './InfoModal.vue';
 import ListingCard from './ListingCard.vue';
 import OverviewMap from './OverviewMap.vue';
-import RuleFold from './RuleFold.vue';
+import RuleList from './RuleList.vue';
 import ZoneBanner from './ZoneBanner.vue';
 import { ZONE_CHECKED, ZONE_LINKS, ZONE_RULES } from '../zones';
 
 // 서울 아파트 탭: 회사와 멀어도 고른 서울 구의 아파트를 경매(법원경매), 공매(온비드), 매매(네이버)로 나눠 본다.
-// 맨 위에 모을 구 고르기와 살 때 붙는 조건(실거주, 대출, 양도세), 그 아래 이 탭만의 필터(종류, 구, 세대수, 가격)와 목록(왼쪽), 지도(오른쪽).
+// 맨 위에 모을 구 고르기, 그 아래 이 탭만의 필터(종류, 구, 세대수, 가격)와 목록(왼쪽), 지도(오른쪽).
+// 살 때 붙는 조건, 물딱지와 현금청산, 세대수 기준(채우기와 재개발 구역 확인 포함)은 제목 줄 '설명' 모달의 탭에 둔다.
 // 왼쪽 필터 칸(회사 근처 집 찾는 조건)은 쓰지 않는다. 필터와 접은 칸은 이 브라우저에 기억한다.
 
 const props = defineProps<{
@@ -194,8 +196,13 @@ const gusText = computed(() => {
   return list.length > 4 ? `${list.slice(0, 4).join(', ')} 외 ${list.length - 4}곳` : list.join(', ');
 });
 
-// ---------- 살 때 붙는 조건, 물딱지와 현금청산 ----------
+// ---------- 설명 모달: 살 때 붙는 조건, 물딱지와 현금청산, 세대수 기준 ----------
 const dot = (date: string) => date.replace(/-/g, '.');
+const INFO_TABS = [
+  { id: 'rules', label: '살 때 붙는 조건', sub: `실거주, 대출, 양도세. ${dot(APT_CHECKED)} 조사` },
+  { id: 'zone', label: '물딱지와 현금청산', sub: `${ZONE_RULES.length}가지, ${dot(ZONE_CHECKED)} 법령 확인` },
+  { id: 'households', label: '세대수 기준' },
+];
 
 /** 세대수 채운 때, 구역 확인한 때('10월 18일 21:05') */
 const fillDay = (iso: string) => new Date(iso).toLocaleString('ko-KR', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -216,6 +223,52 @@ const none: ListingView[] = [];
         <CountTooltip class="current-count" :text="`신규 ${news}건\n가격 변동 ${changed}건\n세대수 모름 ${unknownShown}건`"><b class="num">{{ shown.length }}</b>건</CountTooltip>
       </h2>
       <div class="apt-actions">
+        <InfoModal heading="서울 아파트 설명" storage-key="hnw-apt-info-tab" :tabs="INFO_TABS" title="살 때 붙는 조건, 물딱지와 현금청산, 세대수 기준">
+          <template #rules>
+            <RuleList
+              note="토지거래허가, 대출 전입, 양도세 비과세 조건입니다. 조사한 날 기준이라 법이나 대책이 바뀌면 달라집니다. 계약이나 입찰 전에는 구청, 은행, 세무서에 확인하세요."
+              :summary="APT_SUMMARY" :items="APT_RULES"
+            />
+          </template>
+          <template #zone>
+            <div class="info-tool">
+              <div class="info-tool-row">
+                <button type="button" class="btn btn-sm" :disabled="!zone.key || zone.checking || running" @click="emit('zoneCheck')">
+                  {{ zone.checking ? '확인 중…' : '재개발 구역 확인' }}
+                </button>
+                <span v-if="zoneInside" class="chip chip-new" title="보이는 아파트 중 토지이용계획에 정비구역, 재개발, 재정비촉진, 모아타운이 걸린 것">구역 안 {{ zoneInside }}건</span>
+                <span v-if="zone.error" class="info-msg err" role="alert">{{ zone.error }}</span>
+                <span v-else-if="!zone.key" class="info-msg">브이월드 키 없음</span>
+                <span v-else-if="zone.last" class="info-msg" :class="{ err: !zone.last.ok }">{{ fillDay(zone.last.at) }} {{ zone.last.text }}</span>
+              </div>
+              <p v-if="zone.key">경매와 공매 아파트는 주소의 지번으로, 네이버 매매는 단지 좌표로 필지를 찾아 브이월드 토지이용계획에 정비구역, 재개발, 재정비촉진, 모아타운이 걸렸는지 봅니다. 경매 조회 때도 알아서 봅니다.</p>
+              <p v-else>브이월드 인증키가 있어야 합니다. config/local.json에 vworldKey를 넣어 주세요(README의 집터 탭).</p>
+            </div>
+            <RuleList
+              note="재건축, 재개발, 모아타운 구역 안 집을 살 때 조합원이 못 되거나 현금으로 보상받는 경우입니다. 카드의 물딱지 표시는 서울플랜+ 정비구역 파일의 사업 단계로 붙입니다."
+              :items="ZONE_RULES" :links="ZONE_LINKS"
+            />
+          </template>
+          <template #households>
+            <p class="info-text">{{ HOUSEHOLD_NOTE }}</p>
+            <p class="info-links">
+              <span class="muted">근거</span>
+              <a v-for="s in HOUSEHOLD_SOURCES" :key="s.url" :href="s.url" target="_blank" rel="noopener">{{ s.title }} ↗</a>
+            </p>
+            <div class="info-tool">
+              <div class="info-tool-row">
+                <button type="button" class="btn btn-sm" :disabled="!fill.key || filling" @click="emit('fill')">
+                  {{ filling ? '채우는 중…' : '건축물대장에서 세대수 채우기' }}
+                </button>
+                <span v-if="fillError" class="info-msg err" role="alert">{{ fillError }}</span>
+                <span v-else-if="!fill.key" class="info-msg">공공데이터포털 키 없음</span>
+                <span v-else-if="fill.last" class="info-msg" :class="{ err: !fill.last.ok }">{{ fillDay(fill.last.at) }} {{ fill.last.text }}</span>
+              </div>
+              <p v-if="fill.key">경매와 공매 아파트 중 세대수를 모르는 단지를 건축물대장(공공데이터포털)에서 찾아 채웁니다. 법원경매나 온비드를 조회할 때도 알아서 채웁니다.</p>
+              <p v-else>공공데이터포털 인증키가 있어야 합니다. config/local.json에 dataGoKrKey를 넣어 주세요(README의 서울 아파트 탭).</p>
+            </div>
+          </template>
+        </InfoModal>
         <button class="btn run" :disabled="running" title="법원경매와 온비드, 신탁 공매 공고만 조회합니다(고른 구의 아파트 포함)" @click="emit('run')">
           {{ running ? '조회 중…' : '경매 조회하기' }}
         </button>
@@ -244,17 +297,6 @@ const none: ListingView[] = [];
           </div>
         </div>
       </details>
-
-      <RuleFold
-        name="살 때 붙는 조건" :count="`실거주, 대출, 양도세, ${dot(APT_CHECKED)} 조사`" :summary="APT_SUMMARY" :items="APT_RULES"
-        title="토지거래허가, 대출 전입, 양도세 비과세 조건. 조사한 날 기준이라 법이나 대책이 바뀌면 달라집니다. 계약이나 입찰 전에는 구청, 은행, 세무서에 확인하세요."
-        storage-key="hnw-apt-rules-open" default-open
-      />
-      <RuleFold
-        name="물딱지와 현금청산" :count="`${ZONE_RULES.length}가지, ${dot(ZONE_CHECKED)} 법령 확인`" :items="ZONE_RULES" :links="ZONE_LINKS"
-        title="재건축, 재개발, 모아타운 구역 안 집을 살 때 조합원이 못 되거나 현금으로 보상받는 경우입니다. 카드의 물딱지 표시는 서울플랜+ 정비구역 파일의 사업 단계로 붙입니다."
-        storage-key="hnw-zone-rules-open"
-      />
     </div>
 
     <div class="split">
@@ -296,36 +338,7 @@ const none: ListingView[] = [];
             <input v-model.number="priceInput" type="number" min="0" step="1000" inputmode="numeric" placeholder="만원" />
             <span class="muted">{{ f.priceMax ? `${manwon(f.priceMax)} 이하` : '이하' }}</span>
           </label>
-        </div>
-        <p class="hh-note muted">
-          <span class="hh-label" :title="HOUSEHOLD_NOTE">세대수 기준</span>
-          <a v-for="s in HOUSEHOLD_SOURCES" :key="s.url" :href="s.url" target="_blank" rel="noopener" class="hh-src" :title="s.title">{{ s.short }} ↗</a>
-          <span v-if="hiddenByHouseholds" class="hidden-count">세대수 조건으로 가린 {{ hiddenByHouseholds }}건</span>
-        </p>
-        <div class="fill-row">
-          <button
-            type="button" class="btn btn-sm" :disabled="!fill.key || filling"
-            :title="fill.key
-              ? '경매와 공매 아파트 중 세대수를 모르는 단지를 건축물대장(공공데이터포털)에서 찾아 채웁니다. 법원경매나 온비드를 조회할 때도 알아서 채웁니다.'
-              : '공공데이터포털 인증키가 있어야 합니다. config/local.json에 dataGoKrKey를 넣어 주세요(README의 서울 아파트 탭).'"
-            @click="emit('fill')"
-          >{{ filling ? '채우는 중…' : '건축물대장에서 세대수 채우기' }}</button>
-          <span v-if="fillError" class="fill-msg err" role="alert">{{ fillError }}</span>
-          <span v-else-if="!fill.key" class="fill-msg muted" title="config/local.json에 dataGoKrKey를 넣으면 채웁니다(README의 서울 아파트 탭)">키 없음</span>
-          <span v-else-if="fill.last" class="fill-msg" :class="fill.last.ok ? 'muted' : 'err'">{{ fillDay(fill.last.at) }} {{ fill.last.text }}</span>
-        </div>
-        <div class="fill-row">
-          <button
-            type="button" class="btn btn-sm" :disabled="!zone.key || zone.checking || running"
-            :title="zone.key
-              ? '경매와 공매 아파트는 주소의 지번으로, 네이버 매매는 단지 좌표로 필지를 찾아 브이월드 토지이용계획에 정비구역, 재개발, 재정비촉진, 모아타운이 걸렸는지 봅니다. 경매 조회 때도 알아서 봅니다.'
-              : '브이월드 인증키가 있어야 합니다. config/local.json에 vworldKey를 넣어 주세요(README의 집터 탭).'"
-            @click="emit('zoneCheck')"
-          >{{ zone.checking ? '확인 중…' : '재개발 구역 확인' }}</button>
-          <span v-if="zoneInside" class="chip chip-new" title="보이는 아파트 중 토지이용계획에 정비구역, 재개발, 재정비촉진, 모아타운이 걸린 것">구역 안 {{ zoneInside }}건</span>
-          <span v-if="zone.error" class="fill-msg err" role="alert">{{ zone.error }}</span>
-          <span v-else-if="!zone.key" class="fill-msg muted" title="config/local.json에 vworldKey를 넣으면 봅니다(README의 집터 탭)">키 없음</span>
-          <span v-else-if="zone.last" class="fill-msg" :class="zone.last.ok ? 'muted' : 'err'">{{ fillDay(zone.last.at) }} {{ zone.last.text }}</span>
+          <span v-if="hiddenByHouseholds" class="hidden-count" title="세대수 최소, 최대 조건에 걸려 가린 아파트입니다. 세대수 기준은 '설명'에 있습니다.">세대수로 가린 {{ hiddenByHouseholds }}건</span>
         </div>
 
         <section v-if="auctions.length" class="group">
@@ -394,9 +407,10 @@ const none: ListingView[] = [];
 .panels :deep(.fold > summary) { padding: 10px 14px; }
 .panels :deep(.fold-name) { font-size: 14px; }
 .panels :deep(.fold-count) { font-size: 13px; font-weight: 500; }
-.gu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 6px; }
+/* 구 이름(최대 4글자) 옆에 '근처'와 매물 수가 붙어도 한 줄에 들어가는 폭. 한글은 글자마다 줄이 바뀔 수 있어 줄바꿈을 막는다. */
+.gu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
 .gu {
-  display: inline-flex; align-items: center; gap: 5px; min-height: 36px; padding: 0 10px;
+  display: inline-flex; align-items: center; gap: 5px; min-height: 36px; padding: 0 10px; white-space: nowrap;
   border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); font-size: 13px; font-weight: 600; color: var(--ink-2);
 }
 .gu:hover { border-color: var(--ink-2); }
@@ -427,15 +441,7 @@ const none: ListingView[] = [];
 .pick input { width: 110px; }
 .unknown { min-height: 34px; font-size: 13px; color: var(--ink-2); }
 .unknown input { width: 15px; height: 15px; }
-.hh-note { margin: -4px 0 0; font-size: 12px; line-height: 1.6; }
-.hh-label { font-weight: 700; color: var(--ink-2); cursor: help; }
-.hh-src { margin-left: 8px; color: var(--accent); text-decoration: none; white-space: nowrap; }
-.hh-src:hover { text-decoration: underline; text-underline-offset: 3px; }
-.hidden-count { margin-left: 8px; font-weight: 700; color: var(--ink-2); }
-.fill-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: -6px; }
-.fill-row .btn { min-height: 32px; font-size: 13px; }
-.fill-msg { font-size: 12px; }
-.fill-msg.err { font-weight: 700; color: var(--new); }
+.hidden-count { font-size: 13px; font-weight: 700; color: var(--ink-2); cursor: help; }
 .group { display: grid; gap: 8px; }
 .group-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0; font-size: 17px; font-weight: 800; }
 .group-count { font-size: 14px; font-weight: 600; }
@@ -448,13 +454,10 @@ const none: ListingView[] = [];
   .col { display: contents; }
   .map { position: static; order: 1; height: auto; min-height: 0; }
   .filters { order: 0; }
-  .hh-note { order: 0; margin: 0; }
-  .fill-row { order: 0; margin: 0; }
   .group, .empty { order: 2; }
 }
 @media (max-width: 600px) {
   .apt-actions { margin-left: 0; }
-  .gu-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
   .pick input { width: 96px; }
 }
 </style>
