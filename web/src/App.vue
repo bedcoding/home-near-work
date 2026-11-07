@@ -51,15 +51,14 @@ const headerHeight = ref(80);
 let headerObserver: ResizeObserver | undefined;
 
 // 마지막으로 연 탭을 다음에 열어도 그대로 보여 준다. 주소에 ?tab=이 있으면(조회 알림을 눌러 열었을 때) 그 탭을 먼저 연다.
-// ?tab=news(매매와 전월세 새 소식 알림)는 매물 탭을 열고 맨 위 '새 소식' 줄을 펼친다.
+// ?tab=news(매매와 전월세 새 소식 알림)는 매물 탭을 연다. 새 매물은 가격대마다 붙은 신규 표시와 지도로 본다.
 // 예전 탭 이름 관심(star)과 숨김함(hidden)은 표시한 매물 탭(marked)의 그 종류로 연다.
 const OLD_MARKED: Record<string, Verdict> = { star: 'star', hidden: 'discard' };
 const rawSaved = localStorage.getItem('hnw-tab');
 const urlParam = new URLSearchParams(location.search).get('tab');
 const oldMarked = OLD_MARKED[urlParam ?? ''] ?? OLD_MARKED[rawSaved ?? ''];
 const savedTab = (rawSaved && OLD_MARKED[rawSaved] ? 'marked' : rawSaved) as Tab | null;
-const openNewsRow = urlParam === 'news';
-const urlTab = (openNewsRow ? 'overview' : urlParam && OLD_MARKED[urlParam] ? 'marked' : urlParam) as Tab | null;
+const urlTab = (urlParam === 'news' ? 'overview' : urlParam && OLD_MARKED[urlParam] ? 'marked' : urlParam) as Tab | null;
 const tab = ref<Tab>(urlTab && TABS.includes(urlTab) ? urlTab : savedTab && TABS.includes(savedTab) ? savedTab : 'overview');
 if (urlParam) history.replaceState(null, '', location.pathname);
 const state = ref<AppState | null>(null);
@@ -868,10 +867,6 @@ onMounted(async () => {
     await refreshState();
     if (state.value) await refreshData(state.value.dataRevision);
     if (state.value && state.value.autoCheck.visible !== visibleMode.value) void api.setAutoCheck({ visible: visibleMode.value }).catch(() => {});
-    if (openNewsRow) {
-      await nextTick();
-      overview.value?.openNews();
-    }
   } catch {
     connectionError.value = '대시보드 프로그램에 연결할 수 없습니다. 프로그램이 켜져 있는지 확인해 주세요. 연결되면 이 문구는 사라집니다.';
   }

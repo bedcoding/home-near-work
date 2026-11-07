@@ -78,7 +78,7 @@ interface Saved {
   open: Partial<Record<OverviewDeal, Record<string, Pick>>>;
 }
 
-/** 새 소식 줄의 id(가격대 id와 겹치지 않음) */
+/** 예전에 맨 위에 두던 새 소식 줄의 id. 저장된 펼침을 옮길 때 가격대 id로 바꾸지 않으려고 남겨 둔다. */
 const NEWS_ID = 'news';
 
 // 다음에 열어도 고른 카드, 펼친 가격대, 순서가 그대로 보이게 저장한다. 읽을 때는 이 세 값만 남긴다.
@@ -250,7 +250,7 @@ watch(
   },
   { immediate: true },
 );
-defineExpose({ pickDeal, openNews });
+defineExpose({ pickDeal });
 
 /** 목록 순서: 빈 글자면 가격순, 거리 핀 id면 그 핀까지 걷는 거리가 가까운 순(localStorage 'hnw-overview-sort') */
 const SORT_KEY = 'hnw-overview-sort';
@@ -338,11 +338,11 @@ const rows = computed(() => {
 });
 type Row = ReturnType<typeof rowOf>;
 
-/** 가격대 줄 하나(또는 맨 위 새 소식 줄): 건수, 사이트별 건수, 월세 보증금 범위, 펼침과 고른 사이트, 펼쳐 보이는 매물. hidden은 필터로 가린 수. */
+/** 가격대 줄 하나: 건수, 사이트별 건수, 월세 보증금 범위, 펼침과 고른 사이트, 펼쳐 보이는 매물. hidden은 필터로 가린 수. */
 function rowOf(band: Band, entries: Entry[], open: Record<string, Pick>, hidden: number) {
   const platforms = SOURCES.map((s) => ({ id: s, label: SOURCE_LABEL[s], ...counts(entries.filter((e) => e.listing.source === s)) })).filter((p) => p.total > 0);
   const bd = bandDeal(deal.value, band.id);
-  const deposits = bd && isRent(bd) && band.id !== NEWS_ID ? entries.map((e) => e.option.deposit).filter((v): v is number => v != null) : [];
+  const deposits = bd && isRent(bd) ? entries.map((e) => e.option.deposit).filter((v): v is number => v != null) : [];
   const pick = open[band.id];
   const shown = !pick ? [] : pick === 'all' ? entries : entries.filter((e) => e.listing.source === pick);
   return {
@@ -359,23 +359,13 @@ function rowOf(band: Band, entries: Entry[], open: Record<string, Pick>, hidden:
   };
 }
 
-/** 가격대 줄 위에 고정해 두는 새 소식 줄(끌어서 옮기지 않음) */
-const NEWS_BAND: Band = { id: NEWS_ID, label: '새 소식', range: '가격대와 상관없이 신규나 가격 변동이 있는 매물(신규 먼저, 그다음 최근에 처음 본 순서)' };
-/** 고른 거래 유형에서 신규나 가격 변동이 있는 매물을 모은 줄(매물마다 하나). 없으면 null. */
-const newsRow = computed(() => {
-  const entries = uniq(byDeal.value.get(deal.value) ?? [])
-    .filter((e) => hasNews(e.listing))
-    .sort((a, b) => byMeh(a.listing, b.listing) || byPin(a.listing, b.listing) || Number(b.listing.isNew) - Number(a.listing.isNew) || b.listing.firstSeenAt.localeCompare(a.listing.firstSeenAt));
-  return entries.length ? rowOf(NEWS_BAND, entries, saved.open[deal.value] ?? {}, 0) : null;
-});
-/** 화면에 그리는 줄: 새 소식 줄(있으면) 다음 가격대 줄 */
-const shownRows = computed(() => (newsRow.value ? [newsRow.value, ...rows.value] : rows.value));
+// 맨 위 '새 소식' 줄은 뺐다. 보는 가격대만 펼쳐 보므로, 새 매물은 가격대마다 붙은 신규와 가격 변동 표시로 본다.
 
-/** 펼쳐 보이는 매물(화면 순서, 새 소식 줄과 가격대 줄에 같이 보이는 매물은 한 번만) */
+/** 펼쳐 보이는 매물(화면 순서, 여러 가격대에 같이 보이는 매물은 한 번만) */
 const visible = computed(() => {
   const ids = new Set<string>();
   const out: ListingView[] = [];
-  for (const r of shownRows.value) {
+  for (const r of rows.value) {
     for (const e of r.shown) {
       if (ids.has(e.listing.id)) continue;
       ids.add(e.listing.id);
@@ -392,7 +382,7 @@ const visible = computed(() => {
 const mapStrong = computed(() => {
   const ids = new Set<string>();
   const out: ListingView[] = [];
-  for (const r of shownRows.value) {
+  for (const r of rows.value) {
     if (!r.isOpen) continue;
     for (const e of r.pick && r.pick !== 'all' ? r.shown : r.entries) {
       if (ids.has(e.listing.id)) continue;
@@ -430,12 +420,6 @@ function pickPlatform(r: Row, p: SourceId | 'all') {
   listMoves.value++;
 }
 
-/** 새 소식 줄을 펼쳐 모든 사이트의 새 소식을 보인다(새 매물 알림을 눌러 열었을 때). */
-function openNews() {
-  if (!newsRow.value) return;
-  openMap()[NEWS_BAND.id] = 'all';
-  listMoves.value++;
-}
 
 /**
  * 지도에서 누른 매물(같은 자리 매물들)이 목록에 보이게 그 가격대를 펼치고 사이트를 고른 뒤, focus(없으면 첫 매물)를 고른다.
@@ -554,24 +538,23 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
       <div class="ov-bands">
         <div class="bands" @dragend="onDragEnd">
           <div
-            v-for="r in shownRows" :key="r.band.id" class="band"
+            v-for="r in rows" :key="r.band.id" class="band"
             :class="{
-              news: r.band.id === NEWS_BAND.id,
               open: r.isOpen,
               zero: !r.total,
               dragging: dragging === r.band.id,
               'drop-before': dropAt?.id === r.band.id && !dropAt.after,
               'drop-after': dropAt?.id === r.band.id && dropAt.after,
             }"
-            @dragover="r.band.id !== NEWS_BAND.id && onDragOver($event, r.band.id)" @drop="r.band.id !== NEWS_BAND.id && onDrop($event)"
+            @dragover="onDragOver($event, r.band.id)" @drop="onDrop($event)"
           >
             <div
-              class="band-head" role="button" tabindex="0" :draggable="r.band.id !== NEWS_BAND.id" :aria-expanded="r.isOpen" :title="r.band.range"
+              class="band-head" role="button" tabindex="0" draggable="true" :aria-expanded="r.isOpen" :title="r.band.range"
               @dragstart="onDragStart($event, r.band.id)" @click="toggleBand(r)"
               @keydown.space.stop.prevent="toggleBand(r)"
               @keydown.alt.up.stop.prevent="nudge(r.band.id, -1, $event)" @keydown.alt.down.stop.prevent="nudge(r.band.id, 1, $event)"
             >
-              <span class="grip" :class="{ off: r.band.id === NEWS_BAND.id }" title="끌어서 순서 바꾸기" aria-hidden="true">⠿</span>
+              <span class="grip" title="끌어서 순서 바꾸기" aria-hidden="true">⠿</span>
               <span class="band-label">{{ r.band.label }}</span>
               <span class="band-total num" :class="{ off: !r.total && r.hidden }">{{ !r.total && r.hidden ? `필터로 가림 ${r.hidden}건` : `${r.total}건` }}</span>
               <span v-if="r.total && r.hidden" class="band-sub hid" title="왼쪽 필터(가격, 매물 유형, 면적, 층, 검색어)에 안 맞아 가린 매물">필터로 가림 {{ r.hidden }}</span>
@@ -688,7 +671,6 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 .band.zero .band-head { min-height: 44px; }
 .grip { padding: 6px 4px 6px 8px; font-size: 18px; line-height: 1; color: var(--muted); cursor: grab; }
 /* 새 소식 줄은 옮기지 않아서 손잡이 자리만 남긴다(이름이 가격대 이름과 같은 자리에 오게). */
-.grip.off { visibility: hidden; }
 .band-label { min-width: 116px; font-size: 18px; font-weight: 800; letter-spacing: -0.01em; }
 .band.zero .band-label { font-size: 15px; font-weight: 700; }
 .band-total { min-width: 52px; font-size: 17px; font-weight: 700; }
