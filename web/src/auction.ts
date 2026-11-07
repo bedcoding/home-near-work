@@ -191,11 +191,14 @@ export function claimsChip(l: Pick<ListingView, 'auction'>): ClaimsChip | null {
   const seniorLine = c.senior ? `최선순위 설정: ${/\d{4}\./.test(c.senior.right) ? `${c.senior.right}(대항력은 ${dotDay(c.senior.date)} 기준)` : `${dotDay(c.senior.date)} ${c.senior.right}`}` : '';
   const footer = [`배당요구종기 ${dotDay(c.demandEnd)}, 사건 기록 ${dotDay(c.checkedAt)}${c.survey ? `, 현황조사서 ${dotDay(c.survey.at)}` : ''} 확인`];
 
+  // 설명 맨 위에는 왜 조심해야 하는지 한 줄 요약을 두고, 그 아래에 근거(임차인, 앞 순위 청구, 법 조항)를 붙인다.
   if (c.waiver) {
     return {
       tone: 'muted',
       label: '대항력 포기',
       tip: [
+        '요약: 세입자 쪽이 남은 보증금을 낙찰자에게 청구하지 않겠다는 확약서를 냈습니다. 누가 어느 보증금에 대해 냈는지는 확인하세요.',
+        '',
         `${dotDay(c.waiver)}에 대항력 포기 확약서가 들어왔습니다(보증기관이 임차인 보증금을 넘겨받은 사건에 흔함).`,
         '확약서를 낸 쪽이 낙찰자에게 남은 보증금을 청구하지 않겠다는 뜻이라, 누가 어느 보증금에 대해 냈는지 매각물건명세서와 문건으로 확인하세요.',
         ...(tenantLines.length ? ['', ...tenantLines, seniorLine] : []),
@@ -210,6 +213,8 @@ export function claimsChip(l: Pick<ListingView, 'auction'>): ClaimsChip | null {
       tone: 'warn',
       label: '임금채권',
       tip: [
+        '요약: 세입자보다 먼저 배당받는 임금채권이 있어, 대항력 있는 세입자가 있으면 그 보증금 일부를 낙찰자가 떠안을 수 있습니다(세입자는 현황조사서가 나와야 앎).',
+        '',
         '최우선 임금채권으로 보이는 청구가 있습니다. 최종 3개월 임금과 최종 3년 퇴직금은 확정일자 임차인, 저당권, 세금보다 먼저 배당받습니다(근로기준법 제38조 제2항, 근로자퇴직급여 보장법 제12조 제2항).',
         WAGE_NOTE,
         ...wageLines,
@@ -245,10 +250,19 @@ export function claimsChip(l: Pick<ListingView, 'auction'>): ClaimsChip | null {
       ? ['임차인 쪽 배당요구 문건이 없습니다. 배당요구를 안 한 임차인은 배당을 받지 않아 보증금 전액을 떠안습니다(임차권등기를 한 임차인은 배당요구 없이도 배당받음).']
       : [];
   const danger = c.wage.length > 0 || !!taxText || late.length > 0;
+  /** 세입자보다 먼저 배당받는 쪽(요약 줄에 씀) */
+  const aheadNames = [c.wage.length ? '임금채권' : '', taxText ? '세금' : '', late.length ? '먼저 설정된 근저당 등' : ''].filter(Boolean);
+  const summary = unpaid.length
+    ? '요약: 대항력 있는 세입자가 배당요구를 하지 않아, 보증금 전액을 낙찰자가 떠안을 수 있습니다.'
+    : danger
+      ? `요약: 세입자보다 먼저 배당받는 쪽(${aheadNames.join(', ')})이 있어, 세입자가 못 받은 보증금을 낙찰자가 떠안을 수 있습니다.`
+      : '요약: 대항력 있는 세입자가 있어, 배당에서 못 받은 보증금은 낙찰자가 떠안습니다.';
   return {
     tone: danger ? 'danger' : 'warn',
     label: danger ? '매우 주의' : '대항력 임차인',
     tip: [
+      summary,
+      '',
       '대항력 있는 임차인이 배당에서 보증금을 다 못 받으면 남은 돈은 낙찰자가 떠안습니다(주택임대차보호법 제3조의5, 상가건물 임대차보호법 제8조).',
       ...tenantLines,
       seniorLine,
