@@ -555,11 +555,13 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
               <span class="band-label">{{ r.band.label }}</span>
               <span class="band-total num" :class="{ off: !r.total && r.hidden }">{{ !r.total && r.hidden ? `필터로 가림 ${r.hidden}건` : `${r.total}건` }}</span>
               <span v-if="r.total && r.hidden" class="band-sub hid" title="왼쪽 필터(가격, 매물 유형, 면적, 층, 검색어)에 안 맞아 가린 매물">필터로 가림 {{ r.hidden }}</span>
-              <span v-if="r.news" class="chip chip-new">신규 {{ r.news }}</span>
-              <span v-if="r.changed" class="chip chip-down">가격 변동 {{ r.changed }}</span>
               <span v-if="r.deposit" class="band-sub num">보증금 {{ depositText(r.deposit) }}</span>
-              <span v-if="!r.isOpen && r.platforms.length" class="band-sub">{{ r.platforms.map((p) => `${p.label} ${p.total}`).join(', ') }}</span>
-              <span v-if="r.total" class="chev" aria-hidden="true">{{ r.isOpen ? '접기 ▴' : '펼치기 ▾' }}</span>
+              <!-- 오른쪽 끝: 신규, 가격 변동, 펼치기. 칸마다 같은 자리에 오게 모은다(사이트별 건수는 펼치면 보인다). -->
+              <span class="band-end">
+                <span v-if="r.news" class="chip chip-new">신규 {{ r.news }}</span>
+                <span v-if="r.changed" class="chip chip-down">가격 변동 {{ r.changed }}</span>
+                <span v-if="r.total" class="chev" aria-hidden="true">{{ r.isOpen ? '접기 ▴' : '펼치기 ▾' }}</span>
+              </span>
             </div>
 
             <div v-if="r.isOpen" class="band-body">
@@ -673,7 +675,8 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 .band.zero .band-total { font-size: 14px; font-weight: 600; }
 .band-total.off { min-width: 0; font-size: 14px; font-weight: 600; color: var(--muted); }
 .band-sub { font-size: 13px; color: var(--muted); }
-.chev { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--muted); }
+.band-end { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.chev { font-size: 13px; font-weight: 600; color: var(--muted); }
 .band-body { display: grid; gap: 12px; padding: 0 16px 16px; }
 .platforms { display: flex; flex-wrap: wrap; gap: 8px; padding-left: 26px; }
 .platform {
