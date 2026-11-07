@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { Area } from '../../../shared/types';
+import HelpTip from './HelpTip.vue';
+// 예약 칸 제목 옆 (?)에 모은 설명
+const AUTO_HELP = '기존 자동 확인 시각에 여기서 고른 사이트와 지역도 확장이 조회합니다. 예약으로 돌리려면 설정 탭의 \'자동 확인\' 시각을 켜 주세요. '
+  + '\'지금 실행\'은 따로 쓸 수 있습니다. 크롬과 이 PC의 대시보드 서버가 켜져 있어야 하고, 확장이 전용 탭에서 조회합니다. '
+  + '네이버 예약은 위에서 읽은 필터와 지역을 예약용으로 저장한 뒤 \'예약 설정\'에서 네이버를 켜면 됩니다. '
+  + '예약 설정은 위 순차 조회의 선택과 따로 저장되고, 예약을 꺼도 이미 시작한 조회는 계속됩니다(위 진행 화면에서 중단).';
 const props = defineProps<{ areas: Area[]; scopes: Record<string, { name: string; dong: string }[]>; scopesReady: boolean }>();
 type RunStatus = 'queued' | 'running' | 'paused' | 'complete' | 'partial' | 'failed' | 'expired';
 type AutoSite = 'dabang' | 'zigbang' | 'naver';
@@ -128,54 +134,62 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(poll); for (const 
 </script>
 
 <template>
-  <section class="browse-auto" aria-labelledby="browse-auto-title">
-    <div class="auto-heading">
-      <div class="auto-title"><h3 id="browse-auto-title">브라우저 예약 조회</h3><span v-if="state" class="badge" :class="{ enabled: state.enabled && state.schedule.time }">{{ state.enabled ? state.schedule.time ? '예약 켜짐' : '예약 시각 꺼짐' : '예약 꺼짐' }}</span></div>
-      <div class="auto-actions"><button class="btn btn-sm" :disabled="!canRun" @click="mutate('run')">{{ busy === 'run' ? '실행 요청 중…' : '지금 실행' }}</button><button v-if="!editing" class="btn btn-sm" :disabled="!state || !!busy" @click="openSettings">예약 설정</button></div>
-    </div>
-    <template v-if="state">
-      <p class="schedule"><strong>{{ scheduleText }}</strong><span v-if="state.configuredJobs">, 조회 작업 {{ state.configuredJobs }}개</span></p>
-      <p v-if="savedScopeText" class="scope-text">{{ savedScopeText }}</p><p v-else class="help">예약 설정에서 조회할 사이트와 지역 범위를 먼저 저장해 주세요.</p>
-      <p v-if="!state.schedule.time" class="help">예약으로 실행하려면 설정 탭의 ‘자동 확인’ 시각을 켜 주세요. ‘지금 실행’은 별도로 사용할 수 있습니다.</p>
-      <p class="help">다방 구 전체는 일반 자동조회에 포함됩니다. 아래에서는 네이버 구나 동 전체와 기존 역, 동 범위를 예약합니다. 크롬과 이 PC의 대시보드 서버가 켜져 있으면 확장이 전용 탭에서 조회합니다.</p>
-      <details v-if="state.naverPreset" class="saved-filter"><summary>저장한 네이버 필터 확인</summary><dl><template v-for="row in state.naverPreset.conditions" :key="row.label"><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></template></dl></details>
-      <p v-else class="help">네이버 예약은 위 순차 조회에서 네이버를 고르고 ‘이 조건과 지역을 예약용으로 저장’을 누른 뒤 설정합니다. 확장 아이콘 메뉴에서도 저장할 수 있습니다.</p>
-      <p v-if="state.naverError" class="notice">{{ state.naverError }}</p>
-      <p v-if="state.configError && state.areaIds.length" class="notice" role="alert">{{ state.configError }}</p>
-      <form v-if="editing" class="auto-settings" @submit.prevent="mutate('save')">
-        <label class="check enable-check"><input v-model="draftEnabled" type="checkbox" :disabled="!!busy">기존 자동 확인 시각에 선택한 사이트도 조회</label>
-        <fieldset :disabled="!!busy"><legend>조회할 사이트</legend>
-          <div class="area-options"><label v-for="site in siteOptions" :key="site.id" class="check"><input v-model="draftSites" type="checkbox" :value="site.id"><span>{{ site.name }}<small>{{ site.scope }}</small></span></label></div>
-          <p v-if="!draftSites.length" class="help">사이트를 하나 이상 선택해 주세요.</p>
-          <p v-if="draftSites.includes('zigbang')" class="help">직방 예약 조회는 확장 0.8.9 이상이 필요합니다. 역 1km 범위는 지역 설정 반경과 별개입니다.</p>
-          <p v-if="draftSites.includes('naver')" class="help">네이버는 저장한 필터를 사용합니다. 구나 동 지역을 선택하세요. 역 반경은 알림용이며 네이버 수집 범위를 제한하지 않습니다.</p>
-        </fieldset>
-        <fieldset :disabled="!!busy"><legend>예약에 저장할 지역</legend><p v-if="!availabilityReady" class="help">조회 가능한 범위를 불러오는 중입니다.</p><p v-else-if="!draftSites.length" class="help">사이트를 선택하면 조회 가능한 지역을 표시합니다.</p><p v-else-if="!availableAreas.length" class="help">선택한 모든 사이트에서 조회할 수 있는 지역이 없습니다. 다방은 동별 범위, 직방은 역 바로가기 정보가 필요합니다.</p>
-          <div v-else class="area-options"><label v-for="area in availableAreas" :key="area.id" class="check"><input v-model="draftAreaIds" type="checkbox" :value="area.id"><span>{{ area.name }}<small>{{ areaScopeText(area.id, draftSites) }}</small></span></label></div>
-          <div v-if="availabilityReady && unavailableAreaIds.length" class="area-options"><label v-for="id in unavailableAreaIds" :key="id" class="check"><input v-model="draftAreaIds" type="checkbox" :value="id"><span>사용할 수 없는 지역<small>선택한 사이트의 범위 정보가 없습니다. 선택을 해제하거나 지역 설정을 확인해 주세요.</small></span></label></div>
-        </fieldset>
-        <p class="help">이 범위는 일회 조회의 선택과 별도로 저장합니다. 예약을 꺼도 이미 시작한 조회는 계속되며, 위 진행 화면에서 중단할 수 있습니다.</p>
-        <div class="auto-actions"><button class="btn btn-sm btn-primary" type="submit" :disabled="!canSave">{{ busy === 'save' ? '저장 중…' : '설정 저장' }}</button><button class="btn btn-sm" type="button" :disabled="!!busy" @click="closeSettings">닫기</button></div>
-      </form>
-      <div class="last-run" :class="{ attention }" aria-live="polite">
-        <div class="last-heading"><strong>{{ lastStatusText }}</strong><span v-if="state.last" class="help">{{ state.last.trigger === 'scheduled' ? '예약 실행' : '지금 실행' }}, {{ dateText(state.last.createdAt) }}</span></div>
-        <template v-if="state.last">
-          <p v-if="staleRun" class="notice">진행 신호가 늦어 현재 실행 여부를 확인하지 못했습니다. 크롬의 조회 탭과 활동 로그를 확인해 주세요.</p><p v-else-if="state.last.message" class="help">{{ state.last.message }}</p><p v-else-if="state.last.status === 'queued'" class="help">크롬 확장이 실행 요청을 받기를 기다립니다.</p>
-          <p v-if="state.last.status === 'paused'" class="help">중단된 작업은 위 진행 화면의 ‘이어하기’로 재개할 수 있습니다.</p>
-          <p class="result-counts">저장 완료 {{ state.last.completeJobs }} / {{ state.last.totalJobs }}<span v-if="state.last.partialJobs">, 일부 확인 {{ state.last.partialJobs }}</span><span v-if="state.last.failedJobs">, 실패 {{ state.last.failedJobs }}</span></p><p class="help">마지막 진행 확인 {{ dateText(state.last.updatedAt) }}</p>
-        </template>
+  <!-- 예약은 잘 안 써서 접어 둔다(예약이 켜져 있거나 설정 중이면 펼친다). 설명은 제목 옆 (?)에 모았다. -->
+  <details class="browse-auto" :open="!!state?.enabled || editing">
+    <summary class="auto-heading">
+      <span class="chev" aria-hidden="true">▸</span>
+      <h3 id="browse-auto-title">브라우저 예약 조회</h3>
+      <span v-if="state" class="badge" :class="{ enabled: state.enabled && state.schedule.time }">{{ state.enabled ? state.schedule.time ? '예약 켜짐' : '예약 시각 꺼짐' : '예약 꺼짐' }}</span>
+      <span v-if="state?.last && attention" class="badge attention">최근 실행: {{ lastStatusText }}</span>
+    </summary>
+    <div class="auto-body">
+      <div class="auto-actions">
+        <button class="btn btn-sm" :disabled="!canRun" @click="mutate('run')">{{ busy === 'run' ? '실행 요청 중…' : '지금 실행' }}</button>
+        <button v-if="!editing" class="btn btn-sm" :disabled="!state || !!busy" @click="openSettings">예약 설정</button>
+        <HelpTip :text="AUTO_HELP" />
       </div>
-    </template>
-    <p v-else-if="loading" class="help" role="status">예약 조회 설정을 불러오는 중입니다.</p>
-    <div v-if="loadError || actionError" class="notice" role="alert"><p>{{ actionError || loadError }}</p><button class="btn btn-sm" :disabled="loading || !!busy" @click="refresh">상태 다시 확인</button></div>
-    <p v-if="notice" class="help" role="status">{{ notice }}</p>
-  </section>
+      <template v-if="state">
+        <p class="schedule"><strong>{{ scheduleText }}</strong><span v-if="state.configuredJobs">, 조회 작업 {{ state.configuredJobs }}개</span></p>
+        <p v-if="savedScopeText" class="scope-text">{{ savedScopeText }}</p><p v-else class="help">예약 설정에서 사이트와 지역을 먼저 저장하세요.</p>
+        <slot name="preset" />
+        <details v-if="state.naverPreset" class="saved-filter"><summary>저장한 네이버 필터 보기</summary><dl><template v-for="row in state.naverPreset.conditions" :key="row.label"><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></template></dl></details>
+        <p v-if="state.naverError" class="notice">{{ state.naverError }}</p>
+        <p v-if="state.configError && state.areaIds.length" class="notice" role="alert">{{ state.configError }}</p>
+        <form v-if="editing" class="auto-settings" @submit.prevent="mutate('save')">
+          <label class="check enable-check"><input v-model="draftEnabled" type="checkbox" :disabled="!!busy">기존 자동 확인 시각에 고른 사이트도 조회</label>
+          <fieldset :disabled="!!busy"><legend>조회할 사이트</legend>
+            <div class="area-options"><label v-for="site in siteOptions" :key="site.id" class="check"><input v-model="draftSites" type="checkbox" :value="site.id"><span>{{ site.name }}<small>{{ site.scope }}</small></span></label></div>
+            <p v-if="!draftSites.length" class="help">사이트를 하나 이상 고르세요.</p>
+          </fieldset>
+          <fieldset :disabled="!!busy"><legend>예약에 저장할 지역</legend><p v-if="!availabilityReady" class="help">조회할 수 있는 범위를 불러오는 중입니다.</p><p v-else-if="!draftSites.length" class="help">사이트를 고르면 조회할 수 있는 지역이 보입니다.</p><p v-else-if="!availableAreas.length" class="help">고른 사이트로 조회할 수 있는 지역이 없습니다.</p>
+            <div v-else class="area-options"><label v-for="area in availableAreas" :key="area.id" class="check"><input v-model="draftAreaIds" type="checkbox" :value="area.id"><span>{{ area.name }}<small>{{ areaScopeText(area.id, draftSites) }}</small></span></label></div>
+            <div v-if="availabilityReady && unavailableAreaIds.length" class="area-options"><label v-for="id in unavailableAreaIds" :key="id" class="check"><input v-model="draftAreaIds" type="checkbox" :value="id"><span>사용할 수 없는 지역<small>고른 사이트의 범위 정보가 없어 선택을 풀어야 합니다.</small></span></label></div>
+          </fieldset>
+          <div class="auto-actions"><button class="btn btn-sm btn-primary" type="submit" :disabled="!canSave">{{ busy === 'save' ? '저장 중…' : '설정 저장' }}</button><button class="btn btn-sm" type="button" :disabled="!!busy" @click="closeSettings">닫기</button></div>
+        </form>
+        <div v-if="state.last" class="last-run" :class="{ attention }" aria-live="polite">
+          <div class="last-heading"><strong>{{ lastStatusText }}</strong><span class="help">{{ state.last.trigger === 'scheduled' ? '예약 실행' : '지금 실행' }}, {{ dateText(state.last.createdAt) }}</span></div>
+          <p v-if="staleRun" class="notice">진행 신호가 늦어 실행 여부를 확인하지 못했습니다. 크롬의 조회 탭을 확인해 주세요.</p><p v-else-if="state.last.message" class="help">{{ state.last.message }}</p><p v-else-if="state.last.status === 'queued'" class="help">크롬 확장이 실행 요청을 받기를 기다립니다.</p>
+          <p class="result-counts">저장 완료 {{ state.last.completeJobs }} / {{ state.last.totalJobs }}<span v-if="state.last.partialJobs">, 일부 확인 {{ state.last.partialJobs }}</span><span v-if="state.last.failedJobs">, 실패 {{ state.last.failedJobs }}</span>, 마지막 진행 확인 {{ dateText(state.last.updatedAt) }}</p>
+        </div>
+      </template>
+      <p v-else-if="loading" class="help" role="status">예약 조회 설정을 불러오는 중입니다.</p>
+      <div v-if="loadError || actionError" class="notice" role="alert"><p>{{ actionError || loadError }}</p><button class="btn btn-sm" :disabled="loading || !!busy" @click="refresh">상태 다시 확인</button></div>
+      <p v-if="notice" class="help" role="status">{{ notice }}</p>
+    </div>
+  </details>
 </template>
 
 <style scoped>
-.browse-auto { display:grid; gap:10px; border:1px solid var(--line); border-radius:10px; padding:18px 20px; background:var(--surface); }
+.browse-auto { border:1px solid var(--line); border-radius:10px; padding:14px 20px; background:var(--surface); }
+.auto-body { display:grid; gap:10px; margin-top:12px; }
 .auto-heading,.auto-title,.auto-actions,.last-heading { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; }
-.auto-heading { justify-content:space-between; }
+/* 접고 펴는 제목 줄: 기본 삼각형 대신 ▸를 돌린다 */
+.auto-heading { list-style:none; cursor:pointer; user-select:none; }
+.auto-heading::-webkit-details-marker { display:none; }
+.chev { color:var(--muted); font-size:13px; transition:transform .12s; }
+details[open] > .auto-heading .chev { transform:rotate(90deg); }
+.badge.attention { background:var(--up-soft, #fdecec); color:var(--up); }
 h3 { margin:0; font-size:17px; }
 p { margin:0; line-height:1.6; }
 .badge { padding:3px 8px; border-radius:5px; background:var(--surface-2); color:var(--muted); font-size:12px; font-weight:600; }

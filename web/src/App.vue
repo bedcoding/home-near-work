@@ -8,7 +8,7 @@ import {
 } from '../../shared/types';
 import { api } from './api';
 import { createRevisionRefresh } from './refresh';
-import { isPick, marksVersion, onMarks, picksOnly } from './marks';
+import { isPick, marksVersion, NOTE_MAX, onMarks, picksOnly } from './marks';
 import { reloadZones, zonesNeedReload } from './redevZones';
 import { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, loadFilters, passes, saveFilters, type Filters } from './filters';
 import { dateTime, radiusText } from './format';
@@ -701,7 +701,32 @@ async function setContacted(l: ListingView, on: boolean) {
     error.value = `문의함 표시를 저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
-onMarks({ seen: (items) => void saveSeen(items), contact: (l, on) => void setContacted(l, on) });
+/** 매물 메모를 남기거나 고친다(빈 글이면 지움). 남기면 '봤음'도 된다. 저장하지 못하면 되돌리고 알린다. */
+async function saveNote(l: ListingView, text: string) {
+  const note = text.trim().slice(0, NOTE_MAX) || null;
+  if (note === (l.note ?? null)) return;
+  const before = { note: l.note ?? null, noteAt: l.noteAt ?? null, seenAt: l.seenAt ?? null, isNew: l.isNew, priceChange: l.priceChange };
+  const at = new Date().toISOString();
+  l.note = note;
+  l.noteAt = note ? at : null;
+  if (note) {
+    l.seenAt = at;
+    l.isNew = false;
+    l.priceChange = null;
+  }
+  triggerRef(listings);
+  marksVersion.value += 1;
+  try {
+    const r = await api.note(l.id, note ?? '');
+    refreshData.advance(r.before, r.after);
+  } catch (e) {
+    Object.assign(l, before);
+    triggerRef(listings);
+    marksVersion.value += 1;
+    error.value = `메모를 저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+onMarks({ seen: (items) => void saveSeen(items), contact: (l, on) => void setContacted(l, on), note: (l, text) => void saveNote(l, text) });
 
 /** 지도에서 역을 누르면 그 역 지역을 켜고 끈다(없는 역이면 1km로 만들어 켬). */
 async function toggleStation(s: CatalogStation) {
@@ -1142,9 +1167,9 @@ const filterUse = computed<string[] | 'all'>(() => {
 
   <div class="layout" :class="{ 'no-side': filtersHidden || tab === 'areas', idle: filterUse === 'all', 'area-layout management-shell': tab === 'areas', 'first-loading': !listingsLoaded }" :aria-busy="!listingsLoaded">
     <FilterPanel
-      v-show="!filtersHidden && tab !== 'areas'" v-model="filters" :hidden-count="filterUse === 'all' ? 0 : hiddenCount" :all-areas="state?.areas ?? []" :unused="filterUse"
+      v-show="!filtersHidden && tab !== 'areas'" v-model="filters" :hidden-count="filterUse === 'all' ? 0 : hiddenCount" :unused="filterUse"
       :deal-choices="dealChoices" :single-deal="tab === 'overview'"
-      class="side" @manage-areas="manageAreas" @hide="filtersHidden = true"
+      class="side" @hide="filtersHidden = true"
     />
 
     <main class="main">

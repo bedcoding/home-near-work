@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { hasRegions, regionRelation, selectedArea } from '../../../shared/regions';
 import { DEAL_LABEL, SOURCE_LABEL, type Area, type ListingView, type PriceOption, type TradeRef, type Verdict } from '../../../shared/types';
 import { ago, dateTime, distanceText, manwon, money, nearest, perPyeong, priceAmount, priceText, pyeong, pyeongExact } from '../format';
@@ -17,7 +17,7 @@ import { convertedRent, loanMonthly } from '../rentRate';
 import { ledgerChips } from '../ledger';
 import CountTooltip from './CountTooltip.vue';
 import { dabangAddressBusy, dabangAddressErrors, dabangAddresses, loadDabangAddress } from '../dabangAddress';
-import { looksSeen, markSeen, marksVersion, setContacted } from '../marks';
+import { looksSeen, markSeen, marksVersion, NOTE_MAX, saveNote, setContacted } from '../marks';
 
 const props = defineProps<{
   listing: ListingView;
@@ -32,7 +32,24 @@ const emit = defineEmits<{ open: []; verdict: [Verdict | null]; source: []; raw:
 
 const l = computed(() => props.listing);
 /** 내가 남긴 표시('봤음', '📞 문의함'). 매물은 깊이 감시하지 않아서 marksVersion으로 표시가 바뀐 것을 알고 다시 그린다. */
-const marks = computed(() => (marksVersion.value, { seen: looksSeen(props.listing), contactedAt: props.listing.contactedAt ?? null }));
+const marks = computed(() => (marksVersion.value, {
+  seen: looksSeen(props.listing), contactedAt: props.listing.contactedAt ?? null, note: props.listing.note ?? null,
+}));
+
+/** 메모 고치는 중인지와 고치는 글 */
+const editingNote = ref(false);
+const noteDraft = ref('');
+const noteInput = ref<HTMLInputElement | null>(null);
+async function startNote() {
+  noteDraft.value = props.listing.note ?? '';
+  editingNote.value = true;
+  await nextTick();
+  noteInput.value?.focus();
+}
+function commitNote() {
+  saveNote(props.listing, noteDraft.value);
+  editingNote.value = false;
+}
 // 다방은 목록에 주소가 없다. '주소 보기'를 누르면 그 방 하나의 지번 주소만 받아 온다.
 const addressText = computed(() => l.value.address ?? dabangAddresses.get(l.value.id) ?? '주소 모름');
 const canLoadAddress = computed(() => l.value.source === 'dabang' && !l.value.address && !dabangAddresses.has(l.value.id));
@@ -288,6 +305,16 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       </div>
 
       <div class="meta muted">
+        <!-- 내 메모: 주소 줄 위에 한 줄로 보이고 누르면 고친다. 비우고 저장하면 지운다. -->
+        <form v-if="editingNote" class="memo-edit" @click.stop @submit.prevent="commitNote">
+          <input
+            ref="noteInput" v-model="noteDraft" :maxlength="NOTE_MAX" aria-label="매물 메모" placeholder="예: 집주인 직접, 토요일 방문 예약"
+            title="Enter로 저장, Esc로 취소, 비우고 저장하면 메모를 지웁니다" @keydown.esc.prevent="editingNote = false"
+          />
+          <button class="btn btn-sm btn-primary" type="submit">저장</button>
+          <button class="btn btn-sm" type="button" @click="editingNote = false">취소</button>
+        </form>
+        <p v-else-if="marks.note" class="memo" :title="`${dateTime(l.noteAt ?? null)}에 남긴 메모, 누르면 고칩니다`" @click.stop="startNote">📝 {{ marks.note }}</p>
         <span class="addr">{{ addressText }}</span>
         <button
           v-if="canLoadAddress" type="button" class="btn btn-ghost btn-sm addr-load" :disabled="dabangAddressBusy.has(l.id)"
@@ -317,6 +344,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       >
         {{ marks.contactedAt ? '문의함 해제' : '📞 문의함' }}
       </button>
+      <button class="btn btn-sm" :class="{ memoed: !!marks.note }" title="이 매물에 짧은 메모를 남깁니다" @click="startNote">📝 메모</button>
       <button class="btn btn-sm" :class="{ on: l.verdict === 'star' }" title="관심 (S)" @click="emit('verdict', l.verdict === 'star' ? null : 'star')">
         {{ l.verdict === 'star' ? '관심 해제' : '★ 관심' }}
       </button>
@@ -419,6 +447,17 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 .actions { display: flex; justify-content: flex-end; gap: 6px; }
 .actions .on { background: var(--star-soft); border-color: var(--star); }
 .actions .contact.on { background: var(--contact-soft); border-color: var(--contact); }
+.actions .memoed { border-color: var(--star); }
+/* 내 메모: 주소 줄 칸 맨 위에 한 줄(칸 너비를 다 쓴다) */
+.memo {
+  flex: 1 0 100%; margin: 0 0 2px; padding: 3px 10px; border-left: 3px solid var(--star); border-radius: 4px;
+  background: var(--star-soft); color: var(--ink-2); font-size: 13px; cursor: text; overflow-wrap: anywhere;
+}
+.memo-edit { flex: 1 0 100%; display: flex; gap: 6px; align-items: center; margin-bottom: 2px; }
+.memo-edit input {
+  flex: 1; min-width: 0; min-height: 34px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 14px;
+}
 /* 목록 칸 너비에 맞춘다(매물 탭과 경매 탭은 지도 옆이라 좁다). */
 @container (max-width: 1060px) {
   .card {

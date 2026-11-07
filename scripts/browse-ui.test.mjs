@@ -57,6 +57,7 @@ function harness(t, extension = { version: '0.8.4', browse: true, sites: ['naver
       if (id === '../format') return { radiusText: () => '예시 반경' };
       if (id === './BrowseAuto.vue') return { default: {} };
       if (id === './NaverManual.vue') return { default: {} };
+      if (id === './HelpTip.vue') return { default: {} };
       throw new Error(`Unexpected import ${id}`);
     },
   }, { filename: 'BrowseQueue.synthetic-test.cjs' });

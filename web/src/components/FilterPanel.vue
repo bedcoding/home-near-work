@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { DEAL_LABEL, type Area, type DealType } from '../../../shared/types';
+import { DEAL_LABEL, type DealType } from '../../../shared/types';
 import { DEFAULT_FILTERS, FILTER_DEALS, type Filters } from '../filters';
 import { DEALS_OF, OVERVIEW_DEALS, OVERVIEW_LABEL } from '../bands';
 import { M2_PER_PYEONG } from '../format';
 import { KIND_LABEL, KINDS } from '../kinds';
-import { hasRegions, primaryAreas } from '../../../shared/regions';
 import { picksOnly } from '../marks';
 
 const filters = defineModel<Filters>({ required: true });
@@ -13,14 +12,8 @@ const filters = defineModel<Filters>({ required: true });
  * unused: 지금 탭에서 안 쓰는 칸(흐리게 보인다). 'all'이면 모든 칸.
  * dealChoices: 거래 유형 칸에 보일 것(없으면 전부). singleDeal: 거래 유형을 하나만 고른다(매물 탭, 가운데 거래 유형 탭과 같은 값).
  */
-const props = defineProps<{ hiddenCount: number; allAreas: Area[]; unused?: string[] | 'all'; dealChoices?: DealType[]; singleDeal?: boolean }>();
-const emit = defineEmits<{ manageAreas: []; hide: [] }>();
-
-/** 매물 탭 지역 칸에서 한 지역만 보고 있으면 그 이름. */
-const focusText = computed(() => {
-  const names = primaryAreas(props.allAreas).filter((a) => filters.value.areaIds.includes(a.id)).map((a) => a.name);
-  return names.length ? `${names.join(', ')}만 보는 중` : null;
-});
+const props = defineProps<{ hiddenCount: number; unused?: string[] | 'all'; dealChoices?: DealType[]; singleDeal?: boolean }>();
+const emit = defineEmits<{ hide: [] }>();
 
 function toggle<T>(list: T[], value: T) {
   const i = list.indexOf(value);
@@ -49,15 +42,17 @@ const overviewChoices = computed(() => {
 const sameDeals = (a: DealType[], b: DealType[]) => a.length === b.length && a.every((d) => b.includes(d));
 
 function reset() {
-  filters.value = { ...DEFAULT_FILTERS, deals: [], areaIds: [], kinds: [] };
+  // 지역 칸을 뺐으므로 '고른 구 안만 보기'와 최대 거리는 꺼 둔다(loadFilters와 같음).
+  filters.value = { ...DEFAULT_FILTERS, deals: [], areaIds: [], kinds: [], insideAreas: false, distanceMax: null };
   picksOnly.value = false;
 }
 
 // ---------- 칸 접기와 순서 ----------
 // 제목을 누르거나 Space로 접고 편다. ⠿를 끌어 놓거나 제목에서 Alt+↑↓로 순서를 바꾼다. 순서와 접힘은 브라우저에 저장한다.
-type SectionId = 'area' | 'deal' | 'kind' | 'price' | 'home' | 'text';
-const SECTIONS: SectionId[] = ['area', 'deal', 'kind', 'price', 'home', 'text'];
-const TITLES: Record<SectionId, string> = { area: '지역', deal: '거래 유형', kind: '매물 유형', price: '가격', home: '집', text: '검색어' };
+// 지역 칸(고른 구 안만 보기, 지역 관리)은 안 써서 뺐다. 지역 관리는 머리말의 지역 메뉴에서 한다.
+type SectionId = 'deal' | 'kind' | 'price' | 'home' | 'text';
+const SECTIONS: SectionId[] = ['deal', 'kind', 'price', 'home', 'text'];
+const TITLES: Record<SectionId, string> = { deal: '거래 유형', kind: '매물 유형', price: '가격', home: '집', text: '검색어' };
 const LAYOUT_KEY = 'hnw-filter-layout-v1';
 
 function loadLayout(): { order: SectionId[]; collapsed: SectionId[] } {
@@ -95,9 +90,7 @@ const range = (label: string, min: number | null, max: number | null) => (min ==
 function summary(id: SectionId): string {
   const f = filters.value;
   const parts =
-    id === 'area'
-      ? [focusText.value, f.insideAreas ? null : hasRegions(props.allAreas) ? '주변 함께 저장 포함' : '반경 밖 포함', f.distanceMax != null && !hasRegions(props.allAreas) ? `역까지 ${f.distanceMax}m` : null]
-      : id === 'deal'
+    id === 'deal'
         ? [
             (props.singleDeal
               ? overviewChoices.value.filter((c) => sameDeals(f.deals, c.deals)).map((c) => c.label)
@@ -192,18 +185,7 @@ async function nudge(id: SectionId, delta: number, e: KeyboardEvent) {
         </div>
 
         <div v-if="!isCollapsed(id)" class="fsec-body">
-          <template v-if="id === 'area'">
-            <p v-if="focusText" class="focus">
-              {{ focusText }}
-              <button class="btn btn-ghost btn-sm" @click="filters.areaIds = []">모두 보기</button>
-            </p>
-            <label v-if="primaryAreas(allAreas).length" class="check" title="목록만 거릅니다. 알림 역·반경은 지역 관리에서 따로 설정합니다"><input v-model="filters.insideAreas" type="checkbox" @change="hasRegions(allAreas) && !filters.insideAreas && (filters.areaIds = [])" /> {{ hasRegions(allAreas) ? '선택한 수집 구·동 안만 보기' : '탐색 반경 안만 보기' }}</label>
-            <p v-else class="muted small">저장된 전체 지역을 봅니다. 알림 역·반경은 목록을 제한하지 않습니다.</p>
-            <label v-if="!hasRegions(allAreas) && primaryAreas(allAreas).length" class="field">최대 거리(m)<input type="number" min="100" step="100" :value="filters.distanceMax ?? ''" @input="filters.distanceMax = num($event)" /></label>
-            <button class="btn btn-sm manage" @click="emit('manageAreas')">지역 추가·관리</button>
-          </template>
-
-          <div v-else-if="id === 'deal'" class="chips">
+          <div v-if="id === 'deal'" class="chips">
             <button class="chip-btn" :class="{ on: !filters.deals.length }" :aria-pressed="!filters.deals.length" @click="filters.deals = []">전체</button>
             <template v-if="props.singleDeal">
               <button

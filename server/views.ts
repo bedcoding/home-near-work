@@ -414,6 +414,7 @@ export function buildListingViews(): ListingView[] {
   const verdicts = new Map(store.allVerdicts().map((v) => [v.listing_id, v]));
   const seen = store.seenTimes();
   const contacted = store.contactedTimes();
+  const notes = store.notesMap();
   const events = store.unackedEvents();
   const newIds = new Set(events.filter((e) => e.type === 'new').map((e) => e.listing_id));
   const changes = new Map<string, ListingView['priceChange']>();
@@ -455,6 +456,8 @@ export function buildListingViews(): ListingView[] {
       priceChange: changes.get(row.id) ?? null,
       seenAt: seen.get(row.id) ?? null,
       contactedAt: contacted.get(row.id) ?? null,
+      note: notes.get(row.id)?.note ?? null,
+      noteAt: notes.get(row.id)?.updatedAt ?? null,
       relistedOf: reason?.startsWith('relisted:') ? reason.slice('relisted:'.length) : null,
       similarToDiscarded: !verdict && discarded.some((d) => d.row.id !== row.id && looksSimilar(data, d.data)),
       seenRef: (() => {

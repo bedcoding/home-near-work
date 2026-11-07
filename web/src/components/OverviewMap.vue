@@ -9,7 +9,7 @@ import { KIND_LABEL, kindOf } from '../kinds';
 import { ledgerChips } from '../ledger';
 import { isRoomStay, roomRange, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
-import { looksSeen, markSeen, setContacted } from '../marks';
+import { looksSeen, markSeen, NOTE_MAX, saveNote, setContacted } from '../marks';
 import { distanceText, manwon, perPyeong, priceText, pyeong } from '../format';
 import { addWalkPin, ensureWalk, markDistances, moveWalkPin, pinCount, pinMax, removeWalkPin, renameWalkPin, setPinKind, walkPins, walkState, walkTimes } from '../walk';
 import { WALK_NAME_MAX, type PinKind } from '../../../shared/walk';
@@ -170,7 +170,8 @@ function tooltip(items: ListingView[]) {
   const lines = items.slice(0, 6).map((l) => {
     const mark = l.verdict === 'meh' ? ', 별로' : l.contactedAt ? ', 문의함' : looksSeen(l) ? ', 봤음' : '';
     const site = `${SOURCE_LABEL[l.source]}${mark}`;
-    return `${esc(pricesText(l))}${l.title ? `, ${esc(l.title.slice(0, 24))}` : ''} <span class="tip-site">(${esc(site)})</span>`;
+    const memo = l.note ? ` <span class="tip-note">📝 ${esc(l.note.length > 24 ? `${l.note.slice(0, 24)}…` : l.note)}</span>` : '';
+    return `${esc(pricesText(l))}${l.title ? `, ${esc(l.title.slice(0, 24))}` : ''} <span class="tip-site">(${esc(site)})</span>${memo}`;
   });
   if (items.length > 6) lines.push(`외 ${items.length - 6}건`);
   return (items.length > 1 ? `<strong>이 자리 ${items.length}건</strong><br>` : '') + lines.join('<br>');
@@ -262,6 +263,7 @@ function popup(g: Group) {
     // 꽂은 핀마다 걸어서 몇 분
     for (const w of walkTimes(l.id)) text.appendChild(line('mp-walk', `${w.pin.name}까지 걸어서 ${w.minutes}분(${distanceText(w.meters)})`));
     if (l.title) text.appendChild(line('mp-sub', l.title.slice(0, 40)));
+    if (l.note) text.appendChild(line('mp-memo', `📝 ${l.note}`));
     const actions = document.createElement('div');
     actions.className = 'mp-actions';
     if (props.listMode) {
@@ -291,6 +293,40 @@ function popup(g: Group) {
       paintCall();
     });
     actions.appendChild(call);
+    // 메모: 누르면 창 안에 입력 칸이 열린다. 저장하면 창을 다시 그려 메모 줄을 바꾼다.
+    const memo = document.createElement('button');
+    memo.textContent = '📝 메모';
+    memo.title = '이 매물에 짧은 메모를 남깁니다(비우고 저장하면 지웁니다)';
+    memo.addEventListener('click', () => {
+      const form = document.createElement('form');
+      form.className = 'mp-memo-edit';
+      const input = document.createElement('input');
+      input.value = l.note ?? '';
+      input.maxLength = NOTE_MAX;
+      input.placeholder = '예: 집주인 직접, 토요일 방문 예약';
+      input.setAttribute('aria-label', '매물 메모');
+      const save = document.createElement('button');
+      save.type = 'submit';
+      save.textContent = '저장';
+      form.append(input, save);
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        saveNote(l, input.value);
+        popup(g);
+      });
+      // 지도 키(화살표로 옮기기, +와 -로 확대)가 글자 입력을 가로채지 않게 막는다. Esc는 입력만 닫는다.
+      input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          form.remove();
+        }
+      });
+      row.querySelector('.mp-memo-edit')?.remove();
+      row.appendChild(form);
+      input.focus();
+    });
+    actions.appendChild(memo);
     if (l.lat != null && l.lng != null) {
       const naver = document.createElement('a');
       naver.textContent = '네이버 지도 ↗';
@@ -1077,6 +1113,12 @@ onBeforeUnmount(() => {
   min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font: 600 13px var(--font); cursor: pointer;
 }
 :deep(.mp-more) { color: var(--muted); }
+/* 메모: 창의 메모 줄과 입력 칸, 올리면 보이는 글의 메모 */
+:deep(.mp-memo) { padding: 2px 8px; border-left: 3px solid var(--star); border-radius: 4px; background: var(--star-soft); color: var(--ink-2); font-size: 12.5px; overflow-wrap: anywhere; }
+:deep(.mp-memo-edit) { display: flex; gap: 6px; }
+:deep(.mp-memo-edit input) { flex: 1; min-width: 0; min-height: 32px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; font: 13px var(--font); }
+:deep(.mp-memo-edit button) { min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font: 600 13px var(--font); cursor: pointer; }
+:deep(.tip-note) { color: var(--star); }
 /* 문의함: 창의 딱지와 눌린 단추, 지도 표시 왼쪽 위 📞(가격을 쓴 표시는 가격 앞에 붙인다) */
 :deep(.mp-tag.contact) { background: var(--contact-soft); color: var(--contact); }
 :deep(.mp-actions button.on) { background: var(--contact-soft); border-color: var(--contact); }

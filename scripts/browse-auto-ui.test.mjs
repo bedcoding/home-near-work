@@ -54,6 +54,7 @@ function harness(t, data = initial()) {
     },
     require: (id) => {
       if (id === 'vue') return { ...vue, onMounted: (fn) => mounted.push(fn), onBeforeUnmount: (fn) => unmounted.push(fn) };
+      if (id === './HelpTip.vue') return { default: {} };
       throw new Error(`Unexpected import ${id}`);
     },
   }, { filename: 'BrowseAuto.synthetic-test.cjs' });

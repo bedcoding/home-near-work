@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Area } from '../../../shared/types';
 import { radiusText } from '../format';
 import BrowseAuto from './BrowseAuto.vue';
+import HelpTip from './HelpTip.vue';
 import NaverManual from './NaverManual.vue';
 
 const props = defineProps<{
@@ -24,6 +25,16 @@ interface Receipt {
   uniqueListings?: number; excludedOutside?: number; excludedUnknown?: number; retainedOutside?: number; retainedUnknown?: number; coverage?: Coverage;
   zigbangCoverage?: ZigbangCoverage; naverCoverage?: NaverCoverage;
 }
+/** 서버가 받은 응답과 저장 처리 수(페이지 확인 줄에 마우스를 올리면 보인다) */
+const receiptText = (r: Receipt) =>
+  `서버 응답 ${r.responses}건, 저장 처리 ${r.listings}건${r.uniqueListings !== undefined ? `, 중복 없는 매물 ${r.uniqueListings}건` : ''}`;
+
+// 화면에 늘어놓던 설명은 제목 옆 (?)에 모았다.
+const PANEL_HELP = '크롬 확장이 새 전용 창에서 고른 지역과 사이트를 차례로 확인합니다. PC와 대시보드 서버를 켜 두세요. '
+  + '진행 상황은 아래 진행 표시와 수집 창에서 보고, 확장 아이콘 메뉴에서도 같은 조회를 시작하고 볼 수 있습니다.';
+const NAVER_HELP = '네이버 지도에서 가격과 거래 조건 필터를 적용한 매물 탭을 고르세요. 시작할 때 그 탭 주소에서 필터를 다시 읽어 같을 때만 '
+  + '전용 창에 복사하고, 고른 구나 동의 목록을 마지막 페이지까지 확인합니다. 수집 창의 조건이 달라지면 멈춥니다. '
+  + '이어하기와 다시 조회는 시작할 때의 조건을 그대로 씁니다. 필터를 바꾸려면 새로 시작하세요. 역 지역은 네이버로 조회하지 않습니다.';
 type JobStatus = 'pending' | 'running' | 'complete' | 'partial' | 'failed' | 'visited' | 'needs-input';
 interface BrowseJob {
   id: string;
@@ -335,7 +346,7 @@ const skipNote = computed(() => {
   const notes = [`이번 조회에서 빠지는 지역: ${skippedAreas.value.map((a) => a.name).join(', ')}.`];
   if (skippedAreas.value.some((a) => a.region)) notes.push(naverAvailable.value
     ? '구나 동 전체는 네이버를 고르면 함께 조회합니다.'
-    : '구나 동 전체는 네이버로 조회합니다. 확장에서 네이버를 켜 두고 확장이 0.8.22 이상이면 여기서 고를 수 있습니다.', "다방은 대시보드의 '조회하기'가 구 전체를 모읍니다.");
+    : '구나 동 전체는 네이버로 조회합니다. 확장에서 네이버를 켜 두고 확장이 0.8.22 이상이면 여기서 고를 수 있습니다.');
   if (skippedAreas.value.some((a) => !a.region)) notes.push('역 지역은 네이버가 아닌 사이트를 하나 이상 골라야 조회합니다.');
   return notes.join(' ');
 });
@@ -344,7 +355,7 @@ watch(() => [activeState.value?.id, activeState.value?.status, pending.value] as
   if (command || status === 'running' || status === 'paused') runExpanded.value = true;
   else if (id !== previousId) runExpanded.value = false;
 });
-const runScopeLabel = computed(() => [...new Set(activeState.value?.jobs.map((job) => `${job.areaName} · ${job.siteName}`) ?? [])].join(', '));
+const runScopeLabel = computed(() => [...new Set(activeState.value?.jobs.map((job) => `${job.areaName}(${job.siteName})`) ?? [])].join(', '));
 const runDate = computed(() => activeState.value ? new Date(activeState.value.createdAt || activeState.value.updatedAt).toLocaleString('ko-KR', {
   month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
 }) : '');
@@ -598,8 +609,7 @@ onBeforeUnmount(() => {
   <section id="browse-queue" class="browse-queue management-shell" aria-labelledby="browse-title">
     <div class="heading">
       <div>
-        <h2 id="browse-title" tabindex="-1">확장프로그램으로 순차 조회</h2>
-        <p class="muted">크롬 확장이 새 전용 창에서 고른 지역과 사이트를 차례로 확인합니다.</p>
+        <h2 id="browse-title" tabindex="-1">확장프로그램으로 순차 조회<HelpTip :text="PANEL_HELP" /></h2>
       </div>
       <div class="heading-actions">
         <button class="btn btn-sm" @click="emit('manageAreas')">지역 추가와 관리</button>
@@ -624,7 +634,7 @@ onBeforeUnmount(() => {
             <div class="check-list area-list">
               <label v-for="a in areas" :key="a.id" :class="{ selected: selectedAreas.includes(a.id) }">
                 <input v-model="selectedAreas" type="checkbox" :value="a.id">
-                <span>{{ a.name }}<small>{{ a.region ? `${a.region.kind === 'gu' ? '구 전체' : '법정동 전체'}, ${naverAvailable && a.purpose !== 'alert' ? '네이버로 조회' : '순차 조회 준비 중'}` :selectedSites.includes('dabang') && areaScopes[a.id]?.length ? '다방 동별 범위 지정됨' : `반경 ${radiusText(a.radiusM)}` }}</small></span>
+                <span>{{ a.name }}<small>{{ a.region ? (a.region.kind === 'gu' ? '구 전체' : '법정동 전체') : selectedSites.includes('dabang') && areaScopes[a.id]?.length ? '동별 범위' : `반경 ${radiusText(a.radiusM)}` }}</small></span>
               </label>
             </div>
           </template>
@@ -637,14 +647,6 @@ onBeforeUnmount(() => {
               <input v-model="selectedSites" type="checkbox" :value="s.id">
               <span>{{ s.name }}<small>{{ s.mode }}</small></span>
             </label>
-            <div v-if="dabangByServer" class="icon-site" title="수집 지역의 구는 위의 다방 구 전체 자동수집이 원룸부터 아파트까지 모읍니다. 순차 조회에서 또 돌면 같은 매물을 중복 조회해서 뺐습니다.">
-              <span class="icon-mark" aria-hidden="true"></span>
-              <span>다방<small>구 전체 자동수집이 모음</small></span>
-            </div>
-            <div v-if="zigbangByServer && extension?.sites.includes('zigbang')" class="icon-site" title="켜진 수집 지역은 '조회하기'와 자동 확인이 지역 안 역들의 1km 원룸을 서버에서 모읍니다. 순차 조회에서 또 돌면 같은 매물을 중복 조회해서 뺐습니다.">
-              <span class="icon-mark" aria-hidden="true"></span>
-              <span>직방<small>조회하기가 역 1km 원룸을 모음</small></span>
-            </div>
             <div v-if="naverEnabled && !naverVersionReady" class="icon-site" title="확장이 0.8.22 이상으로 자동 업데이트되면 여기서 고를 수 있습니다. 그 전에는 확장 아이콘 메뉴에서 시작하세요.">
               <span class="icon-mark" aria-hidden="true"></span>
               <span>네이버<small>확장 업데이트 후 선택</small></span>
@@ -654,8 +656,7 @@ onBeforeUnmount(() => {
       </div>
 
       <fieldset v-if="naverChosen" class="naver-source" :disabled="running || !!pending">
-        <legend>3. 네이버 필터 <span class="muted">{{ naverSource ? '읽음' : '확인 필요' }}</span></legend>
-        <p class="help">네이버는 열어 둔 네이버 매물 탭에 적용한 가격과 거래 조건 필터를 그대로 씁니다. 네이버에서 필터를 적용한 뒤 그 탭을 고르세요.</p>
+        <legend>3. 네이버 필터 <span class="muted">{{ naverSource ? '읽음' : '확인 필요' }}</span><HelpTip :text="NAVER_HELP" /></legend>
         <div class="naver-source-row">
           <select aria-label="필터를 읽을 네이버 탭" :disabled="!!naverBusy || !naverTabs.length" @change="chooseNaverTab(($event.target as HTMLSelectElement).value)">
             <option value="" :selected="naverTabId === null">{{ naverTabs.length ? '필터를 적용한 네이버 탭을 고르세요' : '열린 네이버 매물 탭이 없습니다' }}</option>
@@ -664,16 +665,11 @@ onBeforeUnmount(() => {
           <button type="button" class="btn btn-sm" :disabled="!!naverBusy" @click="loadNaverTabs">탭 목록 새로고침</button>
           <button type="button" class="btn btn-sm" :disabled="!!naverBusy || naverTabId === null" @click="readNaverFilter">필터 다시 읽기</button>
         </div>
-        <p class="help" :class="{ 'stale-help': naverError && !naverBusy }" role="status">{{ naverStatus }}</p>
-        <dl v-if="naverSource" class="naver-conditions">
-          <template v-for="(row, index) in naverSource.conditions" :key="index"><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></template>
-        </dl>
-        <div v-if="naverPresetVersionReady" class="naver-preset-row">
-          <button type="button" class="btn btn-sm" :disabled="!canSaveNaverPreset" @click="saveNaverPreset">{{ naverBusy === 'naver-preset-save' ? '저장하는 중…' : '이 조건과 지역을 예약용으로 저장' }}</button>
-          <span class="help" role="status">{{ naverPresetNotice || '1번에서 고른 구나 동과 이 필터를 브라우저 예약 조회용으로 저장합니다. 수집은 바로 시작하지 않습니다.' }}</span>
-        </div>
-        <p v-else class="help">예약용 저장은 확장이 0.8.23 이상으로 업데이트되면 여기서 할 수 있습니다. 그 전에는 확장 아이콘 메뉴에서 저장하세요.</p>
-        <p v-if="!naverJobs.length" class="scope-note">네이버는 구나 동 지역을 골라야 조회합니다.</p>
+        <!-- 필터를 읽은 뒤에는 상태 글 대신 읽은 조건만 보인다(읽는 중, 오류, 아직 고르지 않음일 때만 글로 알린다). -->
+        <p v-if="naverBusy || naverError || !naverSource" class="help" :class="{ 'stale-help': naverError && !naverBusy }" role="status">{{ naverStatus }}</p>
+        <ul v-else class="naver-conditions" aria-label="읽은 네이버 필터">
+          <li v-for="(row, index) in naverSource.conditions" :key="index" :title="`${row.label}: ${row.value}`"><b>{{ row.label }}</b>{{ row.value }}</li>
+        </ul>
         <NaverManual :areas="areas" :received-at="naverReceivedAt ?? null" />
       </fieldset>
 
@@ -685,25 +681,23 @@ onBeforeUnmount(() => {
             <li v-for="(job, index) in plannedJobs" :key="job.key">
               <span class="job-number">{{ index + 1 }}</span>
               <strong :title="job.detail">{{ job.scoped ? job.label : job.areaName }}</strong>
-              <span class="muted">{{ job.siteName }} · {{ job.scoped ? '원/투룸' : job.label }}</span>
+              <span class="muted">{{ job.siteName }}, {{ job.scoped ? '원/투룸' : job.label }}</span>
             </li>
           </ol>
-          <p v-else-if="scopesReady" class="help">지역과 사이트를 각각 하나 이상 선택해 주세요.</p>
-          <p v-if="scopesReady && selectedSites.includes('dabang') && plannedJobs.some((j) => j.scoped)" class="scope-note">지정한 동 안의 원/투룸 목록을 마지막 페이지까지 확인합니다. 다방에 설정된 필터가 적용됩니다.</p>
-          <p v-if="scopesReady && selectedSites.includes('zigbang')" class="scope-note">직방은 알려진 역의 1km 원룸 목록을 조회합니다. 지역 설정 반경과 별개이며 사이트의 현재 필터가 적용됩니다. 역을 찾지 못하면 직접 확인 필요로 남깁니다.</p>
-          <p v-if="scopesReady && naverJobs.length" class="scope-note">네이버는 고른 탭의 필터를 전용 창에 복사해 구나 동 전체 목록을 마지막 페이지까지 확인합니다. 창의 조건이 달라지면 수집을 멈춥니다.</p>
-          <p v-if="skipNote" class="scope-note" role="status">{{ skipNote }}</p>
+          <p v-else-if="scopesReady" class="help">지역과 사이트를 하나 이상 골라 주세요.</p>
+          <!-- 빠지는 지역은 이름만 한 줄로 보이고, 왜 빠지는지는 (?)에 둔다. -->
+          <p v-if="skippedAreas.length" class="skip-line" role="status">빠짐: {{ skippedAreas.map((a) => a.name).join(', ') }}<HelpTip :text="skipNote" /></p>
         </div>
         <div class="launch-action">
-          <button class="btn btn-primary start-button" :disabled="!canStart" @click="command('start')">{{ pending === 'start' ? '시작 확인 중…' : running ? '조회 진행 중' : '선택한 범위 조회 시작' }}</button>
-          <span v-if="!received && !error" class="help" role="status">확장프로그램 연결 확인 중…</span>
-          <span v-else-if="state?.status === 'paused'" class="help">새로 시작하면 중단된 순회를 대체합니다.</span>
-          <span v-else-if="naverJobs.length && !naverSourceReady" class="help">위에서 네이버 필터를 읽으면 시작할 수 있습니다</span>
-          <span v-else-if="canStart" class="help">전용 탭 하나에서 순서대로 조회</span>
+          <button
+            class="btn btn-primary start-button" :disabled="!canStart" :title="state?.status === 'paused' ? '새로 시작하면 중단된 순회를 대체합니다' : undefined"
+            @click="command('start')"
+          >{{ pending === 'start' ? '시작 확인 중…' : running ? '조회 진행 중' : '선택한 범위 조회 시작' }}</button>
+          <span v-if="!received && !error" class="help" role="status">확장 연결 확인 중…</span>
+          <span v-else-if="naverJobs.length && !naverSourceReady" class="help">네이버 필터를 먼저 읽어 주세요</span>
         </div>
       </div>
       <p v-if="scopesReady && !scopeVersionReady" class="notice" role="alert">동별 조회는 확장 0.8.4 이상이 필요합니다. 확장이 자동 업데이트된 뒤 대시보드를 새로고침해 주세요. 현재 연결: {{ extension?.version }}</p>
-      <p v-if="!zigbangVersionReady" class="notice" role="alert">직방 추가 로딩과 상세 누락 확인은 확장 0.8.9 이상이 필요합니다. 확장이 자동 업데이트된 뒤 대시보드를 새로고침해 주세요. 현재 연결: {{ extension?.version }}</p>
       <div v-if="scopeError" class="notice" role="alert">
         <p>{{ scopeError }}</p>
         <button class="btn btn-sm" :disabled="scopesLoading" @click="loadScopes">조회 범위 다시 불러오기</button>
@@ -725,10 +719,7 @@ onBeforeUnmount(() => {
               <strong role="status" aria-live="polite">{{ progressTitle }}</strong>
               <span class="elapsed">경과 {{ elapsed }}</span>
             </div>
-            <p v-if="current" class="current-job">{{ current.areaName }} · {{ current.siteName }}<span v-if="activeState"> ({{ activeState.index + 1 }}/{{ activeState.jobs.length }})</span></p>
-            <p v-if="current?.scope" class="help">{{ current.scope.name }} · 원/투룸 · 사이트에 설정된 필터</p>
-            <p v-if="current && zigbangStationId(current)" class="help">직방 역 1km · 원룸 · 사이트에 설정된 필터</p>
-            <p v-if="current?.site === 'naver'" class="help">네이버 구나 동 전체, 고른 탭에서 읽은 필터</p>
+            <p v-if="current" class="current-job">{{ current.areaName }}, {{ current.siteName }}<span v-if="activeState"> ({{ activeState.index + 1 }}/{{ activeState.jobs.length }})</span></p>
             <p v-if="current && naverCoverageFor(current)" class="page-progress">{{ naverCoverageText(naverCoverageFor(current)!) }}</p>
             <p v-if="current?.receipt?.coverage" class="page-progress">{{ coverageText(current.receipt.coverage) }}</p>
             <template v-if="current && zigbangCoverageFor(current)">
@@ -746,47 +737,45 @@ onBeforeUnmount(() => {
             <div class="run-actions">
               <button v-if="running" class="btn btn-sm" :disabled="!!pending" @click="command('pause')">{{ pending === 'pause' ? '중단하는 중…' : '조회 중단' }}</button>
               <button v-if="activeState?.status === 'paused'" class="btn btn-sm" :disabled="!!pending || !received" @click="command('resume')">{{ pending === 'resume' ? '이어가는 중…' : '중단한 조회 이어하기' }}</button>
-              <p class="help">{{ lastReplyText }}<template v-if="activeState?.heartbeatAt && activeState.status === 'running'"> · 작업 신호 {{ duration(seconds(activeState.heartbeatAt)) }} 전</template></p>
+              <p class="help">{{ lastReplyText }}</p>
             </div>
-            <p v-if="connectionStale || workerStale" class="stale-help">마지막으로 확인한 상태입니다. 실제 진행 여부는 아직 확인되지 않았습니다.</p>
+            <p v-if="connectionStale || workerStale" class="stale-help">응답이 늦어 마지막으로 받은 상태를 보여 줍니다.</p>
           </div>
           <div v-if="activeState" class="results">
             <div class="section-heading"><h3>항목별 결과</h3><span class="help">{{ activeState.jobs.length }}개 조회</span></div>
             <div class="job-results">
               <article v-for="j in activeState.jobs" :key="j.id" class="job-result">
-                <div class="job-heading"><strong>{{ j.areaName }}</strong><span class="result-badge" :class="j.status === 'complete' && j.site === 'zigbang' && !zigbangCoverageFor(j)?.complete ? 'attention' : j.status">{{ statusLabel(j) }}</span></div>
-                <p class="help">{{ j.siteName }}<template v-if="j.scope"> · {{ j.scope.name }} · 원/투룸</template><template v-else-if="zigbangStationId(j)"> · 역 1km · 원룸 · 사이트 필터</template></p>
+                <div class="job-heading">
+                  <span><strong>{{ j.areaName }}</strong> <span class="muted">{{ j.siteName }}</span></span>
+                  <span class="result-badge" :class="j.status === 'complete' && j.site === 'zigbang' && !zigbangCoverageFor(j)?.complete ? 'attention' : j.status">{{ statusLabel(j) }}</span>
+                </div>
                 <template v-if="j.receipt">
-                  <p v-if="j.receipt.coverage" class="page-progress">{{ coverageText(j.receipt.coverage) }}</p>
+                  <p v-if="j.receipt.coverage" class="page-progress" :title="receiptText(j.receipt)">{{ coverageText(j.receipt.coverage) }}</p>
                   <p v-if="j.receipt.coverage && !j.receipt.coverage.complete" class="stale-help">{{ coverageReason(j.receipt.coverage) }}</p>
                   <template v-if="zigbangCoverageFor(j)">
                     <p class="page-progress">{{ zigbangCoverageText(zigbangCoverageFor(j)!) }}</p>
                     <p class="help">{{ zigbangMissingText(zigbangCoverageFor(j)!) }}</p>
                     <p v-if="!zigbangCoverageFor(j)!.complete" class="stale-help">{{ zigbangCoverageReason(zigbangCoverageFor(j)!) }}</p>
                   </template>
-                  <p v-if="naverCoverageFor(j)" class="page-progress">{{ naverCoverageText(naverCoverageFor(j)!) }}</p>
-                  <p class="help">서버 응답 {{ j.receipt.responses }}건 · 저장 처리 {{ j.receipt.listings }}건<template v-if="j.receipt.uniqueListings !== undefined"> · 중복 없는 매물 {{ j.receipt.uniqueListings }}건</template></p>
-                  <p v-if="j.scope" class="help">주변 함께 저장 {{ j.receipt.retainedOutside ?? 0 }}건 · 동 미확인 저장 {{ j.receipt.retainedUnknown ?? 0 }}건 · 저장 제외 {{ (j.receipt.excludedOutside ?? 0) + (j.receipt.excludedUnknown ?? 0) }}건</p>
+                  <p v-if="naverCoverageFor(j)" class="page-progress" :title="receiptText(j.receipt)">{{ naverCoverageText(naverCoverageFor(j)!) }}</p>
+                  <!-- 페이지 확인 줄이 없을 때만 서버가 받은 수를 글로 보인다(있으면 그 줄에 마우스를 올려 본다). -->
+                  <p v-if="!j.receipt.coverage && !naverCoverageFor(j)" class="help">{{ receiptText(j.receipt) }}</p>
+                  <p v-if="j.scope" class="help">주변 함께 저장 {{ j.receipt.retainedOutside ?? 0 }}건, 동 미확인 저장 {{ j.receipt.retainedUnknown ?? 0 }}건, 저장 제외 {{ (j.receipt.excludedOutside ?? 0) + (j.receipt.excludedUnknown ?? 0) }}건</p>
                 </template>
                 <p v-else class="help">저장 확인 전</p>
-                <p v-if="j.note" class="job-note">{{ j.note }}</p>
+                <!-- 지금 도는 작업의 메모는 위 진행 표시에 이미 보이므로 카드에서는 되풀이하지 않는다. -->
+                <p v-if="j.note && !(j.id === current?.id && j.note === progressDetail)" class="job-note">{{ j.note }}</p>
                 <a v-if="safeLink(j.url)" :href="safeLink(j.url)!" target="_blank" rel="noopener" class="job-link">{{ j.siteName }}에서 직접 확인 ↗</a>
               </article>
             </div>
             <div v-if="incomplete && !running" class="retry-area">
               <button class="btn btn-sm" :disabled="!!pending || connectionStale" @click="command('retry')">{{ pending === 'retry' ? '재조회 준비 중…' : `미완료 작업 ${incomplete}개 처음부터 다시 조회` }}</button>
-              <p class="help">아래 지역·사이트의 목록을 처음부터 다시 조회합니다. 이미 저장된 매물은 최신 정보로 갱신합니다.</p>
-              <ul class="retry-targets" aria-label="처음부터 다시 조회할 대상">
-                <li v-for="j in incompleteJobs" :key="j.id">
-                  <strong>{{ j.areaName }} · {{ j.siteName }}</strong><span v-if="j.scope"> · {{ j.scope.dong }}</span>
-                  <span v-if="zigbangCoverageFor(j)" class="help">{{ zigbangMissingText(zigbangCoverageFor(j)!) }}</span>
-                </li>
-              </ul>
+              <HelpTip :text="`다시 조회할 대상: ${incompleteJobs.map((j) => `${j.areaName}(${j.siteName}${j.scope ? `, ${j.scope.dong}` : ''})`).join(', ')}. 목록을 처음부터 다시 보고, 이미 저장된 매물은 최신 정보로 갱신합니다.`" />
             </div>
           </div>
           <details class="activity">
-            <summary>활동 로그 <span class="muted">{{ activity.length }}건 · 최신순</span></summary>
-            <p class="help log-counts">목록 탐색 {{ actionCount }}회 · 브라우저 수신 {{ capturedCount }}건 · 매물 저장 처리 {{ totals?.listings ?? 0 }}건</p>
+            <summary>활동 로그 <span class="muted">{{ activity.length }}건, 최신순</span></summary>
+            <p class="help log-counts">목록 탐색 {{ actionCount }}회, 브라우저 수신 {{ capturedCount }}건, 매물 저장 처리 {{ totals?.listings ?? 0 }}건</p>
             <ol v-if="activity.length" aria-label="조회 활동 로그">
               <li v-for="(event, index) in activity" :key="`${event.at}-${index}`"><time>{{ timeText(event.at) }}</time><span>{{ event.text }}</span></li>
             </ol>
@@ -796,7 +785,19 @@ onBeforeUnmount(() => {
       </section>
 
     </template>
-    <BrowseAuto :areas="areas" :scopes="areaScopes" :scopes-ready="scopesReady" />
+    <BrowseAuto :areas="areas" :scopes="areaScopes" :scopes-ready="scopesReady">
+      <!-- 네이버 필터를 예약용으로 저장하는 단추는 예약 칸 안에 둔다(예약을 안 쓰면 접힌 채로 안 보인다). -->
+      <template #preset>
+        <div v-if="ready && naverChosen" class="naver-preset-row">
+          <template v-if="naverPresetVersionReady">
+            <button type="button" class="btn btn-sm" :disabled="!canSaveNaverPreset" @click="saveNaverPreset">{{ naverBusy === 'naver-preset-save' ? '저장하는 중…' : '지금 고른 네이버 필터와 지역을 예약용으로 저장' }}</button>
+            <HelpTip text="1번에서 고른 구나 동과 위에서 읽은 네이버 필터를 예약 조회용으로 저장합니다. 바로 수집하지는 않습니다." />
+            <span v-if="naverPresetNotice" class="help" role="status">{{ naverPresetNotice }}</span>
+          </template>
+          <span v-else class="help">예약용 저장은 확장 0.8.23 이상에서 됩니다.</span>
+        </div>
+      </template>
+    </BrowseAuto>
   </section>
 </template>
 
@@ -828,9 +829,11 @@ legend .muted { margin-left: 6px; font-weight: 400; font-size: 13px; }
 .naver-source-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .naver-preset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .naver-source-row select { flex: 1 1 260px; min-width: 0; min-height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: inherit; font: inherit; font-size: 14px; }
-.naver-conditions { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; padding: 12px 14px; border-radius: 8px; background: var(--surface-2); font-size: 13px; }
-.naver-conditions dt { color: var(--muted); }
-.naver-conditions dd { margin: 0; }
+/* 읽은 네이버 필터: 표 대신 한 줄씩 늘어나는 작은 칸(긴 값은 줄이고 마우스를 올리면 전부 보인다) */
+.naver-conditions { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+.naver-conditions li { display: inline-flex; gap: 6px; max-width: 100%; padding: 4px 10px; border-radius: 6px; background: var(--surface-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.naver-conditions li b { color: var(--muted); font-weight: 600; }
+.skip-line { margin: 0; font-size: 13px; color: var(--muted); }
 fieldset:disabled { opacity: .65; }
 fieldset:disabled label { cursor: default; }
 .launch-panel { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 20px 24px; background: var(--accent-soft); border: 1px solid #c9d8ee; border-radius: 10px; }

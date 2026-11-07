@@ -115,6 +115,25 @@ test('contacted marks keep the first time, count as seen, can be cleared and kee
   assert.equal(store.getListing('peterpanz:1'), undefined, 'once cleared, the usual purge applies');
 });
 
+test('notes are trimmed and capped, count as seen, clear when emptied and keep the listing from being purged', t => {
+  const store = memoryStore(t);
+  const runId = store.createRun(false);
+  const old = new Date(Date.now() - 40 * 864e5).toISOString();
+  store.insertListing('ziptoss:9', { source: 'ziptoss', sourceId: '9', lat: 0, lng: 0, prices: [] }, 'k9', 'sig', runId, { runId }, null, old);
+  assert.equal(store.setNote('ziptoss:missing', 'synthetic'), false);
+  store.setNote('ziptoss:9', `  ${'가'.repeat(store.NOTE_MAX + 20)}  `, '2026-01-02T00:00:00.000Z');
+  const saved = store.notesMap().get('ziptoss:9');
+  assert.equal(saved.note.length, store.NOTE_MAX);
+  assert.equal(saved.updatedAt, '2026-01-02T00:00:00.000Z');
+  assert.equal(store.seenTimes().has('ziptoss:9'), true, 'writing a note means it was seen');
+  store.tidyListings();
+  assert.equal(store.getListing('ziptoss:9').status, 'gone');
+  store.setNote('ziptoss:9', '   ');
+  assert.equal(store.notesMap().size, 0, 'an empty note removes it');
+  store.tidyListings();
+  assert.equal(store.getListing('ziptoss:9'), undefined, 'without a note the usual purge applies');
+});
+
 test('parcel coordinates round-trip and changed PNU clears obsolete zone results', t => {
   const store = memoryStore(t);
   const at = '2026-01-01T00:00:00.000Z';

@@ -111,6 +111,13 @@ CREATE TABLE IF NOT EXISTS contacted (
   listing_id TEXT PRIMARY KEY,
   contacted_at TEXT NOT NULL
 );
+
+-- 매물에 남긴 짧은 메모('📝')와 마지막으로 고친 때
+CREATE TABLE IF NOT EXISTS notes (
+  listing_id TEXT PRIMARY KEY,
+  note TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS verdicts_identity ON verdicts(identity_key);
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY,
@@ -1188,7 +1195,7 @@ export function touchListings(source: string, sourceIds: string[], at: string) {
 }
 
 /**
- * 사라진 매물 중 남겨 두는 기간이 지난 것을 가격 기록, 변화 기록과 함께 지운다. 관심이나 버림을 누른 매물과 '📞 문의함' 매물은 남긴다.
+ * 사라진 매물 중 남겨 두는 기간이 지난 것을 가격 기록, 변화 기록과 함께 지운다. 관심이나 버림을 누른 매물, '📞 문의함' 매물, 메모를 남긴 매물은 남긴다.
  * 지운 매물 수를 준다.
  */
 function purgeGoneListings(): number {
@@ -1197,6 +1204,7 @@ function purgeGoneListings(): number {
       .prepare(
         `SELECT l.id FROM listings l LEFT JOIN verdicts v ON v.listing_id = l.id
          WHERE l.status = 'gone' AND v.listing_id IS NULL AND NOT EXISTS (SELECT 1 FROM contacted c WHERE c.listing_id = l.id)
+           AND NOT EXISTS (SELECT 1 FROM notes n WHERE n.listing_id = l.id)
            AND l.last_seen_at < CASE WHEN l.source = 'courtauction' THEN ? ELSE ? END`,
       )
       .all(daysAgoIso(GONE_KEEP_DAYS_COURT), daysAgoIso(GONE_KEEP_DAYS)) as { id: string }[]
@@ -1698,6 +1706,33 @@ export function setContacted(id: string, on: boolean, at = nowIso()): boolean {
 export function contactedTimes(): Map<string, string> {
   const rows = db.prepare('SELECT listing_id, contacted_at FROM contacted').all() as { listing_id: string; contacted_at: string }[];
   return new Map(rows.map((r) => [r.listing_id, r.contacted_at]));
+}
+
+/** 매물 메모 길이 한도(글자) */
+export const NOTE_MAX = 300;
+
+/**
+ * 매물 메모를 남기거나 고친다(앞뒤 빈칸을 빼고 NOTE_MAX자까지). 빈 글이면 지운다. 메모를 남기면 '봤음'도 남긴다.
+ * 없는 매물이면 false. 메모가 있는 매물은 사라진 지 오래돼도 지우지 않는다(purgeGoneListings).
+ */
+export function setNote(id: string, text: string, at = nowIso()): boolean {
+  if (!getListing(id)) return false;
+  const note = text.trim().slice(0, NOTE_MAX);
+  db.transaction(() => {
+    if (note) {
+      db.prepare(
+        'INSERT INTO notes (listing_id, note, updated_at) VALUES (?, ?, ?) ON CONFLICT(listing_id) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at',
+      ).run(id, note, at);
+      markSeen([id], at);
+    } else db.prepare('DELETE FROM notes WHERE listing_id = ?').run(id);
+  })();
+  return true;
+}
+
+/** 매물마다 메모와 마지막으로 고친 때 */
+export function notesMap(): Map<string, { note: string; updatedAt: string }> {
+  const rows = db.prepare('SELECT listing_id, note, updated_at FROM notes').all() as { listing_id: string; note: string; updated_at: string }[];
+  return new Map(rows.map((r) => [r.listing_id, { note: r.note, updatedAt: r.updated_at }]));
 }
 
 export function unackedCount(): number {

@@ -493,6 +493,9 @@ export interface ListingView extends NormalizedListing {
   seenAt?: string | null;
   /** '📞 문의함'을 누른 때(중개사에게 문의한 매물). 안 눌렀으면 null. */
   contactedAt?: string | null;
+  /** 내가 남긴 짧은 메모(📝)와 마지막으로 고친 때. 없으면 null. */
+  note?: string | null;
+  noteAt?: string | null;
   /** 버림한 매물과 같은 집으로 판정돼 자동으로 숨긴 경우, 원래 매물 id. */
   relistedOf: string | null;
   /** 버림한 매물과 위치, 층, 면적이 비슷하다. */

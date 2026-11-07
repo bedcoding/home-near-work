@@ -448,6 +448,21 @@ app.post<{ Body: { ids?: unknown } | null }>('/api/listings/seen', async (req, r
   return { before, after: store.dataRevision() };
 });
 
+/** 매물 메모를 남기거나 고친다(빈 글이면 지움). before와 after는 '봤음'과 같은 자료 버전이다. */
+app.put<{ Params: { id: string }; Body: { note?: unknown } | null }>('/api/listings/:id/note', async (req, reply) => {
+  const note = req.body?.note;
+  if (typeof note !== 'string' || note.length > store.NOTE_MAX * 2) {
+    reply.code(400);
+    return { error: `메모는 ${store.NOTE_MAX}자까지의 글이어야 합니다.` };
+  }
+  const before = store.dataRevision();
+  if (!store.setNote(req.params.id, note)) {
+    reply.code(404);
+    return { error: '매물을 찾지 못했습니다.' };
+  }
+  return { before, after: store.dataRevision() };
+});
+
 /** '📞 문의함'을 남기거나(on: true) 푼다(on: false). before와 after는 '봤음'과 같은 자료 버전이다. */
 app.post<{ Params: { id: string }; Body: { on?: unknown } | null }>('/api/listings/:id/contact', async (req, reply) => {
   const on = req.body?.on;

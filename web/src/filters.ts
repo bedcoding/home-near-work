@@ -14,7 +14,8 @@ export function loadFilters(): Filters {
     /* 저장된 값을 못 읽으면 기본값 */
   }
   const f = normalizeFilters(saved);
-  return f;
+  // 왼쪽 필터의 지역 칸(고른 구 안만 보기, 최대 거리)은 안 써서 뺐다. 다시 켤 단추가 없으니 늘 끈 채로 둔다.
+  return { ...f, insideAreas: false, distanceMax: null };
 }
 
 export function saveFilters(f: Filters) {
