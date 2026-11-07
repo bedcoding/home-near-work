@@ -120,6 +120,8 @@ const groupColor = (all: ListingView[]) => {
   return items.some((l) => l.isNew) ? '#e5484d' : items.some((l) => l.priceChange) ? '#12825e' : items.some((l) => l.verdict === 'star') ? '#c48a0a' : '#1f5fbf';
 };
 const MUTED = '#8f99a6';
+/** 회색 매물의 가격 글자 바탕(흰 글자가 읽히게 회색 점보다 조금 진하게) */
+const MUTED_PRICE = '#6f7a89';
 /** 묶음에 별로가 아닌 신규 매물이 있으면 표시 오른쪽 위에 NEW 딱지를 붙인다. */
 const hasNew = (items: ListingView[]) => items.some((l) => l.isNew && l.verdict !== 'meh');
 const NEW_BADGE = '<em class="nw">NEW</em>';
@@ -482,8 +484,10 @@ function drawDots(fit: boolean) {
   const dim = props.listings.length > 0;
   drawnPriceLevel = priceLevel();
   for (const g of groups()) {
-    const c = g.strong || !dim ? groupColor(g.items) : MUTED;
-    const price = (g.strong ? drawnPriceLevel >= 1 : !dim && drawnPriceLevel >= 2) ? cheapestPrice(g.items) : null;
+    const muted = dim && !g.strong;
+    const c = muted ? MUTED : groupColor(g.items);
+    // 펼친 가격대 밖 매물(회색)도 필터를 통과한 매물이라, 확대하면 가격을 같이 쓴다(PRICE_ZOOM.normal부터, 펼친 매물은 strong부터).
+    const price = (g.strong ? drawnPriceLevel >= 1 : drawnPriceLevel >= 2) ? cheapestPrice(g.items) : null;
     // 신규가 든 표시는 빨갛게 칠하고 다른 표시 위에 그린다. NEW 딱지는 겹쳐서 지도를 가리지 않게 가격을 쓴 표시와
     // PRICE_ZOOM.normal부터의 동그라미에만 붙이고, 연하게 칠한 매물(펼친 목록 밖)에는 붙이지 않는다.
     const fresh = (g.strong || !dim) && hasNew(g.items);
@@ -494,8 +498,8 @@ function drawDots(fit: boolean) {
       // 확대해 보면 가격을 쓴 표시(같은 자리 여러 건이면 가장 싼 것과 건수)
       marker = L.marker([g.lat, g.lng], {
         icon: L.divIcon({
-          className: `price${g.strong ? ' strong' : ''}`,
-          html: `<span style="background:${c}">${esc(mapPrice(price))}${g.items.length > 1 ? `<b>${g.items.length}</b>` : ''}${badge}</span>`,
+          className: `price${g.strong ? ' strong' : ''}${muted ? ' dim' : ''}`,
+          html: `<span style="background:${muted ? MUTED_PRICE : c}">${esc(mapPrice(price))}${g.items.length > 1 ? `<b>${g.items.length}</b>` : ''}${badge}</span>`,
           iconSize: [0, 0],
           iconAnchor: [0, 0],
           tooltipAnchor: [0, -10],
@@ -749,7 +753,7 @@ onBeforeUnmount(() => {
             <dt><i class="key-dot" style="background:#aab2bd"></i></dt>
             <dd><b>별로</b>: 별로로 표시한 매물입니다. 같은 자리에 다른 매물이 있으면 그 매물 색을 따릅니다.</dd>
             <dt><i class="key-dot" style="background:#8f99a6"></i></dt>
-            <dd><b>회색</b>: 매물 탭에서 가격대를 펼치면 펼친 가격대 매물만 색으로 보이고, 같은 거래 유형의 나머지 매물은 회색으로 보입니다. 일대 시세를 볼 때 참고하세요.</dd>
+            <dd><b>회색</b>: 매물 탭에서 가격대를 펼치면 펼친 가격대 매물만 색으로 보이고, 필터를 통과한 나머지 매물은 회색으로 보입니다. 확대하면 회색 매물도 가격이 나와 일대 시세를 같이 볼 수 있습니다.</dd>
             <dt><b class="stack-sample">3</b></dt>
             <dd><b>숫자</b>: 같은 건물에 있는 매물 수입니다.</dd>
             <dt><b class="price-sample">500/40</b></dt>
