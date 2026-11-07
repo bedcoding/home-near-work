@@ -348,6 +348,8 @@ function rowOf(band: Band, entries: Entry[], open: Record<string, Pick>, hidden:
   return {
     band,
     ...counts(entries),
+    /** 이 줄의 매물 전부(지도에 진하게 보일 때 씀) */
+    entries,
     hidden,
     platforms,
     deposit: deposits.length ? { min: Math.min(...deposits), max: Math.max(...deposits) } : null,
@@ -375,6 +377,24 @@ const visible = computed(() => {
   const out: ListingView[] = [];
   for (const r of shownRows.value) {
     for (const e of r.shown) {
+      if (ids.has(e.listing.id)) continue;
+      ids.add(e.listing.id);
+      out.push(e.listing);
+    }
+  }
+  return out;
+});
+/**
+ * 지도에 진하게 보일 매물: 펼친 가격대마다 고른 사이트의 매물, 사이트를 아직 안 골랐으면 그 가격대 매물 전부.
+ * 그래서 '월세 50만원 이하'와 '전세 1억 이하'처럼 가격대 여러 개를 펼치기만 해도 지도에서 같이 본다.
+ * 목록 카드는 지금처럼 사이트를 고른 뒤에 그린다(한 가격대에 수천 건이면 카드를 다 그리기 느려서).
+ */
+const mapStrong = computed(() => {
+  const ids = new Set<string>();
+  const out: ListingView[] = [];
+  for (const r of shownRows.value) {
+    if (!r.isOpen) continue;
+    for (const e of r.pick && r.pick !== 'all' ? r.shown : r.entries) {
       if (ids.has(e.listing.id)) continue;
       ids.add(e.listing.id);
       out.push(e.listing);
@@ -597,7 +617,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
       </div>
       <aside ref="mapPanel" class="ov-map" :style="mapPanelHeight ? { '--map-panel-height': `${mapPanelHeight}px` } : undefined">
         <OverviewMap
-          :listings="visible" :background="mapBackground" :areas="areas" :selected-id="selectedId" :fit-key="mapFitKey"
+          :listings="mapStrong" :background="mapBackground" :areas="areas" :selected-id="selectedId" :fit-key="mapFitKey"
           @select="(l) => reveal([l])" @reveal="reveal" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />
