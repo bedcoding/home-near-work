@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, triggerRef, watch } from 'vue';
 import {
   COLLECT_MARGIN_M, hasHomeListings, inGus, nearReason, NOTICE_SHORT, noticeSection, noticeSourcesOf, RUN_ALL_SOURCES, RUN_PARALLEL_SITES, RUN_SCOPES, SOURCE_LABEL,
   type RunSiteProgress,
@@ -64,7 +64,8 @@ const urlTab = (openNewsRow ? 'overview' : urlParam && OLD_MARKED[urlParam] ? 'm
 const tab = ref<Tab>(urlTab && TABS.includes(urlTab) ? urlTab : savedTab && TABS.includes(savedTab) ? savedTab : 'overview');
 if (urlParam) history.replaceState(null, '', location.pathname);
 const state = ref<AppState | null>(null);
-const listings = ref<ListingView[]>([]);
+// 매물은 수만 건이라 깊은 감시(ref)를 걸면 받을 때마다 화면이 몇 초씩 멈춘다. 목록을 통째로 바꿀 때만 다시 그린다(직접 고치면 triggerRef).
+const listings = shallowRef<ListingView[]>([]);
 const filters = ref(loadFilters());
 const error = ref<string | null>(null);
 /** 대시보드 서버와 연결이 끊겼을 때만 보이고, 다시 연결되면 사라진다. */
@@ -520,8 +521,17 @@ const hiddenCount = computed(() =>
 async function refreshState() {
   state.value = await api.state();
 }
+/** 매물 목록을 받는 중인 요청 수와, 한 번이라도 다 받았는지(처음에는 0건이 아니라 불러오는 중으로 보인다) */
+const listingsLoading = ref(0);
+const listingsLoaded = ref(false);
 async function refreshListings() {
-  listings.value = await api.listings();
+  listingsLoading.value += 1;
+  try {
+    listings.value = await api.listings();
+    listingsLoaded.value = true;
+  } finally {
+    listingsLoading.value -= 1;
+  }
 }
 
 /** 카드의 환산 월세가 쓰는 전환율: 매물이나 기준금리가 바뀔 때만 다시 낸다(상태는 10초마다 새 객체로 온다). */
@@ -610,6 +620,7 @@ async function setVerdict(l: ListingView, verdict: Verdict | null) {
   l.verdict = verdict;
   l.isNew = false;
   l.priceChange = null;
+  triggerRef(listings);
   try {
     await api.setVerdict(l.id, verdict);
   } finally {
@@ -1067,6 +1078,13 @@ const filterUse = computed<string[] | 'all'>(() => {
     </div>
   </header>
 
+  <div v-if="listingsLoading || !listingsLoaded" class="loading-bar" role="status" aria-live="polite">
+    <div class="loading-track" aria-hidden="true"><span></span></div>
+    <span class="loading-text">
+      {{ listingsLoaded ? '새 매물 자료를 받는 중입니다' : connectionError ? '대시보드 프로그램과 연결되면 매물 자료를 불러옵니다' : '매물 자료를 불러오는 중입니다. 매물이 많아 몇 초 걸릴 수 있습니다' }}
+    </span>
+  </div>
+
   <DabangCollection v-if="browseOpen" :areas="areas" :running="running" :auto="state?.autoCheck ?? null" @start="startRun('dabang')" @manage-areas="manageAreas" @history="tab = 'runs'" />
   <BrowseQueue v-if="browseOpen" :areas="areas" :extension="ext" :naver-received-at="state?.naverCapture.lastAt ?? null" @close="browseOpen = false" @manage-areas="manageAreas" />
 
@@ -1096,7 +1114,7 @@ const filterUse = computed<string[] | 'all'>(() => {
   <p v-if="connectionError" class="error">{{ connectionError }}</p>
   <p v-if="error" class="error">{{ error }}</p>
 
-  <div class="layout" :class="{ 'no-side': filtersHidden || tab === 'areas', idle: filterUse === 'all', 'area-layout management-shell': tab === 'areas' }">
+  <div class="layout" :class="{ 'no-side': filtersHidden || tab === 'areas', idle: filterUse === 'all', 'area-layout management-shell': tab === 'areas', 'first-loading': !listingsLoaded }" :aria-busy="!listingsLoaded">
     <FilterPanel
       v-show="!filtersHidden && tab !== 'areas'" v-model="filters" :hidden-count="filterUse === 'all' ? 0 : hiddenCount" :all-areas="state?.areas ?? []" :unused="filterUse"
       :deal-choices="dealChoices" :single-deal="tab === 'overview'"
@@ -1347,6 +1365,14 @@ h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
   display: flex; align-items: center; gap: 14px; padding: 12px 24px;
   background: #eef3fb; border-bottom: 1px solid var(--line);
 }
+/* 매물 자료 불러오는 중: 머리말 아래 얇은 띠(왔다 갔다 하는 막대)와 문구. 처음 불러올 때는 아래 목록을 흐리게 둔다. */
+.loading-bar { display: flex; align-items: center; gap: 12px; padding: 8px 24px; background: var(--accent-soft); border-bottom: 1px solid var(--line); }
+.loading-track { position: relative; flex: 0 0 160px; height: 4px; overflow: hidden; border-radius: 999px; background: var(--line); }
+.loading-track span { position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: inherit; background: var(--accent); animation: loading-slide 1.1s ease-in-out infinite; }
+@keyframes loading-slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) { .loading-track span { animation: none; width: 100%; opacity: .6; } }
+.loading-text { font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.layout.first-loading .main { opacity: .45; transition: opacity .2s; }
 .progress-body { flex: 1; display: grid; gap: 6px; min-width: 0; }
 .run-sites { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .run-site {
