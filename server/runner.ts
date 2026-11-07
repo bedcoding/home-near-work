@@ -71,6 +71,10 @@ const waitingSites = (collectors: Collector[]): RunSiteProgress[] => collectors.
 /** 노선 탭 '이 노선 조회하기'가 도는 매물 사이트(역 위치로 찾는 곳) */
 export const LINE_SOURCES: SourceId[] = ['ziptoss', 'peterpanz'];
 
+/** tidyListings가 사이트마다 사라짐으로 둔 매물 수를 '피터팬 12건, 다방 3건'처럼 적는다. */
+export const staleText = (by: Partial<Record<SourceId, number>> = {}) =>
+  Object.entries(by).map(([source, n]) => `${SOURCE_LABEL[source as SourceId]} ${n}건`).join(', ');
+
 /**
  * 노선 탭 '이 노선 조회하기': 그 노선 역(반경 radiusM)만 매물 사이트(집토스, 피터팬)로 돈다. 노선 탭에서 고른 노선도 이것으로 바꾼다.
  * 켜진 지역(회사 근처), 공고, 실거래, 시세 자료는 건드리지 않고, 신규로 치지 않으며(역마다 처음 본 것도 기준만) 알림도 띄우지 않는다.
@@ -356,7 +360,7 @@ async function execute(
 
   const finish = (status: 'done' | 'error' | 'stopped', errorMessage: string | null) => {
     const tidy = store.tidyListings();
-    if (tidy.stale) log(`네이버, 다방, 직방에서 14일 넘게 다시 못 본 매물 ${tidy.stale}건을 사라짐으로 둠`);
+    if (tidy.stale) log(`14일 넘게 다시 못 본 매물을 사라짐으로 둠: ${staleText(tidy.staleBy)}`);
     if (tidy.purged) log(`사라진 지 오래된 매물 ${tidy.purged}건을 지움`);
     const summary: RunSummary = {
       sources: summaries,

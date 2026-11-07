@@ -11,7 +11,7 @@ import type { Area, Station } from '../../shared/types.js';
 // 화면이 스스로 불러오는 목록 응답을 옆에서 읽고, 목록 칸을 내려 다음 페이지를 불러오게 한다(목록 응답 주소에는 직접 요청하지 않는다).
 // 상가, 사무실, 건물 같은 비주거 매물은 저장하지 않는다(daangn-parse.ts).
 // 범위가 넓으면 지역마다 최근 MAX_PAGES 페이지까지만 받는다. 그래서 안 보인 매물을 바로 '사라짐'으로 두지 않고 오래 못 보면 정리한다
-// (retainMissing, CAPTURE_SOURCES).
+// (retainMissing, STALE_SOURCES).
 
 /** 지역 하나에서 받을 최대 페이지(20건씩, 최근 순). 당근은 짧은 시간에 많이 열면 막으므로(HTTP 403) 넉넉히 줄여 둔다. */
 const MAX_PAGES = 30;

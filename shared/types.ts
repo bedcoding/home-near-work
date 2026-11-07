@@ -5,10 +5,16 @@ import type { Filters } from './filters.js';
 export type SourceId = 'naver' | 'dabang' | 'zigbang' | 'daangn' | 'ziptoss' | 'peterpanz' | 'gobang' | 'courtauction' | 'onbid' | 'betterliving' | 'mangrove' | 'celib';
 
 /**
- * 받은 범위가 사이트 화면이나 역 근처로 정해져 안 보였다고 바로 '사라짐'으로 두지 않고, 오래 못 보면 정리하는 사이트(db.ts tidyListings).
+ * 받은 범위가 사이트 화면이나 역 근처로 정해지는 사이트. 안 보였다고 바로 '사라짐'으로 두지 않고 오래 못 보면 정리한다(STALE_SOURCES).
  * 네이버는 크롬 확장으로만, 다방과 직방은 조회와 확장 둘 다, 당근은 조회로만 받는다.
  */
 export const CAPTURE_SOURCES: SourceId[] = ['naver', 'dabang', 'zigbang', 'daangn'];
+
+/**
+ * 오래(14일) 다시 못 본 매물을 '사라짐'으로 정리하는 사이트(db.ts tidyListings). 조회에서 안 보였다고 바로 내려갔다고 할 수 없는 곳이다.
+ * CAPTURE_SOURCES와, 고른 구 전체를 다 봤다고 보장하지 못해 조회가 '일부'로 끝나고 마는 집토스와 피터팬.
+ */
+export const STALE_SOURCES: SourceId[] = [...CAPTURE_SOURCES, 'ziptoss', 'peterpanz'];
 
 export type DealType = 'monthly' | 'jeonse' | 'sale' | 'short' | 'auction';
 

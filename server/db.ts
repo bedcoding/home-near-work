@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { DATA_DIR, DB_PATH, RUNS_DIR } from './config.js';
 import { DEFAULT_AREAS, findStation } from './stations.js';
-import { CAPTURE_SOURCES, SEOUL_GUS } from '../shared/types.js';
+import { SEOUL_GUS, STALE_SOURCES } from '../shared/types.js';
 import type {
   AptRegistry,
   Area,
@@ -24,6 +24,7 @@ import type {
   RunScope,
   RunSummary,
   SeenRef,
+  SourceId,
   SubscriptionDetail,
   TrustDocRound,
   Verdict,
@@ -1138,18 +1139,32 @@ export function markGone(ids: string[]) {
   for (const id of ids) stmt.run(id);
 }
 
-/** 확장으로 받는 곳(네이버, 다방, 직방)의 매물을 사라짐으로 보는 기간(일, 마지막으로 본 때부터). 사이트를 볼 때만 받아서 내려갔는지 알 수 없다. */
-const CAPTURE_STALE_DAYS = 14;
+/**
+ * STALE_SOURCES의 매물을 사라짐으로 보는 기간(일, 마지막으로 본 때부터). 사이트를 볼 때만 받거나 고른 범위를 다 봤다고 보장하지 못해서
+ * 한 번 안 보였다고 내려갔는지 알 수 없다. 다시 보이면 있는 매물로 돌아온다(updateListingSeen).
+ */
+const STALE_DAYS = 14;
 /** 사라진 매물을 남겨 두는 기간(일, 마지막으로 본 때부터). 법원경매는 매각기일이 지난 물건의 결과를 경매사건검색으로 찾는 기간만큼 남긴다. */
 const GONE_KEEP_DAYS = 30;
 const GONE_KEEP_DAYS_COURT = 180;
 
-/** 매물 정리: 확장으로 받는 곳의 오래 못 본 매물을 사라짐으로 두고(stale), 남겨 두는 기간이 지난 사라진 매물을 지운다(purged). */
-export function tidyListings(): { stale: number; purged: number } {
-  const stale = db
-    .prepare(`UPDATE listings SET status = 'gone' WHERE status = 'active' AND source IN (${CAPTURE_SOURCES.map(() => '?').join(', ')}) AND last_seen_at < ?`)
-    .run(...CAPTURE_SOURCES, daysAgoIso(CAPTURE_STALE_DAYS)).changes;
-  return { stale, purged: purgeGoneListings() };
+/**
+ * 매물 정리: STALE_SOURCES의 오래 못 본 매물을 사라짐으로 두고(stale, 사이트마다 staleBy), 남겨 두는 기간이 지난 사라진 매물을 지운다(purged).
+ */
+export function tidyListings(): { stale: number; staleBy: Partial<Record<SourceId, number>>; purged: number } {
+  const before = daysAgoIso(STALE_DAYS);
+  const stmt = db.prepare("UPDATE listings SET status = 'gone' WHERE status = 'active' AND source = ? AND last_seen_at < ?");
+  const staleBy: Partial<Record<SourceId, number>> = {};
+  let stale = 0;
+  db.transaction(() => {
+    for (const source of STALE_SOURCES) {
+      const n = stmt.run(source, before).changes;
+      if (!n) continue;
+      staleBy[source] = n;
+      stale += n;
+    }
+  })();
+  return { stale, staleBy, purged: purgeGoneListings() };
 }
 
 /** 확장이 받은 목록에 아직 있는 매물(사이트 번호)의 마지막 본 시각을 at으로 올리고 사라짐을 푼다. */

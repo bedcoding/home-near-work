@@ -29,7 +29,7 @@ import { importRedevZones, redevZones } from './redev-zones.js';
 import { areaRestoreState, LINE_RADII, lineView, restoreAreas, setLineView } from './line-areas.js';
 import { restSeconds } from './browser.js';
 import { updateZonesNow, zoneFileCheckState } from './redev-zones-update.js';
-import { getProgress, startLineRun, startRun, stopRun } from './runner.js';
+import { getProgress, staleText, startLineRun, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
 import { browseConsole, normalizeBrowseProgress, type BrowseProgress } from './browse-progress.js';
 import { BROWSE_SCOPES_KEY, readBrowseScopes } from './browse-settings.js';
@@ -53,7 +53,7 @@ process.on('unhandledRejection', (e) => console.error('처리하지 못한 오�
 store.closeInterruptedRuns();
 if (migrateDabangSchedule()) console.log('다방 예약을 구 전체 자동수집으로 전환했습니다. 기존 동별 예약 설정은 로컬에 보관했습니다.');
 const tidy = store.tidyListings();
-if (tidy.stale) console.log(`네이버, 다방, 직방에서 14일 넘게 다시 못 본 매물 ${tidy.stale}건을 사라짐으로 두었습니다.`);
+if (tidy.stale) console.log(`14일 넘게 다시 못 본 매물을 사라짐으로 두었습니다: ${staleText(tidy.staleBy)}`);
 if (tidy.purged) console.log(`사라진 지 오래된 매물 ${tidy.purged}건을 지웠습니다.`);
 // 지난번에 받아 두고 아직 매물로 읽지 않은 네이버 응답이 있으면 읽는다.
 processPendingNaverCaptures();
