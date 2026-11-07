@@ -569,9 +569,9 @@ test('unrelated tabs, old documents, wrong sites and unrelated responses cannot 
 
 test('missing region hints and disabled sites are never replaced by homepage visits', async () => {
   const h = harness({ sites: { naver: false } });
-  await h.start(['naver', 'zigbang', 'hogangnono', 'daangn'],[AREA]);
+  await h.start(['naver', 'zigbang', 'hogangnono'],[AREA]);
   assert.equal(h.windows(), 0);
-  assert.deepEqual(plain(h.saved[KEY].jobs.map((j) => j.status)), ['needs-input', 'needs-input', 'needs-input']);
+  assert.deepEqual(plain(h.saved[KEY].jobs.map((j) => j.status)), ['needs-input', 'needs-input']);
   assert.equal(h.saved[KEY].status, 'done');
   await h.command('retry'); await h.api.tick();
   assert.equal(h.windows(), 0);
@@ -709,22 +709,8 @@ test('retry fetches newly learned station hints instead of revisiting missing hi
   assert.match(h.navigations[0].url, /subways\/synthetic-station\/items$/);
 });
 
-test('Daangn station lists keep only list responses and complete only when the page and server proofs agree', async () => {
+test('당근부동산은 대시보드 조회하기가 모으므로 순차 조회의 사이트로 받지 않는다', async () => {
   const h = harness({ 'hnw-stations': [{ name: '예시역', lat: 35.1, lng: 128.1 }] });
-  await h.start(['daangn'], [AREA]); await h.bind();
-  const job = h.saved[KEY].jobs[0];
-  assert.match(job.url, /^https:\/\/realty\.daangn\.com\/map\/subway\//);
-  const gql = (body) => ({ site: 'daangn', url: 'https://realty.kr.karrotmarket.com/graphql', pageUrl: job.url, status: 200, method: 'POST', requestBody: '{}', body });
-  await h.capture({ capture: gql('{"data":{"viewer":{"nickname":"synthetic"}}}') });
-  assert.equal(h.pending().length, 0, 'account responses are not queued');
-  await h.capture({ capture: gql('{"data":{"subwayStationArticleConnection":{"edges":[],"pageInfo":{"hasNextPage":false}}}}') });
-  assert.equal(h.pending().length, 1);
-  const page = { stationPoiId: '900', pages: 2, received: 3, complete: true, reason: 'complete' };
-  h.advance(9000); h.setResult({ kind: 'complete', daangnCoverage: page });
-  await h.api.tick();
-  assert.notEqual(h.saved[KEY].jobs[0].status, 'complete', 'a page claim alone is not completion');
-  h.saved[KEY].jobs[0].receipt = { responses: 2, listings: 2, newCount: 0, changedCount: 0, daangnCoverage: { ...page, stored: 2, excluded: 1, unreadable: 0 } };
-  h.advance(); await h.api.tick();
-  assert.equal(h.saved[KEY].jobs[0].status, 'complete');
-  assert.match(h.saved[KEY].jobs[0].note, /주거용 2건/);
+  await h.start(['zigbang', 'daangn'], [AREA]);
+  assert.ok(!(h.saved[KEY]?.jobs ?? []).some((j) => j.site === 'daangn'));
 });

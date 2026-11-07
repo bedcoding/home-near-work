@@ -5,7 +5,7 @@
   globalThis.__hnwBrowsePage = true;
   const SITE = typeof HNW_SITE !== 'undefined' && HNW_SITE ? HNW_SITE.id : null;
   const BUBBLE = 'button[data-nlogs-area="pin*art.bubble"], button[class*="BubbleMarker"]';
-  const SUPPORTED = ['naver', 'dabang', 'zigbang', 'daangn'];
+  const SUPPORTED = ['naver', 'dabang', 'zigbang'];
   const MAX_ACTIONS = 40;
   const ids = new Set();
   const titles = new Set();
@@ -16,7 +16,6 @@
   let dabangLatest = null;
   let dabangLatestRegion = null;
   let zigbangLedger = null;
-  let daangnLedger = null;
   const naverStreams = new Map();
   let responseVersion = 0;
   let responseAt = 0;
@@ -199,45 +198,6 @@
       received, missing, complete: reason === 'complete', reason };
   }
 
-  /** 당근 역 근처 매물 화면(/map/subway/<역 이름>)의 역 이름 */
-  function daangnStation() {
-    const m = /^\/map\/subway\/([^/]+)\/?$/.exec(location.pathname);
-    try { return location.hostname === 'realty.daangn.com' && m ? decodeURIComponent(m[1]) : null; } catch { return null; }
-  }
-  // 서버의 기록(daangn-parse.ts)과 같은 기준: 역, 매물 종류 조건, 페이지 순서가 이어져야 끝까지 받은 것으로 본다.
-  function rememberDaangn(c, conn) {
-    const station = daangnStation();
-    daangnLedger ||= { station, poi: null, filter: null, pages: 0, cursor: null, ended: false, ids: new Set(), invalid: null };
-    const ledger = daangnLedger;
-    if (ledger.station !== station) ledger.invalid ||= 'response-scope';
-    let request = null;
-    try { request = JSON.parse(c.requestBody || 'null')?.variables ?? null; } catch { request = null; }
-    const poi = typeof request?.subwayStationPoiId === 'string' && /^\d{1,20}$/.test(request.subwayStationPoiId) ? request.subwayStationPoiId : null;
-    if (!poi) ledger.invalid ||= 'missing-request';
-    else {
-      const filter = JSON.stringify(request.propertyFilter ?? null);
-      if (ledger.poi && ledger.poi !== poi) ledger.invalid ||= 'station-changed';
-      if (ledger.filter !== null && ledger.filter !== filter) ledger.invalid ||= 'query-changed';
-      ledger.poi ||= poi;
-      ledger.filter ??= filter;
-      const after = typeof request.after === 'string' && request.after ? request.after : null;
-      if (after !== null && after !== ledger.cursor) ledger.invalid ||= 'list-changed';
-    }
-    if (!Array.isArray(conn.edges) || typeof conn.pageInfo?.hasNextPage !== 'boolean') { ledger.invalid ||= 'unreadable-list'; return; }
-    ledger.pages += 1;
-    ledger.cursor = typeof conn.pageInfo.endCursor === 'string' && conn.pageInfo.endCursor ? conn.pageInfo.endCursor : null;
-    ledger.ended = conn.pageInfo.hasNextPage === false;
-    for (const edge of conn.edges) {
-      const id = edge?.node?.article?.originalId;
-      if (typeof id === 'string' && /^[1-9]\d{0,19}$/.test(id)) ledger.ids.add(id);
-      else ledger.invalid ||= 'unreadable-list';
-    }
-  }
-  function daangnCoverage() {
-    const ledger = daangnLedger;
-    const reason = ledger?.invalid || (!ledger?.pages ? 'missing-list' : !ledger.ended ? 'more-pages' : 'complete');
-    return { stationPoiId: ledger?.poi ?? null, pages: ledger?.pages ?? 0, received: ledger?.ids.size ?? 0, complete: reason === 'complete', reason };
-  }
 
   function visible(el, inViewport = true) {
     if (!el || el.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
@@ -283,7 +243,7 @@
     if (!Number.isFinite(c.status) || c.status < 200 || c.status >= 300 || typeof c.body !== 'string') return;
     try {
       const u = new URL(c.url, location.href);
-      const host = SITE === 'naver' ? 'land.naver.com' : SITE === 'dabang' ? 'dabangapp.com' : SITE === 'zigbang' ? 'zigbang.com' : SITE === 'daangn' ? 'karrotmarket.com' : '';
+      const host = SITE === 'naver' ? 'land.naver.com' : SITE === 'dabang' ? 'dabangapp.com' : SITE === 'zigbang' ? 'zigbang.com' : '';
       if (!host || (u.hostname !== host && !u.hostname.endsWith(`.${host}`))) return;
       const zigbang = zigbangResponse(u);
       let data;
@@ -329,11 +289,6 @@
           if (x?.item_id != null) ids.add(String(x.item_id));
           if (typeof x?.title === 'string' && tidy(x.title).length >= 4) titles.add(tidy(x.title));
         }
-      } else if (SITE === 'daangn' && data?.data?.subwayStationArticleConnection) {
-        const conn = data.data.subwayStationArticleConnection;
-        rememberDaangn(c, conn);
-        rows = Array.isArray(conn.edges) ? conn.edges.map((edge) => edge?.node?.article).filter(Boolean) : [];
-        for (const x of rows) if (typeof x?.originalId === 'string') ids.add(x.originalId);
       } else if (zigbang?.kind === 'list') rows = [];
       if (!rows) return;
       responseVersion += 1;
@@ -458,21 +413,6 @@
     return reply(next.kind, coverage.reason === 'unreadable-details' ? `${next.note} · 읽지 못한 상세 응답이 있습니다.` : next.note, next.waiting);
   }
 
-  // 당근 목록은 실제 사용자 스크롤에만 다음 페이지를 불러온다. 자동으로 목록을 내리거나 요청을 다시 보내지 않고,
-  // 화면을 열 때 받은 목록만 확인한다. 목록이 그 안에서 끝난 역만 완료로 본다.
-  function daangnStep() {
-    const station = daangnStation();
-    if (job.daangnStation !== undefined && job.daangnStation !== station) return result('blocked', '선택한 당근 역 화면을 벗어나 확인을 멈췄습니다. 새 순회를 시작해 주세요.');
-    job.daangnStation = station;
-    if (!station) return result('blocked', '당근 역 근처 매물 화면이 아니라 확인을 멈췄습니다.');
-    const coverage = daangnCoverage();
-    const reply = (kind, note, waiting = false) => ({ ...result(kind, `역 근처 목록 ${coverage.pages}페이지, 매물 ${coverage.received}건, ${note}`, waiting), daangnCoverage: coverage });
-    if (daangnLedger?.invalid) return reply('idle', '목록 응답의 역이나 조건이 바뀌어 받은 만큼만 저장합니다.');
-    if (!coverage.pages) return reply('idle', '역 근처 매물 목록 응답을 기다리는 중', Date.now() - job.startedAt < 15000);
-    if (coverage.complete) return Date.now() - responseAt < 3000 ? reply('idle', '마지막 목록 응답을 확인하는 중', true) : reply('complete', '역 근처 목록을 끝까지 받았습니다.');
-    return reply('idle', '첫 화면에 온 목록만 저장합니다. 나머지는 당근에서 직접 목록을 내려 보면 저장됩니다.');
-  }
-
   function dabangPageResult(kind, note, stream, scoped, waiting = false) {
     return { ...result(kind, note, waiting), coverage: dabangCoverage(stream, scoped) };
   }
@@ -579,7 +519,6 @@
     if (!SUPPORTED.includes(SITE)) return result('unsupported', '이 사이트는 화면 확인만 지원합니다');
     if (SITE === 'dabang') return dabangStep(message);
     if (SITE === 'zigbang') return zigbangStep();
-    if (SITE === 'daangn') return daangnStep();
     if (SITE === 'naver' && message.naverScope) return naverRegionStep(message.naverScope);
     if (job.actions >= MAX_ACTIONS) return result('idle', '한 페이지의 자동 탐색 한도에 도달했습니다. 일부만 확인했을 수 있습니다');
     if (SITE !== 'naver') return scrollList();

@@ -19,11 +19,10 @@ interface ZigbangCoverage {
   excluded: number; missing: number; unreadable: number; complete: boolean; reason: string;
 }
 interface NaverCoverage { pages: number; total: number | null; received: number; stored: number | null; complete: boolean }
-interface DaangnCoverage { stationPoiId: string | null; pages: number; received: number; stored: number; excluded: number; unreadable: number; complete: boolean; reason: string }
 interface Receipt {
   responses: number; listings: number; newCount: number; changedCount: number;
   uniqueListings?: number; excludedOutside?: number; excludedUnknown?: number; retainedOutside?: number; retainedUnknown?: number; coverage?: Coverage;
-  zigbangCoverage?: ZigbangCoverage; naverCoverage?: NaverCoverage; daangnCoverage?: DaangnCoverage;
+  zigbangCoverage?: ZigbangCoverage; naverCoverage?: NaverCoverage;
 }
 type JobStatus = 'pending' | 'running' | 'complete' | 'partial' | 'failed' | 'visited' | 'needs-input';
 interface BrowseJob {
@@ -80,12 +79,12 @@ const SITES = [
   { id: 'zigbang', name: '직방', mode: '매물 목록', defaultOn: true },
   { id: 'kbland', name: 'KB부동산', mode: '건수 확인', defaultOn: false },
   { id: 'hogangnono', name: '호갱노노', mode: '화면 확인', defaultOn: false },
-  { id: 'daangn', name: '당근', mode: '역 근처 첫 화면 목록', defaultOn: false },
+  // 당근부동산은 '조회하기'가 서버에서 모으므로 여기서 고르지 않는다.
 ];
 const STATUS: Record<JobStatus, string> = {
   pending: '대기', running: '조회 중', complete: '선택 목록 저장 완료', partial: '일부 확인', failed: '실패', visited: '화면 확인', 'needs-input': '직접 확인 필요',
 };
-const HOSTS = new Set(['fin.land.naver.com', 'new.land.naver.com', 'www.dabangapp.com', 'www.zigbang.com', 'kbland.kr', 'hogangnono.com', 'realty.daangn.com']);
+const HOSTS = new Set(['fin.land.naver.com', 'new.land.naver.com', 'www.dabangapp.com', 'www.zigbang.com', 'kbland.kr', 'hogangnono.com']);
 const safeLink = (url: string) => {
   try {
     const u = new URL(url);
@@ -135,18 +134,10 @@ function zigbangCoverageFor(job: BrowseJob) {
   return coverage && coverage.stationId === zigbangStationId(job) ? coverage : null;
 }
 function statusLabel(job: BrowseJob) {
-  if (job.status === 'complete' && job.site === 'daangn') return daangnCoverageFor(job)?.complete ? '역 근처 목록 확인 완료' : STATUS.complete;
   if (job.status === 'complete' && job.site === 'zigbang') {
     return zigbangCoverageFor(job)?.complete ? '역 1km 목록 확인 완료' : '이전 조회 결과 · 범위 확인 필요';
   }
   return STATUS[job.status];
-}
-function daangnCoverageFor(job: BrowseJob) {
-  const c = job.site === 'daangn' ? job.receipt?.daangnCoverage : undefined;
-  return c && [c.pages, c.received, c.stored, c.excluded, c.unreadable].every(isCount) && typeof c.complete === 'boolean' ? c : null;
-}
-function daangnCoverageText(coverage: DaangnCoverage) {
-  return `${coverage.pages}페이지, 매물 ${coverage.received}건 중 주거용 저장 ${coverage.stored}건, 상가와 사무실 등 ${coverage.excluded}건 제외`;
 }
 function naverCoverageFor(job: BrowseJob) {
   const c = job.site === 'naver' ? job.receipt?.naverCoverage : undefined;
@@ -333,8 +324,8 @@ const plannedJobs = computed(() => chosenAreas.value.flatMap((area) => chosenSit
   return regions.length
     ? regions.map((scope) => ({ key: `${area.id}:${site.id}:${scope.url}`, areaId: area.id, site: site.id, areaName: area.name, siteName: site.name, label: scope.dong, detail: scope.name, scoped: true }))
     : [{ key: `${area.id}:${site.id}`, areaId: area.id, site: site.id, areaName: area.name, siteName: site.name,
-      label: site.id === 'zigbang' ? '역 1km · 원룸' : site.id === 'daangn' ? '역 근처 주거용' : '지도·필터 범위',
-      detail: site.id === 'daangn' ? '가까운 역의 당근 목록 중 화면을 열 때 온 첫 목록에서 원룸, 투룸, 오피스텔, 아파트, 주택만 저장' : site.id === 'zigbang' ? `알려진 역의 1km 원룸 목록. 지역 설정 반경 ${radiusText(area.radiusM)}와 별개이며 사이트의 현재 필터가 적용됩니다.` : `역 중심 반경 ${radiusText(area.radiusM)}의 지도를 열고 사이트의 현재 필터 범위를 조회`, scoped: false }];
+      label: site.id === 'zigbang' ? '역 1km 원룸' : '지도와 필터 범위',
+      detail: site.id === 'zigbang' ? `알려진 역의 1km 원룸 목록. 지역 설정 반경 ${radiusText(area.radiusM)}와 별개이며 사이트의 현재 필터가 적용됩니다.` : `역 중심 반경 ${radiusText(area.radiusM)}의 지도를 열고 사이트의 현재 필터 범위를 조회`, scoped: false }];
 })));
 const naverJobs = computed(() => plannedJobs.value.filter((job) => job.site === 'naver'));
 const startAreas = computed(() => chosenAreas.value.filter((area) => plannedJobs.value.some((job) => job.areaId === area.id)));
@@ -739,7 +730,6 @@ onBeforeUnmount(() => {
             <p v-if="current && zigbangStationId(current)" class="help">직방 역 1km · 원룸 · 사이트에 설정된 필터</p>
             <p v-if="current?.site === 'naver'" class="help">네이버 구나 동 전체, 고른 탭에서 읽은 필터</p>
             <p v-if="current && naverCoverageFor(current)" class="page-progress">{{ naverCoverageText(naverCoverageFor(current)!) }}</p>
-            <p v-if="current && daangnCoverageFor(current)" class="page-progress">{{ daangnCoverageText(daangnCoverageFor(current)!) }}</p>
             <p v-if="current?.receipt?.coverage" class="page-progress">{{ coverageText(current.receipt.coverage) }}</p>
             <template v-if="current && zigbangCoverageFor(current)">
               <p class="page-progress">{{ zigbangCoverageText(zigbangCoverageFor(current)!) }}</p>
@@ -775,7 +765,6 @@ onBeforeUnmount(() => {
                     <p v-if="!zigbangCoverageFor(j)!.complete" class="stale-help">{{ zigbangCoverageReason(zigbangCoverageFor(j)!) }}</p>
                   </template>
                   <p v-if="naverCoverageFor(j)" class="page-progress">{{ naverCoverageText(naverCoverageFor(j)!) }}</p>
-                  <p v-if="daangnCoverageFor(j)" class="page-progress">{{ daangnCoverageText(daangnCoverageFor(j)!) }}</p>
                   <p class="help">서버 응답 {{ j.receipt.responses }}건 · 저장 처리 {{ j.receipt.listings }}건<template v-if="j.receipt.uniqueListings !== undefined"> · 중복 없는 매물 {{ j.receipt.uniqueListings }}건</template></p>
                   <p v-if="j.scope" class="help">주변 함께 저장 {{ j.receipt.retainedOutside ?? 0 }}건 · 동 미확인 저장 {{ j.receipt.retainedUnknown ?? 0 }}건 · 저장 제외 {{ (j.receipt.excludedOutside ?? 0) + (j.receipt.excludedUnknown ?? 0) }}건</p>
                 </template>

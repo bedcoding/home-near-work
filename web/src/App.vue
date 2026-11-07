@@ -768,13 +768,20 @@ const runScopes = computed(() => [
   }),
   { id: 'market' as const, label: '시세 통계', what: 'KB 지수, 국토부 아파트 실거래', title: '시세 통계 탭의 \'지금 받기\'와 같습니다', here: tab.value === 'market' },
 ]);
+/** ▾ 메뉴의 빠른 조회(전월세만): 도는 사이트(첫 줄)와 건너뛰는 것(둘째 줄) */
+const quickScopes = RUN_SCOPES.filter((s) => s.quick).map((s) => ({
+  id: s.id,
+  label: s.label,
+  what: s.sources.map((id) => SOURCE_LABEL[id]).join(', '),
+  skip: '고시원, 경매, 공고는 건너뜀',
+}));
 /** '조회하기'(전부 조회)가 도는 곳: 매물 사이트(시작 순서)와 공고 곳 */
 const runAllSites = RUN_ALL_SOURCES.map((id) => SOURCE_LABEL[id]).join(', ');
 const runAllNotices = [...new Set(Object.values(NOTICE_SHORT))];
 const runAllTitle =
   `매물 사이트 ${RUN_ALL_SOURCES.length}곳을 ${RUN_PARALLEL_SITES}곳씩 동시에 돕니다: ${runAllSites}\n` +
   `그다음 실거래와 시세 자료(받을 때가 된 것만), 공고 ${runAllNotices.length}곳을 받습니다.\n` +
-  '네이버, 당근은 크롬 확장이 모읍니다.';
+  '네이버는 크롬 확장이 모읍니다.';
 /** 조회 중 사이트 상태 이름 */
 const SITE_STATE: Record<RunSiteProgress['status'], string> = { waiting: '대기', running: '도는 중', done: '끝', error: '실패', skipped: '안 돎' };
 function runScope(id: RunScope | 'market') {
@@ -1006,7 +1013,15 @@ const filterUse = computed<string[] | 'all'>(() => {
             <span class="run-scope-name">조회하기</span>
             <span class="run-scope-what">{{ runAllSites }} ({{ RUN_PARALLEL_SITES }}곳씩 동시에), 공고 {{ runAllNotices.length }}곳</span>
           </button>
-          <span class="menu-label" title="크롬 확장이 모으는 네이버, 당근은 '지역 순차 조회'로 돕니다.">탭 하나만 조회</span>
+          <template v-if="quickScopes.length">
+            <span class="menu-label">빠른 조회</span>
+            <button v-for="s in quickScopes" :key="s.id" class="run-scope" @click="runScope(s.id)">
+              <span class="run-scope-name">{{ s.label }}</span>
+              <span class="run-scope-what">{{ s.what }}</span>
+              <span class="run-scope-what">{{ s.skip }}</span>
+            </button>
+          </template>
+          <span class="menu-label" title="크롬 확장이 모으는 네이버는 '지역 순차 조회'로 돕니다.">탭 하나만 조회</span>
           <button v-for="s in runScopes" :key="s.id" class="run-scope" :class="{ here: s.here }" :title="s.title || undefined" @click="runScope(s.id)">
             <span class="run-scope-name">{{ s.label }}<span v-if="s.here" class="here-chip">지금 탭</span></span>
             <span class="run-scope-what">{{ s.what }}</span>
@@ -1311,7 +1326,8 @@ h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .run-scope:hover { background: var(--surface-2); color: var(--ink); }
 .run-scope.here { background: var(--accent-soft); }
 .run-scope-name { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; }
-.run-scope-what { font-size: 12px; color: var(--muted); }
+/* 사이트 이름 중간(예: '공고/는')에서 줄이 바뀌지 않게 띄어쓰기에서만 줄을 바꾼다. */
+.run-scope-what { font-size: 12px; color: var(--muted); word-break: keep-all; }
 .here-chip { padding: 0 6px; border-radius: 999px; background: var(--surface); font-size: 11px; font-weight: 700; color: var(--accent); }
 
 .progress {

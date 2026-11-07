@@ -129,6 +129,38 @@ export function parseDaangnArticles(body: string): DaangnPage {
   }
 }
 
+/**
+ * 지도 화면의 '매물 N개' 목록(`articleFeed`, 20건씩) 한 페이지. 지도 범위(region_bounds) 안 매물이 최근 순으로 온다.
+ * 매물 모양은 역 근처 목록과 같다. 광고 칸(article 없이 advertisement만 있는 칸)은 매물이 아니라 건너뛴다.
+ */
+export function parseDaangnFeed(body: string): DaangnPage {
+  const empty: DaangnPage = { valid: false, ids: [], items: [], excludedIds: [], unreadableIds: [], hasNextPage: null, endCursor: null };
+  try {
+    const feed = JSON.parse(body)?.data?.articleFeed;
+    if (!feed || !Array.isArray(feed.edges) || typeof feed.pageInfo?.hasNextPage !== 'boolean') return empty;
+    const page: DaangnPage = { ...empty, valid: true, hasNextPage: feed.pageInfo.hasNextPage, endCursor: text(feed.pageInfo.endCursor) };
+    for (const edge of feed.edges) {
+      const node = edge?.node;
+      const a = node?.article && typeof node.article === 'object' ? node.article as Record<string, unknown> : null;
+      if (!a) {
+        if (!node?.advertisement) page.valid = false;
+        continue;
+      }
+      const id = articleId(a);
+      if (!id) { page.valid = false; continue; }
+      page.ids.push(id);
+      const home = HOMES[String((a.salesTypeV3 as { type?: unknown } | undefined)?.type ?? '')];
+      if (!home) { page.excludedIds.push(id); continue; }
+      const listing = toListing(a, id, home);
+      if (listing) page.items.push({ listing, raw: a });
+      else page.unreadableIds.push(id);
+    }
+    return page;
+  } catch {
+    return empty;
+  }
+}
+
 /** 한 역의 목록을 처음부터 끝까지 받았는지와 매물별 서버 저장을 대조하는 기록. */
 export interface DaangnLedger {
   stationName: string | null;

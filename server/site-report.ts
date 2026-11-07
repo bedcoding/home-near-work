@@ -11,8 +11,8 @@ import { collectionAreas } from '../shared/regions.js';
 
 // 사이트별 탭의 요약(GET /api/site-report): 소스마다 최근 조회 기록, 크롬 확장 사이트마다 사이트 화면이 센 수와 매물 내용까지 받은 수.
 
-/** 크롬 확장으로 받는 사이트 */
-const BROWSE_SITES = ['naver', 'dabang', 'zigbang', 'kbland', 'hogangnono', 'daangn'];
+/** 크롬 확장으로 받는 사이트(당근은 조회하기가 모은다) */
+const BROWSE_SITES = ['naver', 'dabang', 'zigbang', 'kbland', 'hogangnono'];
 /** 받은 날을 셀 기간(일) */
 const DAYS = 14;
 /** 소스마다 보일 조회 기록 수 */
@@ -90,7 +90,6 @@ function captureReport(site: string, since: string): SiteCaptureReport {
     : site === 'zigbang' ? zigbangLines()
     : site === 'kbland' ? kbLines()
     : site === 'hogangnono' ? hogangnonoLines()
-    : site === 'daangn' ? daangnLines()
     : [];
   return { lastAt, days, lines };
 }
@@ -309,28 +308,3 @@ function hogangnonoLines(): SiteCaptureLine[] {
   ];
 }
 
-/** 당근: 지도 매물 수와 역 근처 매물 목록(주거용만 매물로 저장) */
-function daangnLines(): SiteCaptureLine[] {
-  const lines: SiteCaptureLine[] = [];
-  const rows = store.capturesSince('daangn', '%graphql%', new Date(Date.now() - DAYS * 86400000).toISOString()).reverse();
-  for (const r of rows) {
-    const total = json(r.body)?.data?.count;
-    if (typeof total !== 'number') continue;
-    lines.push({ label: '지도 매물 수', value: `${n(total)}건`, at: r.at, tip: '당근 부동산 지도 화면이 받은 매물 수(당근이 셈).' });
-    break;
-  }
-  for (const r of rows) {
-    const conn = json(r.body)?.data?.subwayStationArticleConnection;
-    if (!Array.isArray(conn?.edges)) continue;
-    lines.push({
-      label: '받은 매물',
-      value: `${n(conn.edges.length)}건, 주거용만 저장`,
-      at: r.at,
-      tip: '역 근처 매물 목록이 10개씩 옵니다. 원룸, 투룸, 오피스텔, 아파트, 주택만 대시보드 매물로 저장하고 상가와 사무실은 뺍니다.',
-      short: true,
-    });
-    break;
-  }
-  if (!lines.length) lines.push({ label: '받은 것', value: '없음', at: '', tip: '당근 부동산 화면이 받은 매물 데이터가 아직(최근 응답 안에) 없습니다.' });
-  return lines;
-}

@@ -77,3 +77,21 @@ test('역, 조건, 페이지 순서가 바뀌거나 요청 본문이 없으면 �
     assert.equal(coverage.reason, reason);
   }
 });
+
+test('지도 매물 목록(articleFeed)도 주거용만 바꾸고, 광고 칸은 건너뛰며, 다음 페이지 여부를 읽는다', async () => {
+  const { parseDaangnFeed } = await import('../server/daangn-parse.ts');
+  const feed = (nodes, hasNextPage, endCursor) => JSON.stringify({ data: { articleFeed: {
+    edges: nodes.map((node, i) => ({ node, cursor: `f${i}` })), pageInfo: { endCursor, hasNextPage } } } });
+  const page = parseDaangnFeed(feed([
+    { type: 'ARTICLE', article: article(201, 'TWO_ROOM', MONTH) },
+    { type: 'ADVERTISEMENT', article: null, advertisement: { id: 'ad-1' } },
+    { type: 'ARTICLE', article: article(202, 'STORE', MONTH) },
+  ], true, 'feed-next'));
+  assert.equal(page.valid, true);
+  assert.deepEqual(page.ids, ['201', '202']);
+  assert.deepEqual(page.excludedIds, ['202']);
+  assert.deepEqual(page.items.map((i) => i.listing.roomLabel), ['투룸 이상']);
+  assert.deepEqual([page.hasNextPage, page.endCursor], [true, 'feed-next']);
+  assert.equal(parseDaangnFeed(feed([{ type: 'ARTICLE', article: null }], false, null)).valid, false, '광고도 매물도 아닌 칸은 못 읽은 것으로 본다');
+  assert.equal(parseDaangnFeed('{"data":{"count":3}}').hasNextPage, null);
+});

@@ -36,13 +36,13 @@ const BROWSE: Site[] = [
   { id: 'naver', name: '네이버 부동산', way: 'browse', source: 'naver' },
   { id: 'kbland', name: 'KB부동산', way: 'browse', source: null },
   { id: 'hogangnono', name: '호갱노노', way: 'browse', source: null },
-  { id: 'daangn', name: '당근부동산', way: 'browse', source: 'daangn' },
 ];
 const AUTO: Site[] = [
   { id: 'dabang', name: '다방', way: 'auto', source: 'dabang', home: 'https://www.dabangapp.com/' },
   { id: 'zigbang', name: '직방', way: 'auto', source: 'zigbang', home: 'https://www.zigbang.com/' },
   { id: 'peterpanz', name: '피터팬', way: 'auto', source: 'peterpanz' },
   { id: 'ziptoss', name: '집토스', way: 'auto', source: 'ziptoss' },
+  { id: 'daangn', name: '당근부동산', way: 'auto', source: 'daangn', home: 'https://realty.daangn.com/' },
   { id: 'gobang', name: '고방', way: 'auto', source: 'gobang', home: 'https://gobang.kr/gosi' },
   { id: 'betterliving', name: '에피소드(코리빙)', way: 'auto', source: 'betterliving', home: 'https://betterliving.kr/find' },
   { id: 'mangrove', name: '맹그로브(코리빙)', way: 'auto', source: 'mangrove', home: 'https://mangrove.city' },

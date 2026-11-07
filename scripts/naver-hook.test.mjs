@@ -23,13 +23,13 @@ test('request-start URLs and increasing IDs distinguish stale responses without 
 });
 
 test('Request objects keep their request body for capture without changing the original request', async () => {
-  const events = [], pending = [], sent = [], location = new URL('https://realty.daangn.com/map/subway/synthetic');
+  const events = [], pending = [], sent = [], location = new URL('https://www.zigbang.com/home/oneroom/map');
   const window = { postMessage: (event) => events.push(event), addEventListener() {},
     fetch: (input) => { sent.push(input); return new Promise((resolve) => pending.push(resolve)); } };
   const document = { readyState: 'loading', getElementById: () => null };
   const context = vm.createContext({ window, location, URL, Request, document, setTimeout, XMLHttpRequest: { prototype: { open() {}, send() {} } } });
   vm.runInContext(fs.readFileSync(new URL('../extension/hook.js', import.meta.url), 'utf8'), context);
-  const url = 'https://realty.kr.karrotmarket.com/graphql';
+  const url = 'https://apis.zigbang.com/v2/items/list';
   const request = new Request(url, { method: 'POST', body: '{"variables":{"subwayStationPoiId":"900"}}' });
   window.fetch(request);
   assert.equal(sent[0], request, 'the page request is sent as is');

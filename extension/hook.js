@@ -12,15 +12,14 @@
   const started = (url,meta) => {
     try { const parsed=new URL(url,location.href); if(parsed.origin==='https://fin.land.naver.com' && /\/article\/legalDivisionArticleList\/?$/.test(parsed.pathname)) window.postMessage({__hnw:'naver-list-request',url:parsed.href,...meta},location.origin); } catch { /* Ignore unrelated requests. */ }
   };
-  // 그 사이트의 데이터 주소만 읽는다. 네이버는 부동산(land.naver.com)만, 당근은 daangn.com과 karrotmarket.com.
+  // 그 사이트의 데이터 주소만 읽는다. 네이버는 부동산(land.naver.com)만.
   const host = location.hostname;
   const base = /(^|\.)land\.naver\.com$/.test(host) ? 'land.naver.com' : host.split('.').slice(-2).join('.');
-  const bases = base === 'daangn.com' ? ['daangn.com', 'karrotmarket.com'] : [base];
 
   const wanted = (url) => {
     try {
       const u = new URL(url, location.href);
-      return bases.some((b) => u.hostname === b || u.hostname.endsWith(`.${b}`)) && !SKIP.test(u.pathname);
+      return (u.hostname === base || u.hostname.endsWith(`.${base}`)) && !SKIP.test(u.pathname);
     } catch {
       return false;
     }
@@ -43,25 +42,10 @@
     );
   };
 
-  // 당근부동산: 페이지가 다 뜨고 2초 뒤에 페이지에 담긴 데이터(__NEXT_DATA__, 없으면 self.__next_f 조각을 이은 것)를 한 번 넘긴다.
-  // 주소는 '페이지 주소#page-data'.
-  if (base === 'daangn.com') {
-    const sendPageData = () => {
-      const next = document.getElementById('__NEXT_DATA__');
-      const flight = Array.isArray(window.__next_f)
-        ? window.__next_f.map((x) => (Array.isArray(x) && typeof x[1] === 'string' ? x[1] : '')).join('')
-        : '';
-      const body = next && next.textContent ? next.textContent : flight ? JSON.stringify({ nextFlight: flight }) : null;
-      if (body) post(`${location.origin}${location.pathname}${location.search}#page-data`, 'PAGE', 200, null, body);
-    };
-    if (document.readyState === 'complete') setTimeout(sendPageData, 2000);
-    else window.addEventListener('load', () => setTimeout(sendPageData, 2000), { once: true });
-  }
-
   const nativeFetch = window.fetch;
   window.fetch = function (input, init) {
     const meta = requestMeta();
-    // 당근처럼 Request 객체에 본문을 담아 보내는 화면은 보내기 전에 복사본을 만든다. 원래 요청은 그대로 보낸다.
+    // Request 객체에 본문을 담아 보내는 화면은 보내기 전에 복사본을 만든다. 원래 요청은 그대로 보낸다.
     let copy = null;
     try {
       if (input instanceof Request && !(init && init.body != null) && !['GET', 'HEAD'].includes(input.method) && wanted(input.url)) copy = input.clone();

@@ -4,7 +4,10 @@ import type { Filters } from './filters.js';
 
 export type SourceId = 'naver' | 'dabang' | 'zigbang' | 'daangn' | 'ziptoss' | 'peterpanz' | 'gobang' | 'courtauction' | 'onbid' | 'betterliving' | 'mangrove' | 'celib';
 
-/** 크롬 확장이 받은 화면 데이터도 읽는 사이트. 구·동 자동수집과 함께 사용할 수 있다. */
+/**
+ * 받은 범위가 사이트 화면이나 역 근처로 정해져 안 보였다고 바로 '사라짐'으로 두지 않고, 오래 못 보면 정리하는 사이트(db.ts tidyListings).
+ * 네이버는 크롬 확장으로만, 다방과 직방은 조회와 확장 둘 다, 당근은 조회로만 받는다.
+ */
 export const CAPTURE_SOURCES: SourceId[] = ['naver', 'dabang', 'zigbang', 'daangn'];
 
 export type DealType = 'monthly' | 'jeonse' | 'sale' | 'short' | 'auction';
@@ -112,20 +115,22 @@ export const noticeSourcesOf = (section: NoticeSection) =>
   (Object.keys(SOURCE_SECTIONS) as NoticeSourceId[]).filter((s) => SOURCE_SECTIONS[s].includes(section));
 
 /** '조회하기'(전부 조회)와 자동 확인이 도는 매물 사이트, 시작하는 순서대로(server/collectors/index.ts의 COLLECTORS와 같음). 네이버는 크롬 확장이 모은다. */
-export const RUN_ALL_SOURCES: SourceId[] = ['dabang', 'zigbang', 'ziptoss', 'peterpanz', 'gobang', 'betterliving', 'mangrove', 'celib', 'courtauction', 'onbid'];
+export const RUN_ALL_SOURCES: SourceId[] = ['dabang', 'zigbang', 'ziptoss', 'peterpanz', 'daangn', 'gobang', 'betterliving', 'mangrove', 'celib', 'courtauction', 'onbid'];
 
 /** 조회 때 동시에 도는 매물 사이트 수. 사이트마다 조회용 브라우저 탭을 하나씩 쓰고, 한 사이트 안에서는 지금처럼 쉬어 가며 돈다. */
 export const RUN_PARALLEL_SITES = 3;
 
-/** 탭 하나만 조회하는 범위(조회하기 옆 ▾ 메뉴, 경매 탭의 '경매 조회하기') */
-export type RunScope = 'home' | 'dabang' | 'naver' | 'auction' | 'room' | 'rent' | 'subscription';
+/** 탭 하나만 조회하는 범위(조회하기 옆 ▾ 메뉴, 경매 탭의 '경매 조회하기')와 빠른 조회(전월세만) */
+export type RunScope = 'home' | 'rentOnly' | 'dabang' | 'naver' | 'auction' | 'room' | 'rent' | 'subscription';
 
 /**
  * 범위마다 도는 매물 사이트(sources)와 공고 탭(sections, 그 탭에 공고가 보일 수 있는 곳을 모두 돈다). tabs는 그 범위가 채우는 탭.
  * 지역 전체를 지원하는 사이트는 별도 범위로도 조회한다. 직방은 지역 안 역들의 1km 원룸을 서버가 직접 받는다.
+ * quick은 ▾ 메뉴의 '빠른 조회' 칸에 보이는 범위다. 전월세만은 고시원 매물이 같이 딸려 오는 고방과 경매, 공고를 빼고 전월세 사이트만 돈다.
  */
-export const RUN_SCOPES: { id: RunScope; label: string; tabs: string[]; sources: SourceId[]; sections: NoticeSection[] }[] = [
-  { id: 'home', label: '매물', tabs: ['overview'], sources: ['dabang', 'zigbang', 'ziptoss', 'peterpanz', 'gobang'], sections: [] },
+export const RUN_SCOPES: { id: RunScope; label: string; tabs: string[]; sources: SourceId[]; sections: NoticeSection[]; quick?: boolean }[] = [
+  { id: 'home', label: '매물', tabs: ['overview'], sources: ['dabang', 'zigbang', 'ziptoss', 'peterpanz', 'daangn', 'gobang'], sections: [] },
+  { id: 'rentOnly', label: '전월세만', tabs: [], sources: ['dabang', 'zigbang', 'ziptoss', 'peterpanz', 'daangn'], sections: [], quick: true },
   { id: 'dabang', label: '다방 구 전체', tabs: [], sources: ['dabang'], sections: [] },
   { id: 'auction', label: '경매, 집터, 서울 아파트', tabs: ['auction', 'plot', 'apt'], sources: ['courtauction', 'onbid'], sections: ['trust', 'shop', 'land'] },
   { id: 'room', label: '고시원과 쉐어', tabs: ['rooms'], sources: ['gobang', 'betterliving', 'mangrove', 'celib'], sections: [] },

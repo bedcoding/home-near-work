@@ -1,5 +1,6 @@
 import { betterliving, celib, mangrove } from './coliving.js';
 import { courtauction } from './courtauction.js';
+import { daangn } from './daangn.js';
 import { gobang } from './gobang.js';
 import { onbid } from './onbid.js';
 import { peterpanz } from './peterpanz.js';
@@ -12,6 +13,6 @@ import type { Collector } from './types.js';
 const only = process.env.HNW_SOURCES?.split(',').map((s) => s.trim()).filter(Boolean) ?? [];
 
 /** 조회 순서대로(shared/types.ts의 RUN_ALL_SOURCES와 같게 둔다. 테스트가 확인함). */
-export const COLLECTORS: Collector[] = [dabang, zigbang, ziptoss, peterpanz, gobang, betterliving, mangrove, celib, courtauction, onbid].filter(
+export const COLLECTORS: Collector[] = [dabang, zigbang, ziptoss, peterpanz, daangn, gobang, betterliving, mangrove, celib, courtauction, onbid].filter(
   (c) => only.length === 0 || only.includes(c.id),
 );

@@ -6,8 +6,9 @@ const HNW_BROWSE = (() => {
   const AUTO_REPORT = 'hnw-browse-auto-report';
   const AUTO_STARTED = 'hnw-browse-auto-started';
   const ALARM = 'hnw-browse';
-  const SITES = ['naver', 'dabang', 'zigbang', 'kbland', 'hogangnono', 'daangn'];
-  const LISTINGS = ['naver', 'dabang', 'zigbang', 'daangn'];
+  // 당근부동산은 대시보드 서버의 '조회하기'가 모으므로 순차 조회에서 다루지 않는다.
+  const SITES = ['naver', 'dabang', 'zigbang', 'kbland', 'hogangnono'];
+  const LISTINGS = ['naver', 'dabang', 'zigbang'];
   let serial = Promise.resolve();
   let timer;
   let timerAt = 0;
@@ -132,19 +133,6 @@ const HNW_BROWSE = (() => {
         ? /^\/home\/oneroom\/subways\/([1-9]\d*)\/items\/?$/.exec(u.pathname)?.[1] || null : null;
     } catch { return null; }
   }
-  function daangnStation(url) {
-    try {
-      const u = new URL(url);
-      return u.protocol === 'https:' && !u.port && !u.username && !u.password && u.hostname === 'realty.daangn.com'
-        ? /^\/map\/subway\/([^/]+)\/?$/.exec(u.pathname)?.[1] || null : null;
-    } catch { return null; }
-  }
-  function verifiedDaangn(job, page) {
-    const stored = job.receipt?.daangnCoverage;
-    return !job.captureGap && page?.complete === true && stored?.complete === true && typeof page.stationPoiId === 'string' && page.stationPoiId === stored.stationPoiId &&
-      page.pages === stored.pages && page.received === stored.received && Number.isSafeInteger(stored.stored) && Number.isSafeInteger(stored.excluded) &&
-      stored.stored + stored.excluded === stored.received;
-  }
   function verifiedZigbang(job, page) {
     const stationId = zigbangStation(job.url), stored = job.receipt?.zigbangCoverage;
     return stationId && !job.captureGap && page?.complete === true && stored?.complete === true &&
@@ -181,7 +169,6 @@ const HNW_BROWSE = (() => {
     const u = new URL(link.url);
     if (link.id === 'zigbang') return /\/subways\/[^/]+\/items/.test(u.pathname);
     if (link.id === 'hogangnono') return /^\/apt\/[^/]+/.test(u.pathname);
-    if (link.id === 'daangn') return /^\/map\/subway\/[^/]+/.test(u.pathname);
     return true;
   }
   function usefulCapture(c) {
@@ -192,9 +179,7 @@ const HNW_BROWSE = (() => {
       if (c.site === 'zigbang') return /\/items\/(list|subways\/[^/]+\/onerooms)$/.test(u.pathname) || u.pathname.endsWith('/common/subway/all');
       if (c.site === 'kbland') return u.pathname.endsWith('/stutCdFilter/count');
       if (c.site === 'hogangnono') return u.pathname.includes('/api/apt/');
-      // 당근은 모든 요청이 같은 /graphql 주소라 역 근처 매물 목록 응답만 고른다(로그인 사용자 정보 응답은 보내지 않는다).
-      return c.site === 'daangn' && /(^|\.)karrotmarket\.com$/.test(u.hostname) && u.pathname === '/graphql'
-        && typeof c.body === 'string' && c.body.includes('"subwayStationArticleConnection"');
+      return false;
     } catch { return false; }
   }
   async function jobsFor(areas, chosen, runId, automatic = false, naverContext = null) {
@@ -500,7 +485,6 @@ const HNW_BROWSE = (() => {
     }
     const scopedDabang = job.site === 'dabang' && job.scope?.kind === 'dabang-region';
     const stationZigbang = job.site === 'zigbang' && !!zigbangStation(job.url);
-    const stationDaangn = job.site === 'daangn' && !!daangnStation(job.url);
     const bounded = job.naverScope ? age >= 14400000 || job.actions >= 10000 : scopedDabang || stationZigbang ? age >= 1800000 || job.actions >= 2000 : age >= 120000 || job.actions >= 40;
     if (!bounded && job.naverScope && await naverNextPage(state, job)) return;
     // 마지막 스크롤/클릭 직후 이동하면 아직 도착하지 않은 목록을 잃을 수 있다.
@@ -557,16 +541,6 @@ const HNW_BROWSE = (() => {
       job.completionWaitAt ||= Date.now();
       result = { kind: 'idle', waiting: Date.now() - job.completionWaitAt < 15000 };
       job.note = '역 1km 목록의 상세정보를 확인했습니다. 서버의 매물별 저장·범위 제외 확인을 기다립니다.';
-    }
-    if (stationDaangn && result.kind === 'complete') {
-      if (verifiedDaangn(job, result.daangnCoverage)) {
-        const coverage = job.receipt.daangnCoverage;
-        await finishJob(state, 'complete', `역 근처 목록 ${coverage.pages}페이지, 매물 ${coverage.received}건을 끝까지 받았습니다. 주거용 ${coverage.stored}건을 저장하고 상가와 사무실 등 ${coverage.excluded}건은 뺐습니다.`);
-        schedule(); return;
-      }
-      job.completionWaitAt ||= Date.now();
-      result = { kind: 'idle', waiting: Date.now() - job.completionWaitAt < 15000 };
-      job.note = '역 근처 목록의 끝을 확인했습니다. 서버의 매물별 저장 확인을 기다립니다.';
     }
     if (result.kind === 'blocked') {
       await finishJob(state, 'needs-input', job.note); schedule(); return;

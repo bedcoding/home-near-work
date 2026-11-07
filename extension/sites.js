@@ -1,8 +1,8 @@
 // 확장이 켜고 끌 수 있는 부동산 사이트 목록. 백그라운드, 팝업, 사이트 안 스크립트가 같이 쓴다.
 // ready: 지도 동그라미 '봤음' 표시가 되는 곳.
 // 나머지는 켜 두면 그 사이트 화면이 받은 데이터와 화면 구조를 대시보드로 보낸다.
-// 다방, 직방, KB부동산, 호갱노노, 당근부동산은 기본으로 켜 둔다.
-// 피터팬, 집토스는 '조회하기'가 따로 모으므로 기본으로 끈다.
+// 다방, 직방, KB부동산, 호갱노노는 기본으로 켜 둔다.
+// 피터팬, 집토스는 '조회하기'가 따로 모으므로 기본으로 끈다. 당근부동산은 '조회하기'만 모으므로 목록에서 뺐다.
 // base: 그 사이트가 데이터를 받아 오는 주소(이 도메인과 그 하위 주소의 응답만 읽는다).
 const HNW_SITES = [
   { id: 'naver', name: '네이버 부동산', matches: ['https://fin.land.naver.com/*', 'https://new.land.naver.com/*'], base: 'land.naver.com', ready: true, defaultOn: true },
@@ -11,7 +11,6 @@ const HNW_SITES = [
   { id: 'zigbang', name: '직방', matches: ['https://www.zigbang.com/*'], base: 'zigbang.com', ready: false, defaultOn: true },
   { id: 'kbland', name: 'KB부동산', matches: ['https://kbland.kr/*'], base: 'kbland.kr', ready: false, defaultOn: true },
   { id: 'hogangnono', name: '호갱노노', matches: ['https://hogangnono.com/*'], base: 'hogangnono.com', ready: false, defaultOn: true },
-  { id: 'daangn', name: '당근부동산', matches: ['https://realty.daangn.com/*'], base: 'daangn.com', ready: false, defaultOn: true },
   { id: 'ziptoss', name: '집토스', matches: ['https://ziptoss.com/*'], base: 'ziptoss.com', ready: false },
 ];
 
@@ -33,7 +32,7 @@ function hnwEnabled(toggles, site) {
 }
 
 // ---------- 바로 가기 ----------
-// 지도 주소에 위치를 넘길 수 있는 곳(네이버, 피터팬, 다방, KB부동산)은 고른 지역 가운데로, 집토스와 당근부동산은 가까운 역 페이지로,
+// 지도 주소에 위치를 넘길 수 있는 곳(네이버, 피터팬, 다방, KB부동산)은 고른 지역 가운데로, 집토스는 가까운 역 페이지로,
 // 직방은 가까운 역의 직방 역 번호로, 호갱노노는 가까운 역 옆 단지 화면으로 연다(역 번호, 단지 번호는 대시보드가 역 목록에 붙여 줌).
 // 그 값을 모르면 첫 화면을 연다. 대시보드의 web/src/siteLinks.ts와 같게 유지한다.
 
@@ -53,13 +52,6 @@ function hnwBase62(n) {
  */
 function hnwNaverCenter(lat, lng) {
   return `${hnwBase62(Math.round(lng * 1e7) + 2e9)}-${hnwBase62(Math.round(lat * 1e7) + 2e9)}`;
-}
-
-/** 당근부동산 지도 범위 값(주소의 mv): '남쪽 위도,서쪽 경도,북쪽 위도,동쪽 경도,확대'. 지역 반경의 1.3배 네모. */
-function hnwDaangnView(area, zoom) {
-  const dLat = (area.radiusM * 1.3) / 111320;
-  const dLng = (area.radiusM * 1.3) / (111320 * Math.cos((area.lat * Math.PI) / 180));
-  return [area.lat - dLat, area.lng - dLng, area.lat + dLat, area.lng + dLng].map((v) => v.toFixed(5)).concat(String(zoom)).join(',');
 }
 
 /** area: { name, lat, lng, radiusM } 또는 null. stations: [{ name, lat, lng, zigbangId?, hogangnonoApt? }] */
@@ -119,12 +111,6 @@ function hnwSiteLinks(area, stations) {
       name: '호갱노노',
       url: station && station.hogangnonoApt ? `https://hogangnono.com/apt/${encodeURIComponent(station.hogangnonoApt)}` : 'https://hogangnono.com/',
       where: station && station.hogangnonoApt ? `호갱노노를 ${station.name} 옆 단지 화면으로 엽니다` : home,
-    },
-    {
-      id: 'daangn',
-      name: '당근부동산',
-      url: station ? `https://realty.daangn.com/map/subway/${encodeURIComponent(station.name.replace(/역$/, ''))}${area ? `?mv=${encodeURIComponent(hnwDaangnView(area, zoom))}` : ''}` : 'https://realty.daangn.com/',
-      where: station ? `당근부동산 ${station.name} 근처 매물 지도를 엽니다` : home,
     },
   ];
 }
