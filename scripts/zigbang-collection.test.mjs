@@ -67,23 +67,28 @@ test('station IDs fail closed on duplicates or malformed rows and detail chunks 
   assert.deepEqual(zigbangDetailChunks(ids).map((c) => c.length), [ZIGBANG_DETAIL_PAGE, ZIGBANG_DETAIL_PAGE, 1]);
 });
 
+test('each room opens its own page instead of the station list it was read from', () => {
+  const [item] = new ZigbangStationLedger().acceptDetails(details([7]), [7]);
+  assert.equal(item.listing.url, 'https://www.zigbang.com/home/oneroom/items/7');
+});
+
 test('the ledger completes only when every listed ID returns a readable detail', () => {
   const ok = new ZigbangStationLedger();
   ok.acceptList(list([1, 2]));
-  ok.acceptDetails(details([1, 2]), 'https://example.invalid/', [1, 2]);
+  ok.acceptDetails(details([1, 2]), [1, 2]);
   assert.equal(ok.result().complete, true);
   const missing = new ZigbangStationLedger();
   missing.acceptList(list([1, 2]));
-  missing.acceptDetails(details([1]), 'https://example.invalid/', [1, 2]);
+  missing.acceptDetails(details([1]), [1, 2]);
   assert.equal(missing.result().complete, false);
   assert.match(missing.result().reason, /미수신 1건/);
   const unreadable = new ZigbangStationLedger();
   unreadable.acceptList(list([1]));
-  unreadable.acceptDetails(details([1], (x) => ({ ...x, location: null })), 'https://example.invalid/', [1]);
+  unreadable.acceptDetails(details([1], (x) => ({ ...x, location: null })), [1]);
   assert.match(unreadable.result().reason, /읽기 실패 1건/);
   const unrequested = new ZigbangStationLedger();
   unrequested.acceptList(list([1]));
-  unrequested.acceptDetails(details([5]), 'https://example.invalid/', [1]);
+  unrequested.acceptDetails(details([5]), [1]);
   assert.equal(unrequested.result().complete, false);
   const none = new ZigbangStationLedger();
   assert.equal(none.result().complete, false);

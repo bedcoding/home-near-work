@@ -94,12 +94,12 @@ function receiver({ initialDabangMax = 100, skipWrites = false, noAreas = false,
     './dabang-parse.js': { parseDabangRoomList: (body) => JSON.parse(body).result ? parseDabangRoomList(body) : parsed(body) },
     './browse-scope.js': browseScope,
     './naver-parse.js': { parseNaverList: parsed },
-    './zigbang-parse.js': { parseZigbangItemRows: (body, pageUrl) => {
+    './zigbang-parse.js': { parseZigbangItemRows: (body) => {
       try {
         const rows = JSON.parse(body)?.items;
         if (Array.isArray(rows) && rows.length && rows.every((x) => x?.sourceId)) return { valid: true, items: parsed(body).items, unreadableIds: [] };
       } catch { /* Real parser supplies malformed-detail evidence. */ }
-      return parseZigbangItemRows(body, pageUrl);
+      return parseZigbangItemRows(body);
     }, parseZigbangStationIds },
     './zigbang-coverage.js': zigbangCoverage,
     './daangn-parse.js': daangnParse,

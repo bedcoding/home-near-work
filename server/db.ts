@@ -99,6 +99,12 @@ CREATE TABLE IF NOT EXISTS verdicts (
   reason TEXT,
   created_at TEXT NOT NULL
 );
+
+-- 대시보드에서 눌러 본 매물('봤음')과 마지막으로 본 때
+CREATE TABLE IF NOT EXISTS seen (
+  listing_id TEXT PRIMARY KEY,
+  seen_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS verdicts_identity ON verdicts(identity_key);
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY,
@@ -1190,7 +1196,9 @@ function purgeGoneListings(): number {
       .all(daysAgoIso(GONE_KEEP_DAYS_COURT), daysAgoIso(GONE_KEEP_DAYS)) as { id: string }[]
   ).map((r) => r.id);
   if (!ids.length) return 0;
-  const stmts = ['DELETE FROM price_history WHERE listing_id = ?', 'DELETE FROM events WHERE listing_id = ?', 'DELETE FROM listings WHERE id = ?'].map((s) => db.prepare(s));
+  const stmts = [
+    'DELETE FROM price_history WHERE listing_id = ?', 'DELETE FROM events WHERE listing_id = ?', 'DELETE FROM seen WHERE listing_id = ?', 'DELETE FROM listings WHERE id = ?',
+  ].map((s) => db.prepare(s));
   db.transaction(() => {
     for (const id of ids) for (const stmt of stmts) stmt.run(id);
   })();
@@ -1640,9 +1648,29 @@ export function unackedEvents(): EventRow[] {
   return db.prepare('SELECT * FROM events WHERE acked = 0 AND created_at >= ? ORDER BY id').all(newsSince()) as EventRow[];
 }
 
-/** 매물 하나의 변화 기록을 확인 처리한다(원본을 열거나 판정할 때). */
-export function ackEvents(listingId: string) {
-  db.prepare('UPDATE events SET acked = 1 WHERE listing_id = ?').run(listingId);
+/**
+ * 대시보드에서 눌러 본 매물(지도 표시, 카드, 원본 열기, 판정)을 '봤음'으로 남기고 그 매물의 변화 기록(신규, 가격 변동)을 확인 처리한다.
+ * 변화 기록은 '봤음' 뒤에 새로 생기면 다시 확인하지 않은 것으로 남는다.
+ * 없는 매물 번호는 건너뛴다.
+ */
+export function markSeen(ids: string[], at = nowIso()) {
+  const seen = db.prepare(
+    `INSERT INTO seen (listing_id, seen_at) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM listings WHERE id = ?)
+     ON CONFLICT(listing_id) DO UPDATE SET seen_at = excluded.seen_at`,
+  );
+  const ack = db.prepare('UPDATE events SET acked = 1 WHERE listing_id = ? AND acked = 0');
+  db.transaction(() => {
+    for (const id of ids) {
+      seen.run(id, at, id);
+      ack.run(id);
+    }
+  })();
+}
+
+/** 매물마다 대시보드에서 마지막으로 본 때 */
+export function seenTimes(): Map<string, string> {
+  const rows = db.prepare('SELECT listing_id, seen_at FROM seen').all() as { listing_id: string; seen_at: string }[];
+  return new Map(rows.map((r) => [r.listing_id, r.seen_at]));
 }
 
 export function unackedCount(): number {

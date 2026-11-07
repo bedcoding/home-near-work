@@ -21,11 +21,14 @@ export function parseZigbangStationIds(url: string, body: string): { key: string
 
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
 
+/** 직방 방 하나의 화면 주소(원본 열기). 원룸 목록에서 받은 방은 원룸과 오피스텔 모두 이 주소로 그 방이 바로 열린다. */
+export const zigbangItemPage = (id: string | number) => `https://www.zigbang.com/home/oneroom/items/${id}`;
+
 /**
  * `house/property/v1/items/list` 응답(목록에 보이는 방들의 내용) 한 줄 → 공통 형식. 금액은 만원(manage_cost만 원).
- * floor: 숫자면 층, '반지하', '지하'는 지하, '옥탑'은 옥탑. pageUrl: 이 방을 본 직방 화면(원본 열기 주소로 씀).
+ * floor: 숫자면 층, '반지하', '지하'는 지하, '옥탑'은 옥탑. url: 그 방 화면(zigbangItemPage).
  */
-function toListing(x: Record<string, unknown>, pageUrl: string): NormalizedListing | null {
+function toListing(x: Record<string, unknown>): NormalizedListing | null {
   const id = num(x.item_id);
   const loc = (x.location ?? x.random_location) as { lat?: unknown; lng?: unknown } | undefined;
   const lat = num(loc?.lat);
@@ -54,7 +57,7 @@ function toListing(x: Record<string, unknown>, pageUrl: string): NormalizedListi
   return {
     source: 'zigbang',
     sourceId: String(id),
-    url: pageUrl,
+    url: zigbangItemPage(id),
     title: typeof x.title === 'string' ? x.title : '',
     thumbnail: typeof x.images_thumbnail === 'string' ? x.images_thumbnail : null,
     lat,
@@ -82,7 +85,7 @@ function toListing(x: Record<string, unknown>, pageUrl: string): NormalizedListi
 }
 
 /** Preserve failed rows so a malformed detail response cannot prove a complete tour. */
-export function parseZigbangItemRows(body: string, pageUrl: string): {
+export function parseZigbangItemRows(body: string): {
   valid: boolean;
   items: { listing: NormalizedListing; raw: unknown }[];
   unreadableIds: string[];
@@ -94,7 +97,7 @@ export function parseZigbangItemRows(body: string, pageUrl: string): {
     const unreadableIds: string[] = [];
     for (const raw of items) {
       const row = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null;
-      const listing = row ? toListing(row, pageUrl) : null;
+      const listing = row ? toListing(row) : null;
       if (listing) parsed.push({ listing, raw });
       else {
         const id = num(row?.item_id);
@@ -108,6 +111,6 @@ export function parseZigbangItemRows(body: string, pageUrl: string): {
 }
 
 /** `house/property/v1/items/list` 응답의 방들. 모양이 다르면 빈 배열. */
-export function parseZigbangItems(body: string, pageUrl: string): { listing: NormalizedListing; raw: unknown }[] {
-  return parseZigbangItemRows(body, pageUrl).items;
+export function parseZigbangItems(body: string): { listing: NormalizedListing; raw: unknown }[] {
+  return parseZigbangItemRows(body).items;
 }

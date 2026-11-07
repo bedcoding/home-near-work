@@ -22,7 +22,7 @@ export const api = {
   siteReport: () => request<SiteReport>('GET', '/api/site-report'),
   raw: (id: string) => request<{ explain: ExplainRow[]; raw: unknown }>('GET', `/api/listings/${enc(id)}/raw`),
   setVerdict: (id: string, verdict: Verdict | null) => request('POST', `/api/listings/${enc(id)}/verdict`, { verdict }),
-  ack: (id: string) => request('POST', `/api/listings/${enc(id)}/ack`),
+  seen: (ids: string[]) => request<{ before: string; after: string }>('POST', '/api/listings/seen', { ids }),
   /** 다방 매물 하나의 지번 주소를 다방에서 받아 저장한다(카드의 '주소 보기') */
   dabangAddress: (id: string) => request<{ address: string }>('POST', `/api/listings/${enc(id)}/dabang-address`),
   /** 법원경매 물건 상세를 프로그램이 띄운 크롬 창에 연다 */

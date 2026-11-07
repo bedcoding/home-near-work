@@ -105,7 +105,7 @@ export function createZigbangCollector(deps: ZigbangCollectDeps): Collector {
             const body = await request(ZIGBANG_DETAILS_URL, `${station.name} 상세 ${index + 1}/${chunks.length}`,
               { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemIds: chunk }) });
             deps.save(ctx.runId, `${station.id}-details-${index + 1}.json`, body);
-            for (const item of ledger.acceptDetails(body, pageUrl, chunk)) {
+            for (const item of ledger.acceptDetails(body, chunk)) {
               ids.add(item.listing.sourceId);
               items.set(item.listing.sourceId, { ...item, pageUrl, screenshot: null });
             }

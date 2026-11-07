@@ -8,6 +8,7 @@ import {
 } from '../../shared/types';
 import { api } from './api';
 import { createRevisionRefresh } from './refresh';
+import { onSeen } from './seen';
 import { reloadZones, zonesNeedReload } from './redevZones';
 import { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, loadFilters, passes, saveFilters, type Filters } from './filters';
 import { dateTime, radiusText } from './format';
@@ -618,6 +619,7 @@ async function setVerdict(l: ListingView, verdict: Verdict | null) {
   l.verdict = verdict;
   l.isNew = false;
   l.priceChange = null;
+  l.seenAt = new Date().toISOString();
   triggerRef(listings);
   try {
     await api.setVerdict(l.id, verdict);
@@ -648,12 +650,31 @@ async function openCourt(l: ListingView) {
 async function openOriginal(l: ListingView) {
   if (l.source === 'courtauction') void openCourt(l);
   else window.open(originalUrl(l), '_blank', 'noopener');
-  if (hasNews(l)) {
-    await api.ack(l.id);
-    await refreshListings();
-    await refreshState();
+  await saveSeen([l]);
+}
+
+/**
+ * 눌러 본 매물을 '봤음'으로 남기고 신규와 가격 변동 표시를 끈다(지도 표시, 카드, 원본 열기).
+ * 화면에 먼저 반영하고, 서버 자료가 이것 말고 바뀐 게 없으면 수만 건짜리 매물 목록을 다시 받지 않는다.
+ */
+async function saveSeen(items: ListingView[]) {
+  const todo = items.filter((l) => !l.seenAt || hasNews(l));
+  if (!todo.length) return;
+  const at = new Date().toISOString();
+  for (const l of todo) {
+    l.seenAt = at;
+    l.isNew = false;
+    l.priceChange = null;
+  }
+  triggerRef(listings);
+  try {
+    const r = await api.seen(todo.map((l) => l.id));
+    refreshData.advance(r.before, r.after);
+  } catch {
+    // 저장하지 못했으면 다음 새로고침 때 서버에 남은 상태로 돌아간다.
   }
 }
+onSeen((items) => void saveSeen(items));
 
 /** 지도에서 역을 누르면 그 역 지역을 켜고 끈다(없는 역이면 1km로 만들어 켬). */
 async function toggleStation(s: CatalogStation) {

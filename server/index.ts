@@ -408,7 +408,7 @@ app.post<{ Params: { id: string }; Body: { verdict: Verdict | null } }>('/api/li
     return { error: 'verdict는 discard, star, meh 중 하나' };
   }
   store.setVerdict(req.params.id, verdict);
-  store.ackEvents(req.params.id);
+  store.markSeen([req.params.id]);
   return { ok: true };
 });
 
@@ -433,9 +433,19 @@ app.post<{ Params: { id: string } }>('/api/listings/:id/dabang-address', async (
   return { address: parsed.address };
 });
 
-app.post<{ Params: { id: string } }>('/api/listings/:id/ack', async (req) => {
-  store.ackEvents(req.params.id);
-  return { ok: true };
+/**
+ * 대시보드에서 눌러 본 매물(지도 표시, 카드, 원본 열기)을 '봤음'으로 남기고 신규와 가격 변동 표시를 끈다.
+ * before와 after는 바꾸기 전후의 자료 버전이다. 화면은 그 사이에 다른 변화가 없었으면 큰 매물 목록을 다시 받지 않는다.
+ */
+app.post<{ Body: { ids?: unknown } | null }>('/api/listings/seen', async (req, reply) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids) || !ids.length || ids.length > 200 || !ids.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 200)) {
+    reply.code(400);
+    return { error: 'ids는 매물 번호 목록(1개에서 200개)이어야 합니다.' };
+  }
+  const before = store.dataRevision();
+  store.markSeen(ids as string[]);
+  return { before, after: store.dataRevision() };
 });
 
 app.get('/api/regions', async () => ({ regions: regionCatalog() }));

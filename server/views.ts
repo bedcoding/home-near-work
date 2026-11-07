@@ -4,6 +4,7 @@ import { looksSimilar } from './identity.js';
 import { parseLot, pnuOf } from './lots.js';
 import { zonesAt } from './redev-zones.js';
 import { compareTrades, type TradeMatch } from './trade-compare.js';
+import { zigbangItemPage } from './zigbang-parse.js';
 import { manwon } from '../shared/format.js';
 import { RUN_FILES_PURGED_KEY, screenshotPurged } from './run-files.js';
 import { kindOf } from '../shared/kinds.js';
@@ -411,6 +412,7 @@ export function buildListingViews(): ListingView[] {
   const zones = store.zoneChecks();
   const points = store.pointParcels();
   const verdicts = new Map(store.allVerdicts().map((v) => [v.listing_id, v]));
+  const seen = store.seenTimes();
   const events = store.unackedEvents();
   const newIds = new Set(events.filter((e) => e.type === 'new').map((e) => e.listing_id));
   const changes = new Map<string, ListingView['priceChange']>();
@@ -424,10 +426,12 @@ export function buildListingViews(): ListingView[] {
   // 30일 지나 폴더를 지운 조회의 스크린샷은 '출처 보기'를 숨긴다.
   const purgedThrough = Number(store.getSetting(RUN_FILES_PURGED_KEY) ?? 0) || 0;
   // 다방은 목록에 주소가 없어 '주소 보기'로 받아 둔 지번 주소를 채운다(사이트가 준 주소가 있으면 그것을 쓴다).
+  // 직방은 예전에 목록을 받은 화면 주소를 원본 주소로 저장했다. 다시 받지 않은 매물도 그 방 화면이 열리게 번호로 만든다.
   const parsed = rows.map((r) => {
     const data = JSON.parse(r.data) as NormalizedListing;
     const address = !data.address && r.source === 'dabang' ? dabangAddresses.get(r.id) : undefined;
-    return { row: r, data: address ? { ...data, address } : data };
+    const url = r.source === 'zigbang' ? zigbangItemPage(r.source_id) : undefined;
+    return { row: r, data: address || url ? { ...data, ...(address ? { address } : {}), ...(url ? { url } : {}) } : data };
   });
   const discarded = parsed.filter(({ row }) => verdicts.get(row.id)?.verdict === 'discard');
 
@@ -448,6 +452,7 @@ export function buildListingViews(): ListingView[] {
       verdictReason: reason,
       isNew: newIds.has(row.id),
       priceChange: changes.get(row.id) ?? null,
+      seenAt: seen.get(row.id) ?? null,
       relistedOf: reason?.startsWith('relisted:') ? reason.slice('relisted:'.length) : null,
       similarToDiscarded: !verdict && discarded.some((d) => d.row.id !== row.id && looksSimilar(data, d.data)),
       seenRef: (() => {

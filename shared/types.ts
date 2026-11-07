@@ -489,6 +489,8 @@ export interface ListingView extends NormalizedListing {
   /** 확인하지 않은 '신규' 표시가 있다. */
   isNew: boolean;
   priceChange: { type: PriceChangeType; before: PriceOption[]; after: PriceOption[]; at: string } | null;
+  /** 이 대시보드에서 지도 표시나 카드를 눌러(또는 원본을 열어) 마지막으로 본 때. 안 봤으면 null. */
+  seenAt?: string | null;
   /** 버림한 매물과 같은 집으로 판정돼 자동으로 숨긴 경우, 원래 매물 id. */
   relistedOf: string | null;
   /** 버림한 매물과 위치, 층, 면적이 비슷하다. */

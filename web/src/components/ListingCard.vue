@@ -17,6 +17,7 @@ import { convertedRent, loanMonthly } from '../rentRate';
 import { ledgerChips } from '../ledger';
 import CountTooltip from './CountTooltip.vue';
 import { dabangAddressBusy, dabangAddressErrors, dabangAddresses, loadDabangAddress } from '../dabangAddress';
+import { looksSeen, markSeen } from '../seen';
 
 const props = defineProps<{
   listing: ListingView;
@@ -182,14 +183,17 @@ const extras = computed(() => {
   return out;
 });
 
-/** 네이버 매물은 크롬 확장으로 목록을 볼 때 들어오므로, 마지막으로 목록에 뜬 시각을 '봤음'으로 보여 준다. */
+/**
+ * 네이버 매물은 크롬 확장으로 목록을 볼 때 들어오므로, 마지막으로 목록에 뜬 시각을 '네이버에서 N일 전 봄'으로 보여 준다.
+ * 대시보드에서 눌러 본 '봤음'(seenAt)과는 따로다.
+ */
 const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenAt : null));
 </script>
 
 <template>
   <article
     class="card" :class="{ selected, discarded: l.verdict === 'discard', meh: l.verdict === 'meh', gone: l.status === 'gone', 'no-thumb': noThumb }"
-    @click="emit('select')"
+    @click="emit('select'), markSeen([l])"
   >
     <div v-if="!noThumb" class="thumb" :style="l.thumbnail ? { backgroundImage: `url(${JSON.stringify(l.thumbnail)})` } : undefined">
       <span v-if="!l.thumbnail" class="muted">사진 없음</span>
@@ -251,6 +255,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
         </CountTooltip>
         <span v-if="selected" class="selection-label">✓ 선택됨</span>
         <span v-if="l.isNew" class="chip chip-new">신규</span>
+        <span v-if="looksSeen(l)" class="chip chip-viewed" :title="`이 대시보드에서 ${dateTime(l.seenAt!)}에 눌러 봄`">봤음</span>
         <template v-if="changeText">
           <span class="chip" :class="changeText.tone">{{ changeText.label }}</span>
           <span class="change num">{{ changeText.detail }}</span>
@@ -265,7 +270,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
         <span
           v-if="seenNaver" class="chip chip-seen"
           :title="`네이버 지도에서 이 매물이 든 동그라미를 눌러 목록을 본 마지막 시각: ${dateTime(seenNaver)} (크롬 확장이 기록)`"
-        >{{ ago(seenNaver) }} 봤음</span>
+        >네이버에서 {{ ago(seenNaver) }} 봄</span>
         <span v-if="!room" class="chip chip-kind" :class="kind" :title="l.buildingType ?? undefined">{{ KIND_LABEL[kind] }}</span>
         <span v-if="roomChip" class="chip chip-room">{{ roomChip }}</span>
         <span v-if="isNoOption(l)" class="chip chip-seen" title="사이트가 준 옵션 목록이 비어 있거나 글에 '무옵션'이라고 적힌 집">무옵션</span>

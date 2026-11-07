@@ -82,6 +82,21 @@ test('listings unseen for 14 days turn gone on sites that cannot confirm removal
   assert.equal(store.getListing('peterpanz:ancient'), undefined);
 });
 
+test('seen marks stay per listing, clear its news, skip unknown ids and leave with purged listings', t => {
+  const store = memoryStore(t);
+  const runId = store.createRun(false);
+  const old = new Date(Date.now() - 40 * 864e5).toISOString();
+  store.insertListing('ziptoss:1', { source: 'ziptoss', sourceId: '1', lat: 0, lng: 0, prices: [] }, 'k1', 'sig', runId, { runId }, null, old);
+  store.addEvent(runId, 'ziptoss:1', 'new');
+  store.markSeen(['ziptoss:1', 'ziptoss:missing'], '2026-01-02T00:00:00.000Z');
+  assert.deepEqual(JSON.parse(JSON.stringify([...store.seenTimes()])), [['ziptoss:1', '2026-01-02T00:00:00.000Z']]);
+  assert.equal(store.db.prepare("SELECT acked FROM events WHERE listing_id = 'ziptoss:1'").get().acked, 1, 'seeing it turns off its new mark');
+  store.markSeen(['ziptoss:1'], '2026-01-03T00:00:00.000Z');
+  assert.equal(store.seenTimes().get('ziptoss:1'), '2026-01-03T00:00:00.000Z', 'seeing it again keeps the latest time');
+  store.tidyListings();
+  assert.equal(store.seenTimes().size, 0, 'a purged listing takes its seen mark with it');
+});
+
 test('parcel coordinates round-trip and changed PNU clears obsolete zone results', t => {
   const store = memoryStore(t);
   const at = '2026-01-01T00:00:00.000Z';

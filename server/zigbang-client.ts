@@ -109,8 +109,8 @@ export class ZigbangStationLedger {
     return ids;
   }
 
-  acceptDetails(body: string, pageUrl: string, requested: number[]) {
-    const parsed = parseZigbangItemRows(body, pageUrl);
+  acceptDetails(body: string, requested: number[]) {
+    const parsed = parseZigbangItemRows(body);
     if (!parsed.valid) { this.fail('상세 응답을 읽지 못함'); return parsed.items; }
     this.pages += 1;
     const asked = new Set(requested.map(String));

@@ -426,7 +426,7 @@ function processZigbang(): { stations: { subwayId: string; pageUrl: string | nul
     const s = parseZigbangStationIds(r.url, r.body);
     if (s) latest.set(s.key, { subwayId: s.subwayId, ids: s.ids, pageUrl: r.pageUrl });
     else if (/\/items\/list$/.test(endpoint)) {
-      const parsed = parseZigbangItemRows(r.body, r.pageUrl ?? 'https://www.zigbang.com/');
+      const parsed = parseZigbangItemRows(r.body);
       if (browseZigbangScope) recordZigbangDetails(browseZigbangScope, parsed);
       for (const i of parsed.items) {
         details.set(i.listing.sourceId, { listing: i.listing, raw: i.raw, pageUrl: r.pageUrl, screenshot: null });

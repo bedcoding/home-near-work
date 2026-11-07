@@ -64,6 +64,8 @@ a { color: var(--accent); }
 .chip-warn { background: #fff4d6; color: #8a5a00; }
 .chip-danger { background: #c92a2a; color: #fff; }
 .chip-seen { background: var(--seen-soft); color: var(--seen); }
+/* 대시보드에서 눌러 본 매물: 지도의 '본 매물' 표시처럼 흰 바탕에 테두리만 */
+.chip-viewed { background: var(--surface); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
 .chip-kind { background: var(--ink); color: #fff; }
 .chip-kind.officetel { background: #5b3cc4; }
 .chip-kind.villa { background: #0f7a6c; }

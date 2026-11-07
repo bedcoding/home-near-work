@@ -9,6 +9,7 @@ import { KIND_LABEL, kindOf } from '../kinds';
 import { ledgerChips } from '../ledger';
 import { isRoomStay, roomRange, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
+import { looksSeen, markSeen } from '../seen';
 import { distanceText, manwon, perPyeong, priceText, pyeong } from '../format';
 import { addWalkPin, ensureWalk, markDistances, moveWalkPin, pinCount, pinMax, removeWalkPin, renameWalkPin, setPinKind, walkPins, walkState, walkTimes } from '../walk';
 import { WALK_NAME_MAX, type PinKind } from '../../../shared/walk';
@@ -85,9 +86,15 @@ const areaSample = computed(() => {
 });
 /** 마지막으로 그린 가격 표시 단계(0 동그라미만, 1 펼친 목록만 가격, 2 모두 가격) */
 let drawnPriceLevel = -1;
+/** 그린 표시와 그 묶음. base는 동그라미 표시의 원래 모양(고른 표시를 풀 때 되돌린다). */
+interface Drawn {
+  marker: L.Layer;
+  group: Group;
+  base?: { radius: number; color: string; weight: number };
+}
 /** 매물 번호 → 그 매물이 든 표시(같은 자리 매물은 한 표시로 묶는다) */
-const markerOf = new Map<string, { marker: L.Layer; group: Group }>();
-let selected: { marker: L.Layer; group: Group } | null = null;
+const markerOf = new Map<string, Drawn>();
+let selected: Drawn | null = null;
 let resize: ResizeObserver | null = null;
 let fitPending = false;
 let panPending = false;
@@ -125,6 +132,14 @@ const MUTED_PRICE = '#6f7a89';
 /** 묶음에 별로가 아닌 신규 매물이 있으면 표시 오른쪽 위에 NEW 딱지를 붙인다. */
 const hasNew = (items: ListingView[]) => items.some((l) => l.isNew && l.verdict !== 'meh');
 const NEW_BADGE = '<em class="nw">NEW</em>';
+/** 묶음을 '본 매물' 모양으로 그릴지: 별로를 뺀 매물을 모두 대시보드에서 봤고, 그 뒤로 새 소식이 없고 관심으로 고르지도 않았을 때 */
+const groupSeen = (all: ListingView[]) => {
+  const items = all.filter((l) => l.verdict !== 'meh');
+  return items.length > 0 && items.every(looksSeen);
+};
+/** 글자 상자 색: 안 본 매물은 색으로 칠하고, 본 매물은 흰 바탕에 그 색 테두리와 글자 */
+const boxStyle = (c: string, seen: boolean) => (seen ? `background:#fff;color:${c};border-color:${c}` : `background:${c}`);
+const SEEN_MARK = '<i class="ck">✓</i>';
 
 const positions = computed(() => new Set(props.background.filter((l) => l.lat != null).map((l) => `${l.lat!.toFixed(5)},${l.lng!.toFixed(5)}`)).size);
 
@@ -145,8 +160,12 @@ function groups(): Group[] {
   return [...all.values()].sort((a, b) => Number(a.strong) - Number(b.strong));
 }
 
+/** 올리면 보이는 글: 매물마다 가격, 제목 앞부분, 끝에 괄호로 사이트(대시보드에서 봤으면 '봤음'도) */
 function tooltip(items: ListingView[]) {
-  const lines = items.slice(0, 6).map((l) => `${esc(pricesText(l))}${l.title ? `, ${esc(l.title.slice(0, 24))}` : ''}`);
+  const lines = items.slice(0, 6).map((l) => {
+    const site = `${SOURCE_LABEL[l.source]}${looksSeen(l) ? ', 봤음' : ''}`;
+    return `${esc(pricesText(l))}${l.title ? `, ${esc(l.title.slice(0, 24))}` : ''} <span class="tip-site">(${esc(site)})</span>`;
+  });
   if (items.length > 6) lines.push(`외 ${items.length - 6}건`);
   return (items.length > 1 ? `<strong>이 자리 ${items.length}건</strong><br>` : '') + lines.join('<br>');
 }
@@ -214,6 +233,7 @@ function popup(g: Group) {
     if (l.priceChange) top.appendChild(line('mp-tag down', '가격 변동'));
     if (l.verdict === 'star') top.appendChild(line('mp-tag star', '관심'));
     if (l.verdict === 'meh') top.appendChild(line('mp-tag', '별로'));
+    if (looksSeen(l)) top.appendChild(line('mp-tag seen', '봤음'));
     for (const c of ledgerChips(l)) {
       const tag = line(`mp-tag ${c.tone}`, c.label);
       tag.title = c.tip;
@@ -486,6 +506,8 @@ function drawDots(fit: boolean) {
   for (const g of groups()) {
     const muted = dim && !g.strong;
     const c = muted ? MUTED : groupColor(g.items);
+    // 대시보드에서 다 본 자리는 흰 바탕에 색 테두리로 그려, 아직 안 본 자리(색을 칠한 표시)와 구분한다.
+    const seen = groupSeen(g.items);
     // 펼친 가격대 밖 매물(회색)도 필터를 통과한 매물이라, 확대하면 가격을 같이 쓴다(PRICE_ZOOM.normal부터, 펼친 매물은 strong부터).
     const price = (g.strong ? drawnPriceLevel >= 1 : drawnPriceLevel >= 2) ? cheapestPrice(g.items) : null;
     // 신규가 든 표시는 빨갛게 칠하고 다른 표시 위에 그린다. NEW 딱지는 겹쳐서 지도를 가리지 않게 가격을 쓴 표시와
@@ -494,12 +516,15 @@ function drawDots(fit: boolean) {
     const badge = fresh && (price || drawnPriceLevel >= 2) ? NEW_BADGE : '';
     const zIndexOffset = (g.strong ? 500 : 0) + (fresh ? 300 : 0);
     let marker: L.Layer;
+    let base: Drawn['base'];
     if (price) {
       // 확대해 보면 가격을 쓴 표시(같은 자리 여러 건이면 가장 싼 것과 건수)
       marker = L.marker([g.lat, g.lng], {
         icon: L.divIcon({
-          className: `price${g.strong ? ' strong' : ''}${muted ? ' dim' : ''}`,
-          html: `<span style="background:${muted ? MUTED_PRICE : c}">${esc(mapPrice(price))}${g.items.length > 1 ? `<b>${g.items.length}</b>` : ''}${badge}</span>`,
+          className: `price${g.strong ? ' strong' : ''}${muted ? ' dim' : ''}${seen ? ' seen' : ''}`,
+          html:
+            `<span style="${boxStyle(muted ? MUTED_PRICE : c, seen)}">${seen ? SEEN_MARK : ''}${esc(mapPrice(price))}` +
+            `${g.items.length > 1 ? `<b>${g.items.length}</b>` : ''}${badge}</span>`,
           iconSize: [0, 0],
           iconAnchor: [0, 0],
           tooltipAnchor: [0, -10],
@@ -522,20 +547,16 @@ function drawDots(fit: boolean) {
       });
     } else if (g.items.length === 1) {
       // 펼친 가격대 밖 매물(회색)도 그 일대 시세를 볼 때 쓰므로, 색만 회색으로 두고 크기는 보통 점과 같게 그린다.
-      marker = L.circleMarker([g.lat, g.lng], {
-        radius: g.strong ? 7 : 5,
-        color: '#fff',
-        weight: g.strong ? 2 : dim ? 1.5 : 1,
-        fillColor: c,
-        fillOpacity: g.strong ? 0.95 : 0.8,
-      });
+      // 본 매물은 속이 흰 동그라미(색 테두리)로 그린다.
+      base = { radius: g.strong ? 7 : 5, color: seen ? c : '#fff', weight: seen || g.strong ? 2 : dim ? 1.5 : 1 };
+      marker = L.circleMarker([g.lat, g.lng], { ...base, fillColor: seen ? '#fff' : c, fillOpacity: seen ? 1 : g.strong ? 0.95 : 0.8 });
     } else {
       // 같은 자리 여러 건: 숫자 동그라미
       const size = g.strong ? 26 : dim ? 18 : 20;
       marker = L.marker([g.lat, g.lng], {
         icon: L.divIcon({
-          className: `stack${g.strong ? ' strong' : ''}${dim && !g.strong ? ' dim' : ''}`,
-          html: `<span style="background:${c}">${g.items.length}${badge}</span>`,
+          className: `stack${g.strong ? ' strong' : ''}${dim && !g.strong ? ' dim' : ''}${seen ? ' seen' : ''}`,
+          html: `<span style="${boxStyle(c, seen)}">${g.items.length}${badge}</span>`,
           iconSize: [size, size],
           iconAnchor: [size / 2, size / 2],
         }),
@@ -544,13 +565,14 @@ function drawDots(fit: boolean) {
       });
     }
     (marker as L.Marker).bindTooltip(tooltip(g.items), { direction: 'top' });
-    // 누르면 바로 넘어가지 않고 정보 창을 먼저 띄운다.
+    // 누르면 바로 넘어가지 않고 정보 창을 먼저 띄우고, 창에 보인 매물(12건까지)을 '봤음'으로 남긴다.
     marker.on('click', () => {
       popup(g);
+      markSeen(g.items.slice(0, 12));
       if (props.listMode) emit('reveal', g.items);
     });
     marker.addTo(dots);
-    for (const l of g.items) markerOf.set(l.id, { marker, group: g });
+    for (const l of g.items) markerOf.set(l.id, { marker, group: g, base });
   }
   highlight(false);
   if (fit) fitTo(focusPoints());
@@ -588,10 +610,11 @@ function syncVisibleSize() {
   }
 }
 
-function setSelected(s: { marker: L.Layer; group: Group }, on: boolean) {
+function setSelected(s: Drawn, on: boolean) {
   if (s.marker instanceof L.CircleMarker) {
-    s.marker.setStyle(on ? { color: '#16202e', weight: 3 } : { color: '#fff', weight: s.group.strong ? 2 : 1 });
-    s.marker.setRadius(on ? 9 : s.group.strong ? 7 : props.listings.length ? 3.5 : 5);
+    const base = s.base ?? { radius: s.group.strong ? 7 : 5, color: '#fff', weight: s.group.strong ? 2 : 1 };
+    s.marker.setStyle(on ? { color: '#16202e', weight: 3 } : { color: base.color, weight: base.weight });
+    s.marker.setRadius(on ? 9 : base.radius);
     if (on) s.marker.bringToFront();
   } else {
     (s.marker as L.Marker).getElement()?.classList.toggle('sel', on);
@@ -731,13 +754,14 @@ onBeforeUnmount(() => {
       >{{ big ? '작게 보기 (Esc)' : '크게 보기' }}</button>
       <p v-if="pinning" class="pick-note">{{ pinning === 'mark' ? '표시 핀' : '거리 핀' }}을 꽂을 곳을 누르세요 (Esc 취소)</p>
     </div>
-    <!-- 지도 아래: 점 색 네 가지만 늘 보이고, 나머지 설명(숫자, 가격, 구역, 역, 핀, 정비구역)은 '지도 보는 법' 모달의 탭에 둔다. -->
+    <!-- 지도 아래: 점 색 네 가지와 '봤음'만 늘 보이고, 나머지 설명(숫자, 가격, 구역, 역, 핀, 정비구역)은 '지도 보는 법' 모달의 탭에 둔다. -->
     <div class="under">
       <div class="legend" aria-label="점 색">
         <span><i style="background:#e5484d"></i>신규</span>
         <span><i style="background:#12825e"></i>가격 변동</span>
         <span><i style="background:#c48a0a"></i>관심</span>
         <span><i style="background:#1f5fbf"></i>나머지</span>
+        <span title="이 대시보드에서 눌러 본 매물"><i class="seen-dot"></i>봤음</span>
       </div>
       <InfoModal heading="지도 보는 법" label="지도 보는 법" storage-key="hnw-map-info-tab" :tabs="MAP_TABS" title="점 색, 숫자와 가격, 구역과 역, 핀, 정비구역">
         <template #marks>
@@ -760,6 +784,12 @@ onBeforeUnmount(() => {
             <dd>
               <b>가격</b>: 확대 {{ PRICE_ZOOM.normal }}부터(가격대를 펼쳤으면 그 매물은 {{ PRICE_ZOOM.strong }}부터) 동그라미 대신 가격을 씁니다.
               월세는 보증금/월세(만원), 전세는 '전 1.5억'처럼 쓰고, 같은 자리에 여러 건이면 가장 싼 것과 건수를 씁니다.
+            </dd>
+            <dt><b class="price-sample seen-sample">✓ 500/40</b></dt>
+            <dd>
+              <b>봤음</b>: 이 대시보드에서 본 매물은 흰 바탕에 색 테두리로 바뀌고 가격 앞에 ✓가 붙습니다. 동그라미는 속이 하얘집니다.
+              지도 표시를 누르면 창에 보인 매물을, 카드를 누르거나 원본을 열면 그 매물을 본 것으로 치고, 신규 표시도 꺼집니다.
+              본 뒤에 가격이 바뀌면 다시 색으로 칠해집니다.
             </dd>
           </dl>
         </template>
@@ -960,6 +990,14 @@ onBeforeUnmount(() => {
 :deep(.price.strong span) { padding: 2px 6px; font-size: 12px; border-width: 2px; }
 :deep(.price.sel span) { outline: 3px solid #16202e; outline-offset: 1px; }
 .price-sample { margin-right: 4px; background: #1f5fbf; box-shadow: 0 0 0 1px #1f5fbf; }
+/* 대시보드에서 본 매물: 흰 바탕에 색 테두리와 글자(색은 표시마다 style로 준다), 가격 앞에 ✓ */
+:deep(.price.seen span), :deep(.stack.seen span) { box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
+:deep(.price.seen span b) { background: #e9edf2; }
+:deep(.price .ck) { font-style: normal; }
+.price-sample.seen-sample { background: #fff; color: #1f5fbf; border-color: #1f5fbf; box-shadow: none; }
+.legend i.seen-dot { background: #fff; box-shadow: inset 0 0 0 2px #1f5fbf; }
+:deep(.mp-tag.seen) { background: var(--surface); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
+:deep(.tip-site) { color: var(--muted); }
 /* 신규 딱지: 표시 오른쪽 위 모서리에 걸친다. 누르면 아래 표시가 눌리게 한다. */
 :deep(.nw), .nw-sample {
   padding: 0 3px; border-radius: 4px; border: 1px solid #e5484d; background: #fff;
