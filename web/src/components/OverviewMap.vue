@@ -16,6 +16,7 @@ import {
   checkZonesNow, loadZones, uploadZones, ZONE_COLOR, ZONE_GROUPS, ZONE_SOURCE_URL, zones, zonesBusy, zonesChecking, zonesError, zonesMessage, zonesOn,
 } from '../redevZones';
 import type { RedevZoneFeature } from '../../../shared/types';
+import InfoModal from './InfoModal.vue';
 
 // 매물 탭 오른쪽 지도와 경매 탭, 고시원과 쉐어 탭의 지도가 같이 쓴다.
 // - 매물(같은 자리는 숫자 동그라미로 묶음)을 누르면 정보 창이 뜨고, 거기서 '목록에서 보기'나 '원본 열기'를 누른다.
@@ -69,6 +70,19 @@ const stations = ref<CatalogStation[]>([]);
 const STATION_MIN_ZOOM = 12;
 /** 이 확대부터 매물 표시에 가격을 쓴다(strong은 펼친 목록의 매물, normal은 펼친 목록이 없을 때 매물). 멀리서는 겹쳐서 동그라미로 둔다. */
 const PRICE_ZOOM = { strong: 14, normal: 15 };
+/** 지도 아래 '지도 보는 법' 모달의 탭 */
+const MAP_TABS = [
+  { id: 'marks', label: '매물 표시' },
+  { id: 'areas', label: '구역과 역' },
+  { id: 'pins', label: '핀' },
+  { id: 'zones', label: '정비구역' },
+];
+/** 모달의 '색칠한 구역' 견본: 켜 둔 첫 구의 색(없으면 보라) */
+const areaSample = computed(() => {
+  const r = props.areas.find((a) => a.region)?.region;
+  const c = r ? regionColor(r.code) : '#7c3aed';
+  return { borderColor: c, background: `${c}1f` };
+});
 /** 마지막으로 그린 가격 표시 단계(0 동그라미만, 1 펼친 목록만 가격, 2 모두 가격) */
 let drawnPriceLevel = -1;
 /** 매물 번호 → 그 매물이 든 표시(같은 자리 매물은 한 표시로 묶는다) */
@@ -87,6 +101,16 @@ interface Group {
 
 const round6 = (v: number) => Math.round(v * 1e6) / 1e6;
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+/** 구 경계 출처는 범례 대신 지도 오른쪽 아래 출처 칸에 붙인다(구 경계를 그릴 때만). */
+const BOUNDARY_CREDIT =
+  `구 경계 <a href="${regionBoundaries.metadata.source}" target="_blank" rel="noopener" title="${esc(regionBoundaries.metadata.attribution)}">SGIS, admdongkor</a> ${regionBoundaries.metadata.license}`;
+let boundaryCredit = false;
+function setBoundaryCredit(on: boolean) {
+  if (!map || on === boundaryCredit) return;
+  if (on) map.attributionControl.addAttribution(BOUNDARY_CREDIT);
+  else map.attributionControl.removeAttribution(BOUNDARY_CREDIT);
+  boundaryCredit = on;
+}
 const MEH = '#aab2bd';
 const color = (l: ListingView) => (l.verdict === 'star' ? '#c48a0a' : l.verdict === 'meh' ? MEH : l.isNew ? '#e5484d' : l.priceChange ? '#12825e' : '#1f5fbf');
 /** 묶음 색은 가장 눈여겨볼 매물을 따른다(신규 → 가격 변동 → 관심 → 나머지, 모두 별로면 회색). 별로인 매물은 색을 정할 때 뺀다. */
@@ -414,13 +438,14 @@ function drawBase() {
         drawn.add(code);
         const color = regionColor(code);
         const layer = L.geoJSON(feature, { style: { color, fillColor: color, weight: 2.5, fillOpacity: 0.12 } });
-        layer.bindTooltip(`${esc(a.region.sigungu)} · ${a.region.kind === 'gu' ? '선택한 구 경계' : '참고용 구 경계 (동 경계 아님)'}`, { permanent: labels, direction: 'center', className: 'area-label' }).addTo(base);
+        // 구 이름은 범례 대신 구역 가운데에 붙인다(지역이 많으면 마우스를 올릴 때만).
+        layer.bindTooltip(`${esc(a.region.sigungu)}${a.region.kind === 'gu' ? '' : ' (참고용 구 경계)'}`, { permanent: labels, direction: 'center', className: 'area-label' }).addTo(base);
       }
       continue;
     }
     const alarm = a.purpose === 'alert';
     const circle = L.circle([a.lat, a.lng], { radius: a.radiusM, color: alarm ? '#087f5b' : '#16202e', weight: alarm ? 2.5 : 1.5, fillOpacity: alarm ? 0.045 : 0.03, dashArray: '6 6', interactive: false });
-    circle.bindTooltip(alarm ? `${esc(a.name)} · 알림 반경 ${distanceText(a.radiusM)}` : a.name, { permanent: labels && !alarm, direction: 'top', className: 'area-label' });
+    circle.bindTooltip(alarm ? `${esc(a.name)} 알림 반경 ${distanceText(a.radiusM)}` : a.name, { permanent: labels && !alarm, direction: 'top', className: 'area-label' });
     circle.addTo(base);
     if (!stations.value.length || stationNames.has(a.name)) continue;
     L.marker([a.lat, a.lng], { icon: L.divIcon({ className: 'pick-pin', html: '<span></span>', iconSize: [16, 16], iconAnchor: [8, 8] }), keyboard: false, zIndexOffset: 800 })
@@ -428,6 +453,7 @@ function drawBase() {
       .on('click', () => emit('area', a))
       .addTo(base);
   }
+  setBoundaryCredit(drawn.size > 0);
 }
 
 function fitTo(points: L.LatLng[]) {
@@ -491,16 +517,17 @@ function drawDots(fit: boolean) {
         zIndexOffset,
       });
     } else if (g.items.length === 1) {
+      // 펼친 가격대 밖 매물(회색)도 그 일대 시세를 볼 때 쓰므로, 색만 회색으로 두고 크기는 보통 점과 같게 그린다.
       marker = L.circleMarker([g.lat, g.lng], {
-        radius: g.strong ? 7 : dim ? 3.5 : 5,
+        radius: g.strong ? 7 : 5,
         color: '#fff',
-        weight: g.strong ? 2 : 1,
+        weight: g.strong ? 2 : dim ? 1.5 : 1,
         fillColor: c,
-        fillOpacity: g.strong ? 0.95 : dim ? 0.5 : 0.8,
+        fillOpacity: g.strong ? 0.95 : 0.8,
       });
     } else {
       // 같은 자리 여러 건: 숫자 동그라미
-      const size = g.strong ? 26 : dim ? 16 : 20;
+      const size = g.strong ? 26 : dim ? 18 : 20;
       marker = L.marker([g.lat, g.lng], {
         icon: L.divIcon({
           className: `stack${g.strong ? ' strong' : ''}${dim && !g.strong ? ' dim' : ''}`,
@@ -574,7 +601,8 @@ function onZoom() {
 }
 
 function onKey(e: KeyboardEvent) {
-  if (e.key !== 'Escape') return;
+  // 설명 모달이 떠 있으면 Esc는 모달만 닫는다.
+  if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
   if (pinning.value) pinning.value = null;
   else if (big.value) big.value = false;
 }
@@ -699,36 +727,94 @@ onBeforeUnmount(() => {
       >{{ big ? '작게 보기 (Esc)' : '크게 보기' }}</button>
       <p v-if="pinning" class="pick-note">{{ pinning === 'mark' ? '표시 핀' : '거리 핀' }}을 꽂을 곳을 누르세요 (Esc 취소)</p>
     </div>
-    <div class="legend">
-      <span :title="`새로 들어온 매물이 있는 자리는 빨간색으로 칠하고, 확대해서 가격이 보이면 오른쪽 위에 NEW 딱지를 붙입니다`"><i style="background:#e5484d"></i>신규<em class="nw-sample">NEW</em></span>
-      <span><i style="background:#12825e"></i>가격 변동</span>
-      <span><i style="background:#c48a0a"></i>관심</span>
-      <span><i style="background:#1f5fbf"></i>나머지</span>
-      <span><b class="stack-sample">3</b>같은 건물 매물 수</span>
-      <span :title="`확대 ${PRICE_ZOOM.normal}부터(가격대를 펼쳤으면 그 매물은 ${PRICE_ZOOM.strong}부터) 동그라미 대신 가격을 씁니다. 월세는 보증금/월세(만원), 전세는 '전 1.5억'처럼, 같은 자리 여러 건은 가장 싼 것과 건수`"><b class="price-sample">500/40</b>확대하면 가격</span>
-      <span v-for="a in areas.filter(a => a.region)" :key="a.id"><i :style="{ background: regionColor(a.region!.code) }"></i>{{ a.region!.sigungu }}{{ a.region!.kind === 'dong' ? ' (참고용 구 경계)' : ' 경계' }}</span>
-      <span v-if="areas.some(a => a.region)" :title="regionBoundaries.metadata.attribution">구 경계 {{ regionBoundaries.metadata.date }} · <a href="https://github.com/vuski/admdongkor" target="_blank" rel="noopener">SGIS / admdongkor</a> · CC BY 4.0</span>
-      <span v-if="areas.some(a => a.purpose === 'alert')"><i style="background:transparent;border:2px dashed #087f5b"></i>초록 점선: 알림 구역</span>
-      <span v-for="a in areas.filter(a => a.purpose === 'alert')" :key="`alert-${a.id}`">{{ a.name }} {{ distanceText(a.radiusM) }}</span>
-      <span><i class="st-sample"></i>역: 누르면 이 역 알림 켜고 끄기</span>
-      <span v-if="pinCount('walk')"><b class="pin-sample">핀</b>거리 핀</span>
-      <span v-if="pinCount('mark')"><b class="pin-sample mark">핀</b>표시 핀</span>
-      <span v-if="walkPins.length">핀: 끌어서 옮기기, 누르면 이름과 종류, 빼기</span>
-      <template v-if="zonesOn && zones?.count">
-        <span v-for="g in ZONE_GROUPS" :key="g.id"><i class="zone-sample" :style="{ background: `${g.color}33`, borderColor: g.color }"></i>{{ g.name }}</span>
-        <span
-          class="zone-src"
-          :title="[
-            `서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보'(OA-22712)${zones.fileName ? `, 파일 ${zones.fileName}` : ''}${zones.seq ? ` (${zones.seq}번 파일)` : ''}.`,
-            `준공, 입주중, 후보지철회 ${zones.skipped.done}곳, 역세권이나 도시개발 같은 다른 사업 ${zones.skipped.other}곳은 뺐습니다. 점선 테두리는 넓은 구역(재정비촉진지구, 모아타운, 존치관리구역)입니다.`,
-            `새 파일은 조회할 때 7일마다 확인합니다${zones.check ? `(마지막 ${monthDay(zones.check.at)}: ${zones.check.text})` : ''}.`,
-          ].join('\n')"
-        >
-          정비구역 {{ zones.count.toLocaleString('ko-KR') }}곳, 서울시 {{ zones.fileDate?.replace(/-/g, '.') ?? '' }} 기준
-        </span>
-      </template>
-    </div>
-    <div class="bar">
+    <!-- 지도 아래: 점 색 네 가지만 늘 보이고, 나머지 설명(숫자, 가격, 구역, 역, 핀, 정비구역)은 '지도 보는 법' 모달의 탭에 둔다. -->
+    <div class="under">
+      <div class="legend" aria-label="점 색">
+        <span><i style="background:#e5484d"></i>신규</span>
+        <span><i style="background:#12825e"></i>가격 변동</span>
+        <span><i style="background:#c48a0a"></i>관심</span>
+        <span><i style="background:#1f5fbf"></i>나머지</span>
+      </div>
+      <InfoModal heading="지도 보는 법" label="지도 보는 법" storage-key="hnw-map-info-tab" :tabs="MAP_TABS" title="점 색, 숫자와 가격, 구역과 역, 핀, 정비구역">
+        <template #marks>
+          <dl class="keys">
+            <dt><i class="key-dot" style="background:#e5484d"></i></dt>
+            <dd><b>신규</b>: 새로 들어온 매물이 있는 자리입니다. 확대해서 가격이 보이면 오른쪽 위에 <em class="nw-sample">NEW</em> 딱지가 붙습니다.</dd>
+            <dt><i class="key-dot" style="background:#12825e"></i></dt>
+            <dd><b>가격 변동</b>: 가격이 바뀐 매물이 있는 자리입니다.</dd>
+            <dt><i class="key-dot" style="background:#c48a0a"></i></dt>
+            <dd><b>관심</b>: 관심 표시한 매물입니다.</dd>
+            <dt><i class="key-dot" style="background:#1f5fbf"></i></dt>
+            <dd><b>나머지</b>: 그 밖의 매물입니다.</dd>
+            <dt><i class="key-dot" style="background:#aab2bd"></i></dt>
+            <dd><b>별로</b>: 별로로 표시한 매물입니다. 같은 자리에 다른 매물이 있으면 그 매물 색을 따릅니다.</dd>
+            <dt><i class="key-dot" style="background:#8f99a6"></i></dt>
+            <dd><b>회색</b>: 매물 탭에서 가격대를 펼치면 펼친 가격대 매물만 색으로 보이고, 같은 거래 유형의 나머지 매물은 회색으로 보입니다. 일대 시세를 볼 때 참고하세요.</dd>
+            <dt><b class="stack-sample">3</b></dt>
+            <dd><b>숫자</b>: 같은 건물에 있는 매물 수입니다.</dd>
+            <dt><b class="price-sample">500/40</b></dt>
+            <dd>
+              <b>가격</b>: 확대 {{ PRICE_ZOOM.normal }}부터(가격대를 펼쳤으면 그 매물은 {{ PRICE_ZOOM.strong }}부터) 동그라미 대신 가격을 씁니다.
+              월세는 보증금/월세(만원), 전세는 '전 1.5억'처럼 쓰고, 같은 자리에 여러 건이면 가장 싼 것과 건수를 씁니다.
+            </dd>
+          </dl>
+        </template>
+        <template #areas>
+          <dl class="keys">
+            <dt><i class="area-sample" :style="areaSample"></i></dt>
+            <dd>
+              <b>색칠한 구역</b>: 매물을 모으는 구입니다(지역 탭에서 고른 구). 구마다 색이 다르고 가운데에 구 이름이 붙습니다.
+              동을 골랐으면 그 동이 있는 구 경계를 참고로 그립니다(동 경계가 아님).
+            </dd>
+            <dt><i class="alert-sample"></i></dt>
+            <dd><b>초록 점선 원</b>: 매물 알림을 받는 구역(역과 반경)입니다. 어느 역을 몇 km로 정했는지는 지역 탭에서 보고 바꿉니다.</dd>
+            <dt><i class="key-station"></i></dt>
+            <dd><b>흰 동그라미</b>: 역입니다. 누르면 그 역 알림을 켜고 끕니다.</dd>
+          </dl>
+          <p class="info-text">구 경계 출처는 지도 오른쪽 아래에 있습니다.</p>
+        </template>
+        <template #pins>
+          <dl class="keys">
+            <dt><b class="pin-sample">핀</b></dt>
+            <dd>
+              <b>거리 핀</b>: 지도 아래 '거리 핀'을 누른 뒤 회사처럼 자주 가는 곳을 누르면 꽂힙니다.
+              매물 카드와 정보 창에 그 핀까지 걸어서 몇 분인지 보입니다({{ pinMax('walk') }}개까지).
+            </dd>
+            <dt><b class="pin-sample mark">핀</b></dt>
+            <dd><b>표시 핀</b>: 이름만 붙여 두는 핀입니다. 걷는 시간은 재지 않습니다({{ pinMax('mark') }}개까지).</dd>
+          </dl>
+          <p class="info-text">핀은 끌어서 옮기고, 누르면 이름과 종류를 바꾸거나 뺄 수 있습니다.</p>
+        </template>
+        <template #zones>
+          <dl class="keys">
+            <template v-for="g in ZONE_GROUPS" :key="g.id">
+              <dt><i class="zone-sample" :style="{ background: `${g.color}33`, borderColor: g.color }"></i></dt>
+              <dd><b>{{ g.name }}</b></dd>
+            </template>
+          </dl>
+          <p class="info-text">점선 테두리는 넓은 구역(재정비촉진지구, 모아타운, 존치관리구역)입니다. 지도 아래 '정비구역 칠하기'로 켜고 끕니다.</p>
+          <div class="info-tool">
+            <div class="info-tool-row">
+              <template v-if="zones?.count">
+                <span class="info-msg">정비구역 {{ zones.count.toLocaleString('ko-KR') }}곳, 서울시 {{ zones.fileDate?.replace(/-/g, '.') ?? '' }} 기준</span>
+                <button type="button" class="btn btn-sm" :disabled="zonesBusy || zonesChecking" @click="checkZonesNow">새 파일 확인</button>
+                <button type="button" class="btn btn-sm" :disabled="zonesBusy || zonesChecking" @click="pickZoneFile">파일 바꾸기</button>
+              </template>
+              <span v-else class="info-msg">아직 넣은 정비구역 파일이 없습니다. '정비구역 칠하기'를 켜면 받는 버튼이 보입니다.</span>
+              <span v-if="zonesBusy" class="info-msg">파일 읽는 중…</span>
+              <span v-else-if="zonesChecking" class="info-msg">서울시 새 파일 확인 중…(1~2분)</span>
+              <span v-if="zonesMessage && !zonesChecking" class="info-msg">{{ zonesMessage }}</span>
+              <span v-if="zonesError" class="info-msg err" role="alert">{{ zonesError }}</span>
+            </div>
+            <p>
+              서울 열린데이터광장 '서울시 도시계획사업 현황(서울플랜+) 공간정보'(OA-22712)<template v-if="zones?.fileName">, 파일 {{ zones.fileName }}</template>.
+              <template v-if="zones?.count">준공, 입주중, 후보지철회 {{ zones.skipped.done }}곳과 역세권이나 도시개발 같은 다른 사업 {{ zones.skipped.other }}곳은 뺐습니다.</template>
+              새 파일은 조회할 때 7일마다 확인합니다<template v-if="zones?.check">(마지막 {{ monthDay(zones.check.at) }}: {{ zones.check.text }})</template>.
+            </p>
+          </div>
+        </template>
+      </InfoModal>
+      <div class="bar">
       <button
         class="btn btn-sm" :class="{ on: pinning === 'walk' }" :disabled="pinning !== 'walk' && pinCount('walk') >= pinMax('walk')"
         :title="pinCount('walk') >= pinMax('walk')
@@ -768,20 +854,17 @@ onBeforeUnmount(() => {
           </span>
           <button type="button" class="zone-change" @click="pickZoneFile">ZIP 넣기</button>
         </template>
-        <template v-else-if="zones">
-          <button type="button" class="zone-change" title="서울 열린데이터광장에 새 판이 있으면 받아 바꿉니다(조회할 때도 7일마다 알아서 확인)" @click="checkZonesNow">새 파일 확인</button>
-          <button type="button" class="zone-change" title="직접 받은 서울플랜+ ZIP으로 바꿉니다" @click="pickZoneFile">파일 바꾸기</button>
-        </template>
         <span v-if="zonesMessage && !zonesChecking" class="zone-note">{{ zonesMessage }}</span>
         <span v-if="zonesError" class="zone-note err" role="alert">{{ zonesError }}</span>
       </template>
       <input ref="fileEl" type="file" accept=".zip,application/zip" hidden @change="onZoneFile">
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.ovmap { display: grid; grid-template-rows: 1fr auto auto; gap: 8px; height: 100%; background: var(--paper); }
+.ovmap { display: grid; grid-template-rows: 1fr auto; gap: 8px; height: 100%; background: var(--paper); }
 .ovmap.big {
   position: fixed; inset: 12px; z-index: 60; height: auto; padding: 12px;
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 12px 40px rgba(22, 32, 46, .3);
@@ -796,8 +879,21 @@ onBeforeUnmount(() => {
   border-radius: 8px; background: var(--ink); color: #fff; font-size: 13px; font-weight: 600; white-space: nowrap;
 }
 .picking .map { cursor: crosshair; outline: 3px solid var(--accent); outline-offset: 2px; }
-.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; color: var(--ink-2); align-items: center; }
-.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+/* 지도 아래 한 줄: 점 색, '지도 보는 법', 오른쪽에 핀과 정비구역 버튼(좁으면 다음 줄로) */
+.under { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.under .bar { margin-left: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--ink-2); align-items: center; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+/* '지도 보는 법' 모달: 왼쪽 견본, 오른쪽 설명 */
+.keys { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 14px; align-items: start; margin: 0 0 18px; }
+.keys dt { display: flex; justify-content: center; padding-top: 3px; }
+.keys dd { margin: 0; font-size: 15px; line-height: 1.65; color: var(--ink-2); }
+.keys dd b { color: var(--ink); }
+.key-dot { display: inline-block; width: 13px; height: 13px; margin-top: 3px; border-radius: 50%; }
+.key-station { display: inline-block; width: 13px; height: 13px; margin-top: 3px; border: 2px solid #16202e; border-radius: 50%; background: #fff; box-sizing: border-box; }
+.area-sample { display: inline-block; width: 34px; height: 22px; border: 2.5px solid; border-radius: 4px; box-sizing: border-box; }
+.alert-sample { display: inline-block; width: 26px; height: 26px; border: 2.5px dashed #087f5b; border-radius: 50%; background: rgba(8, 127, 91, .05); box-sizing: border-box; }
+.keys .zone-sample { display: inline-block; width: 26px; height: 18px; margin-top: 3px; border: 1.5px solid; border-radius: 3px; box-sizing: border-box; }
 .stack-sample {
   display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 4px; border-radius: 50%;
   background: #1f5fbf; color: #fff; font-size: 11px; border: 1.5px solid #fff; box-shadow: 0 0 0 1px #1f5fbf;
@@ -814,8 +910,6 @@ onBeforeUnmount(() => {
   text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px;
 }
 .zone-change:hover { color: var(--ink); }
-.legend .zone-sample { border-radius: 2px; border: 1.5px solid; box-sizing: border-box; }
-.zone-src { color: var(--muted); cursor: help; }
 :deep(.area-label) { font-weight: 700; }
 :deep(.pick-pin span), .legend .pick-sample {
   display: block; width: 11px; height: 11px; margin: 2px; background: #16202e; border: 2px solid #fff;
@@ -847,7 +941,7 @@ onBeforeUnmount(() => {
   color: #fff; font: 700 11px/1 var(--font); border: 1.5px solid #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
 }
 :deep(.stack.strong span) { font-size: 13px; border-width: 2px; }
-:deep(.stack.dim span) { font-size: 9px; opacity: .75; }
+:deep(.stack.dim span) { font-size: 10px; opacity: .9; }
 :deep(.stack.sel span) { outline: 3px solid #16202e; outline-offset: 1px; }
 /* 가격 표시: 크기 0인 표시 칸의 가운데에 글자 상자를 놓는다(글자 길이만큼 넓어짐) */
 :deep(.price span), .price-sample {
@@ -870,7 +964,6 @@ onBeforeUnmount(() => {
 :deep(.nw) { position: absolute; top: -9px; right: -14px; box-shadow: 0 1px 2px rgba(0, 0, 0, .3); pointer-events: none; }
 :deep(.stack.one .nw) { top: -11px; right: -20px; }
 .nw-sample { display: inline-block; margin-left: 4px; vertical-align: 1px; }
-.legend .st-sample { width: 10px; height: 10px; border: 2px solid #16202e; background: #fff; box-sizing: border-box; }
 :deep(.st-tip) { color: var(--muted); font-size: 12px; }
 :deep(.mp) { display: grid; gap: 8px; max-height: 340px; overflow: auto; font: 13px/1.45 var(--font); }
 :deep(.mp-head) { font-weight: 700; }

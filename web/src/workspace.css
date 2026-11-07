@@ -230,6 +230,53 @@ html[data-design='workspace'] .menu-area.on {
   }
 }
 
+/* 지도 말풍선 목록과 설명 모달도 필터 칸처럼 스크롤 막대를 얇게, 위아래 화살표 없이 */
+html[data-design='workspace'] .mp,
+html[data-design='workspace'] .info-body {
+  --thin-scroll-thumb: #c5cfdd;
+}
+
+html[data-design='workspace'] .mp:hover,
+html[data-design='workspace'] .info-body:hover {
+  --thin-scroll-thumb: #8e9fb5;
+}
+
+html[data-design='workspace'] .mp::-webkit-scrollbar,
+html[data-design='workspace'] .info-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+html[data-design='workspace'] .mp::-webkit-scrollbar-track,
+html[data-design='workspace'] .mp::-webkit-scrollbar-corner,
+html[data-design='workspace'] .info-body::-webkit-scrollbar-track,
+html[data-design='workspace'] .info-body::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+html[data-design='workspace'] .mp::-webkit-scrollbar-thumb,
+html[data-design='workspace'] .info-body::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--thin-scroll-thumb);
+  background-clip: padding-box;
+}
+
+html[data-design='workspace'] .mp::-webkit-scrollbar-button,
+html[data-design='workspace'] .info-body::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  html[data-design='workspace'] .mp,
+  html[data-design='workspace'] .info-body {
+    scrollbar-width: thin;
+    scrollbar-color: var(--thin-scroll-thumb) transparent;
+  }
+}
+
 html[data-design='workspace'] .panel {
   gap: 13px;
 }
