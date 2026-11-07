@@ -105,6 +105,12 @@ CREATE TABLE IF NOT EXISTS seen (
   listing_id TEXT PRIMARY KEY,
   seen_at TEXT NOT NULL
 );
+
+-- 중개사에게 문의했다고 표시한 매물('📞 문의함')과 처음 표시한 때
+CREATE TABLE IF NOT EXISTS contacted (
+  listing_id TEXT PRIMARY KEY,
+  contacted_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS verdicts_identity ON verdicts(identity_key);
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY,
@@ -1182,7 +1188,7 @@ export function touchListings(source: string, sourceIds: string[], at: string) {
 }
 
 /**
- * 사라진 매물 중 남겨 두는 기간이 지난 것을 가격 기록, 변화 기록과 함께 지운다. 관심이나 버림을 누른 매물은 남긴다.
+ * 사라진 매물 중 남겨 두는 기간이 지난 것을 가격 기록, 변화 기록과 함께 지운다. 관심이나 버림을 누른 매물과 '📞 문의함' 매물은 남긴다.
  * 지운 매물 수를 준다.
  */
 function purgeGoneListings(): number {
@@ -1190,7 +1196,7 @@ function purgeGoneListings(): number {
     db
       .prepare(
         `SELECT l.id FROM listings l LEFT JOIN verdicts v ON v.listing_id = l.id
-         WHERE l.status = 'gone' AND v.listing_id IS NULL
+         WHERE l.status = 'gone' AND v.listing_id IS NULL AND NOT EXISTS (SELECT 1 FROM contacted c WHERE c.listing_id = l.id)
            AND l.last_seen_at < CASE WHEN l.source = 'courtauction' THEN ? ELSE ? END`,
       )
       .all(daysAgoIso(GONE_KEEP_DAYS_COURT), daysAgoIso(GONE_KEEP_DAYS)) as { id: string }[]
@@ -1671,6 +1677,27 @@ export function markSeen(ids: string[], at = nowIso()) {
 export function seenTimes(): Map<string, string> {
   const rows = db.prepare('SELECT listing_id, seen_at FROM seen').all() as { listing_id: string; seen_at: string }[];
   return new Map(rows.map((r) => [r.listing_id, r.seen_at]));
+}
+
+/**
+ * '📞 문의함'을 남기거나 푼다. 남길 때는 '봤음'도 남기고, 이미 남겼으면 처음 표시한 때를 그대로 둔다.
+ * 없는 매물이면 false. 문의한 매물은 사라진 지 오래돼도 지우지 않는다(purgeGoneListings).
+ */
+export function setContacted(id: string, on: boolean, at = nowIso()): boolean {
+  if (!getListing(id)) return false;
+  db.transaction(() => {
+    if (on) {
+      db.prepare('INSERT INTO contacted (listing_id, contacted_at) VALUES (?, ?) ON CONFLICT(listing_id) DO NOTHING').run(id, at);
+      markSeen([id], at);
+    } else db.prepare('DELETE FROM contacted WHERE listing_id = ?').run(id);
+  })();
+  return true;
+}
+
+/** 매물마다 '📞 문의함'을 표시한 때 */
+export function contactedTimes(): Map<string, string> {
+  const rows = db.prepare('SELECT listing_id, contacted_at FROM contacted').all() as { listing_id: string; contacted_at: string }[];
+  return new Map(rows.map((r) => [r.listing_id, r.contacted_at]));
 }
 
 export function unackedCount(): number {

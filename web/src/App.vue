@@ -8,7 +8,7 @@ import {
 } from '../../shared/types';
 import { api } from './api';
 import { createRevisionRefresh } from './refresh';
-import { onSeen } from './seen';
+import { isPick, marksVersion, onMarks, picksOnly } from './marks';
 import { reloadZones, zonesNeedReload } from './redevZones';
 import { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, loadFilters, passes, saveFilters, type Filters } from './filters';
 import { dateTime, radiusText } from './format';
@@ -148,7 +148,10 @@ const inSite = (l: ListingView) => site.value === 'all' || l.source === site.val
 /** 사이트 칸으로 고르는 목록 탭(표시한 매물). 매물 탭은 가격대 안에서 사이트를 고른다. */
 const usesSiteTabs = computed(() => tab.value === 'marked');
 
-const current = computed(() => listings.value.filter((l) => l.status === 'active' && l.verdict !== 'discard'));
+/** 지금 있는 매물(버림 뺌). 필터 칸의 '관심이나 문의한 매물만 보기'를 켜면 그 매물만 남는다. */
+const current = computed(() =>
+  listings.value.filter((l) => l.status === 'active' && l.verdict !== 'discard' && (!picksOnly.value || isPick(l))),
+);
 /** 켜진 지역 반경(+모을 때 여유) 안인지. 위치를 모르면 밖으로 본다. */
 const insideMargin = (l: ListingView) =>
   !!selectedArea(l, areas.value, COLLECT_MARGIN_M);
@@ -667,6 +670,7 @@ async function saveSeen(items: ListingView[]) {
     l.priceChange = null;
   }
   triggerRef(listings);
+  marksVersion.value += 1;
   try {
     const r = await api.seen(todo.map((l) => l.id));
     refreshData.advance(r.before, r.after);
@@ -674,7 +678,30 @@ async function saveSeen(items: ListingView[]) {
     // 저장하지 못했으면 다음 새로고침 때 서버에 남은 상태로 돌아간다.
   }
 }
-onSeen((items) => void saveSeen(items));
+
+/** '📞 문의함'을 남기거나 푼다(카드와 지도 창의 단추). 남기면 '봤음'도 된다. 저장하지 못하면 되돌리고 알린다. */
+async function setContacted(l: ListingView, on: boolean) {
+  const before = { contactedAt: l.contactedAt ?? null, seenAt: l.seenAt ?? null, isNew: l.isNew, priceChange: l.priceChange };
+  const at = new Date().toISOString();
+  l.contactedAt = on ? (l.contactedAt ?? at) : null;
+  if (on) {
+    l.seenAt = at;
+    l.isNew = false;
+    l.priceChange = null;
+  }
+  triggerRef(listings);
+  marksVersion.value += 1;
+  try {
+    const r = await api.contact(l.id, on);
+    refreshData.advance(r.before, r.after);
+  } catch (e) {
+    Object.assign(l, before);
+    triggerRef(listings);
+    marksVersion.value += 1;
+    error.value = `문의함 표시를 저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+onMarks({ seen: (items) => void saveSeen(items), contact: (l, on) => void setContacted(l, on) });
 
 /** 지도에서 역을 누르면 그 역 지역을 켜고 끈다(없는 역이면 1km로 만들어 켬). */
 async function toggleStation(s: CatalogStation) {

@@ -448,6 +448,21 @@ app.post<{ Body: { ids?: unknown } | null }>('/api/listings/seen', async (req, r
   return { before, after: store.dataRevision() };
 });
 
+/** '📞 문의함'을 남기거나(on: true) 푼다(on: false). before와 after는 '봤음'과 같은 자료 버전이다. */
+app.post<{ Params: { id: string }; Body: { on?: unknown } | null }>('/api/listings/:id/contact', async (req, reply) => {
+  const on = req.body?.on;
+  if (typeof on !== 'boolean') {
+    reply.code(400);
+    return { error: 'on은 true나 false여야 합니다.' };
+  }
+  const before = store.dataRevision();
+  if (!store.setContacted(req.params.id, on)) {
+    reply.code(404);
+    return { error: '매물을 찾지 못했습니다.' };
+  }
+  return { before, after: store.dataRevision() };
+});
+
 app.get('/api/regions', async () => ({ regions: regionCatalog() }));
 app.post<{ Body: { code?: string } }>('/api/areas/region', async (req, reply) => {
   const input = regionArea(String(req.body?.code ?? ''));

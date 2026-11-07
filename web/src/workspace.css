@@ -718,6 +718,13 @@ html[data-design='workspace'] .card.selected .actions .on {
   color: #ffe3a3;
 }
 
+/* 고른 카드의 눌린 '문의함' 단추: 문의함 딱지와 같은 초록 */
+html[data-design='workspace'] .card.selected .actions .contact.on {
+  border-color: #7fd39a;
+  background: #24543a;
+  color: #d6f5df;
+}
+
 html[data-design='workspace'] .card.selected :focus-visible {
   outline-color: #b9d4ff;
 }

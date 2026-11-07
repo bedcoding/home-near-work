@@ -6,6 +6,7 @@ import { DEALS_OF, OVERVIEW_DEALS, OVERVIEW_LABEL } from '../bands';
 import { M2_PER_PYEONG } from '../format';
 import { KIND_LABEL, KINDS } from '../kinds';
 import { hasRegions, primaryAreas } from '../../../shared/regions';
+import { picksOnly } from '../marks';
 
 const filters = defineModel<Filters>({ required: true });
 /**
@@ -49,6 +50,7 @@ const sameDeals = (a: DealType[], b: DealType[]) => a.length === b.length && a.e
 
 function reset() {
   filters.value = { ...DEFAULT_FILTERS, deals: [], areaIds: [], kinds: [] };
+  picksOnly.value = false;
 }
 
 // ---------- 칸 접기와 순서 ----------
@@ -163,6 +165,9 @@ async function nudge(id: SectionId, delta: number, e: KeyboardEvent) {
 
 <template>
   <aside class="panel" aria-label="필터">
+    <label class="check picks" :class="{ on: picksOnly }" title="관심을 누른 매물과 '📞 문의함'을 누른 매물만 목록과 지도에 보입니다">
+      <input v-model="picksOnly" type="checkbox" /> 관심이나 문의한 매물만 보기
+    </label>
     <div class="sections" @dragend="onDragEnd">
       <section
         v-for="id in layout.order" :key="id" class="fsec"
@@ -277,6 +282,9 @@ async function nudge(id: SectionId, delta: number, e: KeyboardEvent) {
 .footer { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 8px 0 2px; border-top: 1px solid var(--line); }
 .footer-actions { display: flex; gap: 4px; margin-left: auto; }
 .sections { display: grid; gap: 10px; }
+/* 맨 위 '관심이나 문의한 매물만 보기': 칸들처럼 테두리 상자, 켜면 문의함 색 */
+.picks { min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-weight: 700; }
+.picks.on { border-color: var(--contact); background: var(--contact-soft); color: var(--contact); }
 .fsec { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); transition: box-shadow .12s; }
 .fsec.unused { opacity: .45; }
 .fsec.dragging { opacity: .4; }

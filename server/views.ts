@@ -413,6 +413,7 @@ export function buildListingViews(): ListingView[] {
   const points = store.pointParcels();
   const verdicts = new Map(store.allVerdicts().map((v) => [v.listing_id, v]));
   const seen = store.seenTimes();
+  const contacted = store.contactedTimes();
   const events = store.unackedEvents();
   const newIds = new Set(events.filter((e) => e.type === 'new').map((e) => e.listing_id));
   const changes = new Map<string, ListingView['priceChange']>();
@@ -453,6 +454,7 @@ export function buildListingViews(): ListingView[] {
       isNew: newIds.has(row.id),
       priceChange: changes.get(row.id) ?? null,
       seenAt: seen.get(row.id) ?? null,
+      contactedAt: contacted.get(row.id) ?? null,
       relistedOf: reason?.startsWith('relisted:') ? reason.slice('relisted:'.length) : null,
       similarToDiscarded: !verdict && discarded.some((d) => d.row.id !== row.id && looksSimilar(data, d.data)),
       seenRef: (() => {

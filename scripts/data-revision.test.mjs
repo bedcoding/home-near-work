@@ -97,6 +97,24 @@ test('seen marks stay per listing, clear its news, skip unknown ids and leave wi
   assert.equal(store.seenTimes().size, 0, 'a purged listing takes its seen mark with it');
 });
 
+test('contacted marks keep the first time, count as seen, can be cleared and keep the listing from being purged', t => {
+  const store = memoryStore(t);
+  const runId = store.createRun(false);
+  const old = new Date(Date.now() - 40 * 864e5).toISOString();
+  store.insertListing('peterpanz:1', { source: 'peterpanz', sourceId: '1', lat: 0, lng: 0, prices: [] }, 'k1', 'sig', runId, { runId }, null, old);
+  assert.equal(store.setContacted('peterpanz:missing', true), false);
+  store.setContacted('peterpanz:1', true, '2026-01-02T00:00:00.000Z');
+  store.setContacted('peterpanz:1', true, '2026-01-05T00:00:00.000Z');
+  assert.equal(store.contactedTimes().get('peterpanz:1'), '2026-01-02T00:00:00.000Z', 'marking again keeps when it was first marked');
+  assert.equal(store.seenTimes().has('peterpanz:1'), true, 'an inquiry means it was seen');
+  store.tidyListings();
+  assert.equal(store.getListing('peterpanz:1').status, 'gone', 'it still goes gone when long unseen');
+  store.setContacted('peterpanz:1', false);
+  assert.equal(store.contactedTimes().size, 0);
+  store.tidyListings();
+  assert.equal(store.getListing('peterpanz:1'), undefined, 'once cleared, the usual purge applies');
+});
+
 test('parcel coordinates round-trip and changed PNU clears obsolete zone results', t => {
   const store = memoryStore(t);
   const at = '2026-01-01T00:00:00.000Z';

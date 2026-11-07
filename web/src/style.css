@@ -20,6 +20,8 @@
   --accent-soft: #eef4fc;
   --seen: #3a5a8c;
   --seen-soft: #e6edf7;
+  --contact: #1f7a35;
+  --contact-soft: #e3f4e7;
   --radius: 10px;
   --font: 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif;
   color-scheme: light;
@@ -66,6 +68,8 @@ a { color: var(--accent); }
 .chip-seen { background: var(--seen-soft); color: var(--seen); }
 /* 대시보드에서 눌러 본 매물: 지도의 '본 매물' 표시처럼 흰 바탕에 테두리만 */
 .chip-viewed { background: var(--surface); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
+/* 중개사에게 문의한 매물(📞 문의함) */
+.chip-contact { background: var(--contact-soft); color: var(--contact); }
 .chip-kind { background: var(--ink); color: #fff; }
 .chip-kind.officetel { background: #5b3cc4; }
 .chip-kind.villa { background: #0f7a6c; }

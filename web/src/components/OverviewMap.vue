@@ -9,7 +9,7 @@ import { KIND_LABEL, kindOf } from '../kinds';
 import { ledgerChips } from '../ledger';
 import { isRoomStay, roomRange, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
-import { looksSeen, markSeen } from '../seen';
+import { looksSeen, markSeen, setContacted } from '../marks';
 import { distanceText, manwon, perPyeong, priceText, pyeong } from '../format';
 import { addWalkPin, ensureWalk, markDistances, moveWalkPin, pinCount, pinMax, removeWalkPin, renameWalkPin, setPinKind, walkPins, walkState, walkTimes } from '../walk';
 import { WALK_NAME_MAX, type PinKind } from '../../../shared/walk';
@@ -140,6 +140,11 @@ const groupSeen = (all: ListingView[]) => {
 /** 글자 상자 색: 안 본 매물은 색으로 칠하고, 본 매물은 흰 바탕에 그 색 테두리와 글자 */
 const boxStyle = (c: string, seen: boolean) => (seen ? `background:#fff;color:${c};border-color:${c}` : `background:${c}`);
 const SEEN_MARK = '<i class="ck">✓</i>';
+const MEH_MARK = '<i class="ck">✕</i>';
+/** 묶음에 별로가 아닌 '📞 문의함' 매물이 있는지. 가격 앞(멀리서 보면 왼쪽 위)에 📞를 붙인다. */
+const hasContacted = (items: ListingView[]) => items.some((l) => !!l.contactedAt && l.verdict !== 'meh');
+const PHONE_MARK = '<i class="ck">📞</i>';
+const PHONE_BADGE = '<em class="ph">📞</em>';
 
 const positions = computed(() => new Set(props.background.filter((l) => l.lat != null).map((l) => `${l.lat!.toFixed(5)},${l.lng!.toFixed(5)}`)).size);
 
@@ -160,10 +165,11 @@ function groups(): Group[] {
   return [...all.values()].sort((a, b) => Number(a.strong) - Number(b.strong));
 }
 
-/** 올리면 보이는 글: 매물마다 가격, 제목 앞부분, 끝에 괄호로 사이트(대시보드에서 봤으면 '봤음'도) */
+/** 올리면 보이는 글: 매물마다 가격, 제목 앞부분, 끝에 괄호로 사이트와 내 표시(별로, 문의함, 봤음) */
 function tooltip(items: ListingView[]) {
   const lines = items.slice(0, 6).map((l) => {
-    const site = `${SOURCE_LABEL[l.source]}${looksSeen(l) ? ', 봤음' : ''}`;
+    const mark = l.verdict === 'meh' ? ', 별로' : l.contactedAt ? ', 문의함' : looksSeen(l) ? ', 봤음' : '';
+    const site = `${SOURCE_LABEL[l.source]}${mark}`;
     return `${esc(pricesText(l))}${l.title ? `, ${esc(l.title.slice(0, 24))}` : ''} <span class="tip-site">(${esc(site)})</span>`;
   });
   if (items.length > 6) lines.push(`외 ${items.length - 6}건`);
@@ -233,7 +239,8 @@ function popup(g: Group) {
     if (l.priceChange) top.appendChild(line('mp-tag down', '가격 변동'));
     if (l.verdict === 'star') top.appendChild(line('mp-tag star', '관심'));
     if (l.verdict === 'meh') top.appendChild(line('mp-tag', '별로'));
-    if (looksSeen(l)) top.appendChild(line('mp-tag seen', '봤음'));
+    if (l.contactedAt) top.appendChild(line('mp-tag contact', '📞 문의함'));
+    else if (looksSeen(l)) top.appendChild(line('mp-tag seen', '봤음'));
     for (const c of ledgerChips(l)) {
       const tag = line(`mp-tag ${c.tone}`, c.label);
       tag.title = c.tip;
@@ -271,6 +278,19 @@ function popup(g: Group) {
     open.textContent = '원본 열기';
     open.addEventListener('click', () => emit('open', l));
     actions.appendChild(open);
+    // 사이트에서 중개사에게 문의했으면 누른다. 창은 다시 그리지 않으니 단추 글자만 바로 바꾼다.
+    const call = document.createElement('button');
+    const paintCall = () => {
+      call.textContent = l.contactedAt ? '문의함 해제' : '📞 문의함';
+      call.classList.toggle('on', !!l.contactedAt);
+    };
+    paintCall();
+    call.title = '사이트에서 중개사에게 문의했으면 누르세요. 다시 누르면 풉니다.';
+    call.addEventListener('click', () => {
+      setContacted(l, !l.contactedAt);
+      paintCall();
+    });
+    actions.appendChild(call);
     if (l.lat != null && l.lng != null) {
       const naver = document.createElement('a');
       naver.textContent = '네이버 지도 ↗';
@@ -508,22 +528,27 @@ function drawDots(fit: boolean) {
     const c = muted ? MUTED : groupColor(g.items);
     // 대시보드에서 다 본 자리는 흰 바탕에 색 테두리로 그려, 아직 안 본 자리(색을 칠한 표시)와 구분한다.
     const seen = groupSeen(g.items);
+    // 모두 별로인 자리는 가격(멀리서 보면 동그라미) 앞에 ✕를 붙이고 다른 표시 밑에 그린다.
+    const meh = g.items.every((l) => l.verdict === 'meh');
+    // '📞 문의함' 매물이 있는 자리는 가격 앞(멀리서 보면 왼쪽 위)에 📞를 붙이고 다른 표시 위에 그린다.
+    const called = hasContacted(g.items);
     // 펼친 가격대 밖 매물(회색)도 필터를 통과한 매물이라, 확대하면 가격을 같이 쓴다(PRICE_ZOOM.normal부터, 펼친 매물은 strong부터).
     const price = (g.strong ? drawnPriceLevel >= 1 : drawnPriceLevel >= 2) ? cheapestPrice(g.items) : null;
     // 신규가 든 표시는 빨갛게 칠하고 다른 표시 위에 그린다. NEW 딱지는 겹쳐서 지도를 가리지 않게 가격을 쓴 표시와
     // PRICE_ZOOM.normal부터의 동그라미에만 붙이고, 연하게 칠한 매물(펼친 목록 밖)에는 붙이지 않는다.
     const fresh = (g.strong || !dim) && hasNew(g.items);
     const badge = fresh && (price || drawnPriceLevel >= 2) ? NEW_BADGE : '';
-    const zIndexOffset = (g.strong ? 500 : 0) + (fresh ? 300 : 0);
+    const zIndexOffset = (g.strong ? 500 : 0) + (fresh ? 300 : 0) + (called ? 200 : 0) - (meh ? 200 : 0);
     let marker: L.Layer;
     let base: Drawn['base'];
     if (price) {
       // 확대해 보면 가격을 쓴 표시(같은 자리 여러 건이면 가장 싼 것과 건수)
       marker = L.marker([g.lat, g.lng], {
         icon: L.divIcon({
-          className: `price${g.strong ? ' strong' : ''}${muted ? ' dim' : ''}${seen ? ' seen' : ''}`,
+          className: `price${g.strong ? ' strong' : ''}${muted ? ' dim' : ''}${seen ? ' seen' : ''}${meh ? ' meh' : ''}${called ? ' called' : ''}`,
           html:
-            `<span style="${boxStyle(muted ? MUTED_PRICE : c, seen)}">${seen ? SEEN_MARK : ''}${esc(mapPrice(price))}` +
+            `<span style="${boxStyle(muted ? MUTED_PRICE : c, seen)}">${called ? PHONE_MARK : seen ? SEEN_MARK : meh ? MEH_MARK : ''}` +
+            `${esc(mapPrice(price))}` +
             `${g.items.length > 1 ? `<b>${g.items.length}</b>` : ''}${badge}</span>`,
           iconSize: [0, 0],
           iconAnchor: [0, 0],
@@ -532,13 +557,26 @@ function drawDots(fit: boolean) {
         keyboard: false,
         zIndexOffset,
       });
-    } else if (g.items.length === 1 && badge) {
-      // 신규 한 건: 딱지를 붙이려고 동그라미를 글자 없는 묶음 표시로 그린다(크기는 아래 동그라미와 같음).
+    } else if (g.items.length === 1 && (badge || called)) {
+      // 신규나 문의함 한 건: 딱지를 붙이려고 동그라미를 글자 없는 묶음 표시로 그린다(크기는 아래 동그라미와 같음).
       const size = g.strong ? 14 : 10;
       marker = L.marker([g.lat, g.lng], {
         icon: L.divIcon({
-          className: `stack one${g.strong ? ' strong' : ''}`,
-          html: `<span style="background:${c}">${badge}</span>`,
+          className: `stack one${g.strong ? ' strong' : ''}${seen ? ' seen' : ''}`,
+          html: `<span style="${boxStyle(c, seen)}">${badge}${called ? PHONE_BADGE : ''}</span>`,
+          iconSize: [size, size],
+          iconAnchor: [size / 2, size / 2],
+        }),
+        keyboard: false,
+        zIndexOffset,
+      });
+    } else if (g.items.length === 1 && meh) {
+      // 별로 한 건: 동그라미 대신 회색 바탕에 ✕
+      const size = g.strong ? 14 : 12;
+      marker = L.marker([g.lat, g.lng], {
+        icon: L.divIcon({
+          className: `stack one meh${g.strong ? ' strong' : ''}`,
+          html: `<span style="background:${c}">✕</span>`,
           iconSize: [size, size],
           iconAnchor: [size / 2, size / 2],
         }),
@@ -555,8 +593,8 @@ function drawDots(fit: boolean) {
       const size = g.strong ? 26 : dim ? 18 : 20;
       marker = L.marker([g.lat, g.lng], {
         icon: L.divIcon({
-          className: `stack${g.strong ? ' strong' : ''}${dim && !g.strong ? ' dim' : ''}${seen ? ' seen' : ''}`,
-          html: `<span style="${boxStyle(c, seen)}">${g.items.length}${badge}</span>`,
+          className: `stack${g.strong ? ' strong' : ''}${dim && !g.strong ? ' dim' : ''}${seen ? ' seen' : ''}${meh ? ' meh' : ''}`,
+          html: `<span style="${boxStyle(c, seen)}">${meh ? '✕' : g.items.length}${badge}${called ? PHONE_BADGE : ''}</span>`,
           iconSize: [size, size],
           iconAnchor: [size / 2, size / 2],
         }),
@@ -774,8 +812,11 @@ onBeforeUnmount(() => {
             <dd><b>관심</b>: 관심 표시한 매물입니다.</dd>
             <dt><i class="key-dot" style="background:#1f5fbf"></i></dt>
             <dd><b>나머지</b>: 그 밖의 매물입니다.</dd>
-            <dt><i class="key-dot" style="background:#aab2bd"></i></dt>
-            <dd><b>별로</b>: 별로로 표시한 매물입니다. 같은 자리에 다른 매물이 있으면 그 매물 색을 따릅니다.</dd>
+            <dt><i class="key-dot meh-dot" style="background:#aab2bd">✕</i></dt>
+            <dd>
+              <b>별로</b>: 별로로 표시한 매물은 회색으로 그리고 앞에 ✕를 붙이며, 다른 표시 밑에 깔립니다.
+              같은 자리에 다른 매물이 있으면 그 매물 색을 따릅니다.
+            </dd>
             <dt><i class="key-dot" style="background:#8f99a6"></i></dt>
             <dd><b>회색</b>: 매물 탭에서 가격대를 펼치면 펼친 가격대 매물만 색으로 보이고, 필터를 통과한 나머지 매물은 회색으로 보입니다. 확대하면 회색 매물도 가격이 나와 일대 시세를 같이 볼 수 있습니다.</dd>
             <dt><b class="stack-sample">3</b></dt>
@@ -790,6 +831,11 @@ onBeforeUnmount(() => {
               <b>봤음</b>: 이 대시보드에서 본 매물은 흰 바탕에 색 테두리로 바뀌고 가격 앞에 ✓가 붙습니다. 동그라미는 속이 하얘집니다.
               지도 표시를 누르면 창에 보인 매물을, 카드를 누르거나 원본을 열면 그 매물을 본 것으로 치고, 신규 표시도 꺼집니다.
               본 뒤에 가격이 바뀌면 다시 색으로 칠해집니다.
+            </dd>
+            <dt><b class="price-sample">📞 500/40</b></dt>
+            <dd>
+              <b>문의함</b>: 카드나 지도 창에서 '📞 문의함'을 누른 매물은 가격 앞(멀리서 보면 왼쪽 위)에 📞가 붙고 다른 표시 위에 그려집니다.
+              다시 누르면 풉니다. 문의한 매물은 사이트에서 내려가도 지우지 않고 남깁니다.
             </dd>
           </dl>
         </template>
@@ -996,6 +1042,10 @@ onBeforeUnmount(() => {
 :deep(.price .ck) { font-style: normal; }
 .price-sample.seen-sample { background: #fff; color: #1f5fbf; border-color: #1f5fbf; box-shadow: none; }
 .legend i.seen-dot { background: #fff; box-shadow: inset 0 0 0 2px #1f5fbf; }
+/* 모두 별로인 자리: 회색 표시 앞에 ✕(멀리서 보는 동그라미는 ✕만) */
+:deep(.stack.meh span) { font-size: 10px; }
+:deep(.stack.one.meh span) { font-size: 8px; }
+.key-dot.meh-dot { display: inline-grid; place-items: center; color: #fff; font: normal 700 9px/1 var(--font); }
 :deep(.mp-tag.seen) { background: var(--surface); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
 :deep(.tip-site) { color: var(--muted); }
 /* 신규 딱지: 표시 오른쪽 위 모서리에 걸친다. 누르면 아래 표시가 눌리게 한다. */
@@ -1027,4 +1077,11 @@ onBeforeUnmount(() => {
   min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font: 600 13px var(--font); cursor: pointer;
 }
 :deep(.mp-more) { color: var(--muted); }
+/* 문의함: 창의 딱지와 눌린 단추, 지도 표시 왼쪽 위 📞(가격을 쓴 표시는 가격 앞에 붙인다) */
+:deep(.mp-tag.contact) { background: var(--contact-soft); color: var(--contact); }
+:deep(.mp-actions button.on) { background: var(--contact-soft); border-color: var(--contact); }
+:deep(.ph) {
+  position: absolute; top: -11px; left: -13px; font-style: normal; font-size: 12px; line-height: 1;
+  pointer-events: none; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .35));
+}
 </style>

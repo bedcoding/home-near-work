@@ -17,7 +17,7 @@ import { convertedRent, loanMonthly } from '../rentRate';
 import { ledgerChips } from '../ledger';
 import CountTooltip from './CountTooltip.vue';
 import { dabangAddressBusy, dabangAddressErrors, dabangAddresses, loadDabangAddress } from '../dabangAddress';
-import { looksSeen, markSeen } from '../seen';
+import { looksSeen, markSeen, marksVersion, setContacted } from '../marks';
 
 const props = defineProps<{
   listing: ListingView;
@@ -31,6 +31,8 @@ const props = defineProps<{
 const emit = defineEmits<{ open: []; verdict: [Verdict | null]; source: []; raw: []; select: [] }>();
 
 const l = computed(() => props.listing);
+/** 내가 남긴 표시('봤음', '📞 문의함'). 매물은 깊이 감시하지 않아서 marksVersion으로 표시가 바뀐 것을 알고 다시 그린다. */
+const marks = computed(() => (marksVersion.value, { seen: looksSeen(props.listing), contactedAt: props.listing.contactedAt ?? null }));
 // 다방은 목록에 주소가 없다. '주소 보기'를 누르면 그 방 하나의 지번 주소만 받아 온다.
 const addressText = computed(() => l.value.address ?? dabangAddresses.get(l.value.id) ?? '주소 모름');
 const canLoadAddress = computed(() => l.value.source === 'dabang' && !l.value.address && !dabangAddresses.has(l.value.id));
@@ -255,7 +257,8 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
         </CountTooltip>
         <span v-if="selected" class="selection-label">✓ 선택됨</span>
         <span v-if="l.isNew" class="chip chip-new">신규</span>
-        <span v-if="looksSeen(l)" class="chip chip-viewed" :title="`이 대시보드에서 ${dateTime(l.seenAt!)}에 눌러 봄`">봤음</span>
+        <span v-if="marks.contactedAt" class="chip chip-contact" :title="`${dateTime(marks.contactedAt)}에 문의함으로 표시`">📞 문의함</span>
+        <span v-else-if="marks.seen" class="chip chip-viewed" :title="`이 대시보드에서 ${dateTime(l.seenAt!)}에 눌러 봄`">봤음</span>
         <template v-if="changeText">
           <span class="chip" :class="changeText.tone">{{ changeText.label }}</span>
           <span class="change num">{{ changeText.detail }}</span>
@@ -308,6 +311,12 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 
     <div class="actions" @click.stop>
       <button class="btn btn-primary btn-sm" title="원본 사이트에서 보기 (Enter)" @click="emit('open')">원본 열기</button>
+      <button
+        class="btn btn-sm contact" :class="{ on: !!marks.contactedAt }" title="사이트에서 중개사에게 문의했으면 누르세요. 다시 누르면 풉니다."
+        @click="setContacted(l, !marks.contactedAt)"
+      >
+        {{ marks.contactedAt ? '문의함 해제' : '📞 문의함' }}
+      </button>
       <button class="btn btn-sm" :class="{ on: l.verdict === 'star' }" title="관심 (S)" @click="emit('verdict', l.verdict === 'star' ? null : 'star')">
         {{ l.verdict === 'star' ? '관심 해제' : '★ 관심' }}
       </button>
@@ -409,6 +418,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 .more .site-link { margin-right: 4px; padding: 0 10px; color: var(--accent); font-weight: 700; }
 .actions { display: flex; justify-content: flex-end; gap: 6px; }
 .actions .on { background: var(--star-soft); border-color: var(--star); }
+.actions .contact.on { background: var(--contact-soft); border-color: var(--contact); }
 /* 목록 칸 너비에 맞춘다(매물 탭과 경매 탭은 지도 옆이라 좁다). */
 @container (max-width: 1060px) {
   .card {
