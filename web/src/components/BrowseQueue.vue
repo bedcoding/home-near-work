@@ -344,7 +344,7 @@ const skipNote = computed(() => {
   const notes = [`이번 조회에서 빠지는 지역: ${skippedAreas.value.map((a) => a.name).join(', ')}.`];
   if (skippedAreas.value.some((a) => a.region)) notes.push(naverAvailable.value
     ? '구나 동 전체는 네이버를 고르면 함께 조회합니다.'
-    : '구나 동 전체는 네이버로 조회합니다. 확장에서 네이버를 켜 두고 확장이 0.8.22 이상이면 여기서 고를 수 있습니다.', '다방 구 전체 수집은 위에서 따로 실행합니다.');
+    : '구나 동 전체는 네이버로 조회합니다. 확장에서 네이버를 켜 두고 확장이 0.8.22 이상이면 여기서 고를 수 있습니다.', "다방은 대시보드의 '조회하기'가 구 전체를 모읍니다.");
   if (skippedAreas.value.some((a) => !a.region)) notes.push('역 지역은 네이버가 아닌 사이트를 하나 이상 골라야 조회합니다.');
   return notes.join(' ');
 });
@@ -608,11 +608,11 @@ onBeforeUnmount(() => {
     <div class="heading">
       <div>
         <h2 id="browse-title" tabindex="-1">확장프로그램으로 순차 조회</h2>
-        <p class="muted">크롬 확장이 새 전용 창에서 고른 지역과 사이트를 차례로 확인합니다. 다방 구 전체 수집은 위에서 실행할 수 있습니다.</p>
+        <p class="muted">크롬 확장이 새 전용 창에서 고른 지역과 사이트를 차례로 확인합니다.</p>
       </div>
       <div class="heading-actions">
-        <button class="btn btn-sm" @click="emit('manageAreas')">지역 추가·관리</button>
-        <button class="btn btn-sm" aria-label="지역 순차 조회 패널 닫기" @click="emit('close')">접기</button>
+        <button class="btn btn-sm" @click="emit('manageAreas')">지역 추가와 관리</button>
+        <button class="btn btn-sm" aria-label="지역 순차 조회 닫기" @click="emit('close')">닫기 (Esc)</button>
       </div>
     </div>
     <p v-if="!extension" class="notice">확장이 설치된 크롬에서 대시보드를 열어 주세요.</p>
@@ -806,17 +806,6 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <details class="how-it-works">
-        <summary>조회 방식과 완료 기준</summary>
-        <ol>
-          <li>크롬 확장이 전용 탭 하나에서 선택한 지역·사이트의 URL을 차례로 엽니다.</li>
-          <li>네이버, 다방, 직방의 매물 목록을 펼치거나 내리며 페이지가 받은 데이터를 수신합니다.</li>
-          <li>이 PC의 서버에 저장한 결과와 페이지 확인 범위를 표시합니다. 패널을 접어도 조회는 계속됩니다.</li>
-        </ol>
-        <p>다방 동별 조회는 지정한 동의 원/투룸 목록에 사이트의 현재 필터를 적용합니다. 모든 페이지와 서버 저장을 확인해야 ‘선택 목록 저장 완료’로 표시합니다. ‘일부 확인’에는 누락되거나 확인하지 못한 범위가 남아 있습니다. 저장 처리 건수에는 같은 매물의 갱신이 포함됩니다.</p>
-        <p>직방은 역 1km 원룸 목록의 매물 번호와 받은 상세를 대조합니다. 전체 상세의 서버 저장 또는 설정한 지역 범위 밖 제외까지 확인해야 ‘역 1km 목록 확인 완료’로 표시합니다. 법정동 전체 범위나 지역 설정 반경 전체를 확인했다는 뜻은 아닙니다.</p>
-        <p>동별 다방과 역별 직방 조회는 최대 30분 또는 2,000회, 그 밖의 조회는 최대 2분 또는 40회까지 탐색하며 마지막 응답을 최대 15초 더 기다립니다. 당근은 목록을 자동으로 내리지 않고 화면을 열 때 온 첫 목록에서 주거용 매물만 저장합니다. 목록이 그 안에서 끝난 역만 ‘역 근처 목록 확인 완료’로 표시하고, 나머지는 당근에서 직접 목록을 내려 보면 본 만큼 저장됩니다. KB는 건수만, 호갱노노는 화면 데이터만 확인하며 개별 매물로 정리하지 않습니다.</p>
-      </details>
     </template>
     <BrowseAuto :areas="areas" :scopes="areaScopes" :scopes-ready="scopesReady" />
   </section>
@@ -912,9 +901,6 @@ summary .muted { margin-left: 6px; font-weight: 400; font-size: 13px; }
 .activity li { display: flex; align-items: baseline; gap: 16px; padding: 6px 0; font-size: 13px; line-height: 1.5; }
 .activity time { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .log-counts { margin-top: 8px; }
-.how-it-works { border-top: 1px solid var(--line); padding-top: 10px; }
-.how-it-works ol { padding-left: 22px; margin: 8px 0; font-size: 14px; line-height: 1.8; }
-.how-it-works p { margin-top: 10px; font-size: 13px; color: var(--muted); }
 button:disabled { cursor: not-allowed; }
 @media (max-width: 1000px) { .choices { grid-template-columns: 1fr 1.25fr; gap: 12px; } .site-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 720px) {

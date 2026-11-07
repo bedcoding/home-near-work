@@ -21,7 +21,6 @@ const props = defineProps<{
   notices: NoticeView[];
   noticeStatus: Partial<Record<NoticeSourceId, NoticeSourceStatus>>;
 }>();
-const emit = defineEmits<{ openAll: [] }>();
 
 type Way = 'browse' | 'auto' | 'notice';
 /** source: 이 사이트 매물의 소스(매물로 읽지 않는 곳과 공고는 null). home: 바로 가기 줄에 없는 곳을 누르면 여는 주소 */
@@ -260,12 +259,6 @@ const scopeCoverage = computed(() => report.value?.scopeCoverage?.[site.value.id
       <div v-for="g in GROUPS" :key="g.way" class="group">
         <div class="group-head">
           <h3><CountTooltip :text="WAY_TIP[g.way]" :max-width="360"><span>{{ g.name }}</span></CountTooltip></h3>
-          <button
-            v-if="g.way === 'browse'" class="btn btn-sm" :disabled="!extReady"
-            :title="extReady ? '켜 둔 사이트를 새 창 하나에 엽니다' : '크롬 확장이 있어야 합니다'" @click="emit('openAll')"
-          >
-            한 번에 열기
-          </button>
         </div>
         <button
           v-for="s in g.sites" :key="s.id" type="button" class="site" :class="{ on: s.id === picked }" :aria-pressed="s.id === picked"

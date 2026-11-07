@@ -17,7 +17,6 @@ import AptView from './components/AptView.vue';
 import AreaSettings from './components/AreaSettings.vue';
 import AuctionView from './components/AuctionView.vue';
 import BrowseQueue from './components/BrowseQueue.vue';
-import DabangCollection from './components/DabangCollection.vue';
 import FilterPanel from './components/FilterPanel.vue';
 import ListingCard from './components/ListingCard.vue';
 import ListingDetail from './components/ListingDetail.vue';
@@ -685,14 +684,9 @@ async function turnOffArea(a: Area) {
 const filtersHidden = ref(localStorage.getItem('hnw-filters-hidden') === 'true');
 watch(filtersHidden, (v) => localStorage.setItem('hnw-filters-hidden', String(v)));
 
-/** 크롬 확장이 쓰는 사이트 번호의 이름 */
-const SITE_NAMES: Record<string, string> = {
-  naver: '네이버', dabang: '다방', zigbang: '직방', kbland: 'KB부동산', hogangnono: '호갱노노', daangn: '당근부동산', peterpanz: '피터팬', ziptoss: '집토스', gobang: '고방', courtauction: '법원경매',
-};
-
-// ---------- 한 번에 열기 ----------
+// ---------- 크롬 확장 ----------
 // 웹 페이지는 창을 여러 개 한꺼번에 열 수 없어서(팝업 차단), 크롬 확장이 대시보드 안에 넣는 작은 스크립트(extension/dashboard.js)에 부탁한다.
-// 확장은 확장에서 켜 둔 사이트만 새 창 하나에 연다. 피터팬, 집토스, 법원경매는 '조회하기'가 모으므로 기본으로 빠진다.
+// 머리말의 '한 번에 열기'는 지역 순차 조회와 겹쳐서 뺐고, 노선 탭의 '이 역 사이트 열기'만 openAll을 쓴다.
 const ext = ref<{ version: string; sites: string[]; browse?: boolean; browseError?: string } | null>(null);
 const browseOpen = ref(false);
 async function manageAreas() {
@@ -716,15 +710,6 @@ function selectManagementTab(next: Tab) {
 const openNote = ref<{ text: string; ok: boolean } | null>(null);
 let openNoteTimer: number | undefined;
 let openWait: number | undefined;
-const AUTO_SITES = ['peterpanz', 'ziptoss', 'gobang', 'courtauction'];
-const openAllTitle = computed(() => {
-  if (!ext.value) return '크롬 확장이 있어야 한 번에 열 수 있습니다';
-  const skipped = AUTO_SITES.filter((id) => !ext.value!.sites.includes(id)).map((id) => SITE_NAMES[id]);
-  return [
-    `크롬 확장에서 켜 둔 사이트를 새 창 하나에 엽니다: ${ext.value.sites.map((id) => SITE_NAMES[id] ?? id).join(', ')}`,
-    skipped.length ? `안 열어도 되는 곳: ${skipped.join(', ')} ('조회하기'가 모음)` : '',
-  ].filter(Boolean).join('\n');
-});
 
 function showOpenNote(text: string, ok: boolean) {
   openNote.value = { text, ok };
@@ -755,16 +740,13 @@ function openAll(e?: MouseEvent, area?: Area) {
   openWait = window.setTimeout(() => showOpenNote('크롬 확장이 답하지 않습니다. 이 페이지를 새로고침한 뒤 다시 눌러 주세요.', false), 4000);
 }
 
-/** '한 번에 열기' 옆 ▾ 메뉴: 열 지역 고르기와 사이트 하나만 열기. '조회하기' 옆 ▾ 메뉴: 탭 하나만 조회. 바깥을 누르거나 Esc로 닫는다. */
-const openMenu = ref(false);
-const openMenuEl = ref<HTMLElement | null>(null);
+/** '조회하기' 옆 ▾ 메뉴(탭 하나만 조회)와 더보기 메뉴. 바깥을 누르거나 Esc로 닫는다. */
 const runMenu = ref(false);
 const runMenuEl = ref<HTMLElement | null>(null);
 const moreMenu = ref(false);
 const moreMenuEl = ref<HTMLElement | null>(null);
-watch(tab, () => { moreMenu.value = false; openMenu.value = false; runMenu.value = false; });
+watch(tab, () => { moreMenu.value = false; runMenu.value = false; });
 function onDocClick(e: MouseEvent) {
-  if (openMenu.value && openMenuEl.value && !openMenuEl.value.contains(e.target as Node)) openMenu.value = false;
   if (runMenu.value && runMenuEl.value && !runMenuEl.value.contains(e.target as Node)) runMenu.value = false;
   if (moreMenu.value && moreMenuEl.value && !moreMenuEl.value.contains(e.target as Node)) moreMenu.value = false;
 }
@@ -773,7 +755,8 @@ function onDocClick(e: MouseEvent) {
 const SECTION_NAME: Record<NoticeSection, string> = { rent: '임대 공고', trust: '신탁 공매 공고', subscription: '청약 공고', shop: 'LH 상가 공고', land: 'LH 토지 공고' };
 /** 탭 하나만 조회 메뉴: 범위마다 도는 곳(what), 마우스 설명(공고를 받는 곳 전부), 지금 보는 탭인지. 시세 통계는 탭의 '지금 받기'와 같다. */
 const runScopes = computed(() => [
-  ...RUN_SCOPES.map((s) => {
+  // 탭이 없는 범위(다방 구 전체)는 '조회하기'에 들어 있어 메뉴에서 뺀다. 지난 조회 기록의 이름에는 그대로 쓴다.
+  ...RUN_SCOPES.filter((s) => s.tabs.length).map((s) => {
     const noticeNames = [...new Set(s.sections.flatMap((sec) => noticeSourcesOf(sec)).map((id) => NOTICE_SHORT[id]))];
     return {
       id: s.id as RunScope | 'market',
@@ -815,17 +798,21 @@ function scrollToSelected() {
 
 function onKey(e: KeyboardEvent) {
   const tag = (e.target as HTMLElement | null)?.tagName;
+  if (browseOpen.value) {
+    // 모달이 떠 있으면 Esc로 닫기만 하고, 뒤 목록의 단축키는 쓰지 않는다.
+    if (e.key === 'Escape') browseOpen.value = false;
+    return;
+  }
   if (e.key === 'Escape' && moreMenu.value) {
     moreMenu.value = false;
     moreMenuEl.value?.querySelector('button')?.focus();
     return;
   }
-  if (e.key === 'Escape' && (openMenu.value || runMenu.value)) {
-    openMenu.value = false;
+  if (e.key === 'Escape' && runMenu.value) {
     runMenu.value = false;
     return;
   }
-  if (moreMenu.value || openMenu.value || runMenu.value) return;
+  if (moreMenu.value || runMenu.value) return;
   const isRadio = tag === 'INPUT' && (e.target as HTMLInputElement).type === 'radio';
   if (isRadio && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Enter', 'Home', 'End'].includes(e.key)) return;
   if ((tag === 'INPUT' && !isRadio) || tag === 'SELECT' || tag === 'TEXTAREA' || (e.target as HTMLElement | null)?.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -1008,31 +995,6 @@ const filterUse = computed<string[] | 'all'>(() => {
         title="마지막 자동 확인 시각에 대시보드가 꺼져 있었고 그 뒤로 조회하지 않았습니다" @click="startRun()"
       >자동 확인 놓침, 지금 확인</button>
       <button class="btn" :aria-expanded="browseOpen" aria-controls="browse-queue" title="선택한 지역과 사이트를 차례로 방문하고 수집 결과를 확인합니다" @click="browseOpen = !browseOpen">지역 순차 조회</button>
-      <div ref="openMenuEl" class="openall">
-        <button class="open-main" :title="openAllTitle" @click="openAll">
-          한 번에 열기<span v-if="ext" class="open-count">{{ ext.sites.length }}곳</span>
-        </button>
-        <button
-          class="open-more" :aria-expanded="openMenu" aria-haspopup="true" aria-label="열 지역 고르기, 사이트 하나만 열기"
-          title="열 지역 고르기, 사이트 하나만 열기" @click="openMenu = !openMenu"
-        >▾</button>
-        <div v-if="openMenu" class="open-menu">
-          <template v-if="areas.length > 1">
-            <span class="menu-label">열 지역</span>
-            <div class="menu-areas">
-              <button
-                v-for="a in areas" :key="a.id" class="menu-area" :class="{ on: linkArea?.id === a.id }" :aria-pressed="linkArea?.id === a.id"
-                @click="linkAreaId = a.id"
-              >{{ a.name }} {{ a.region ? (a.region.kind === 'gu' ? '전체' : '법정동') : radiusText(a.radiusM) }}</button>
-            </div>
-          </template>
-          <span class="menu-label">하나만 열기</span>
-          <a
-            v-for="l in links" :key="l.id" class="menu-link" :href="l.url" target="_blank" rel="noopener" :title="l.where"
-            @click="openMenu = false"
-          >{{ l.name }} ↗</a>
-        </div>
-      </div>
       <div ref="runMenuEl" class="runall">
         <button class="btn btn-primary run run-main" :disabled="!!running" :title="runAllTitle" @click="startRun()">
           {{ running ? '조회 중…' : '조회하기' }}
@@ -1047,7 +1009,7 @@ const filterUse = computed<string[] | 'all'>(() => {
             <span class="run-scope-name">조회하기</span>
             <span class="run-scope-what">{{ runAllSites }} ({{ RUN_PARALLEL_SITES }}곳씩 동시에), 공고 {{ runAllNotices.length }}곳</span>
           </button>
-          <span class="menu-label" title="크롬 확장이 모으는 네이버, 당근은 '한 번에 열기'로 엽니다.">탭 하나만 조회</span>
+          <span class="menu-label" title="크롬 확장이 모으는 네이버, 당근은 '지역 순차 조회'로 돕니다.">탭 하나만 조회</span>
           <button v-for="s in runScopes" :key="s.id" class="run-scope" :class="{ here: s.here }" :title="s.title || undefined" @click="runScope(s.id)">
             <span class="run-scope-name">{{ s.label }}<span v-if="s.here" class="here-chip">지금 탭</span></span>
             <span class="run-scope-what">{{ s.what }}</span>
@@ -1085,8 +1047,12 @@ const filterUse = computed<string[] | 'all'>(() => {
     </span>
   </div>
 
-  <DabangCollection v-if="browseOpen" :areas="areas" :running="running" :auto="state?.autoCheck ?? null" @start="startRun('dabang')" @manage-areas="manageAreas" @history="tab = 'runs'" />
-  <BrowseQueue v-if="browseOpen" :areas="areas" :extension="ext" :naver-received-at="state?.naverCapture.lastAt ?? null" @close="browseOpen = false" @manage-areas="manageAreas" />
+  <!-- 지역 순차 조회: 보던 목록을 밀어내지 않게 모달로 띄운다. 바깥을 누르거나 Esc, 닫기로 닫는다. -->
+  <div v-if="browseOpen" class="overlay browse-overlay" @click.self="browseOpen = false">
+    <div class="browse-dialog" role="dialog" aria-modal="true" aria-labelledby="browse-title">
+      <BrowseQueue :areas="areas" :extension="ext" :naver-received-at="state?.naverCapture.lastAt ?? null" @close="browseOpen = false" @manage-areas="browseOpen = false; manageAreas()" />
+    </div>
+  </div>
 
   <div v-if="running" class="progress">
     <div class="spinner" aria-hidden="true"></div>
@@ -1241,7 +1207,6 @@ const filterUse = computed<string[] | 'all'>(() => {
       <RunHistory v-else-if="tab === 'runs'" :refresh-key="runsKey" />
       <SitesTab
         v-else-if="tab === 'sites' && state" :state="state" :links="links" :ext-ready="!!ext" :listings="listings" :notices="notices" :notice-status="noticeStatus"
-        @open-all="openAll()"
       />
       <AreaSettings v-else-if="tab === 'areas' && state" :areas="state.areas" :restore="state.areaRestore" @changed="refreshState" @browse="backToBrowse" @alerts="tab = 'alerts'" />
       <AlertsTab
@@ -1326,16 +1291,7 @@ h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 }
 .linkish:hover { color: var(--ink); }
 .linkish.err { margin-left: 6px; color: var(--new); font-weight: 700; text-decoration: none; }
-/* 한 번에 열기 + ▾ 메뉴(열 지역, 사이트 하나만 열기) */
-.openall { position: relative; display: flex; }
-.open-main, .open-more {
-  min-height: 38px; border: 1px solid var(--line-strong); background: var(--surface);
-  font-family: inherit; font-weight: 700; color: var(--ink-2); cursor: pointer;
-}
-.open-main { display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 10px 0 0 10px; font-size: 13px; }
-.open-more { width: 30px; margin-left: -1px; border-radius: 0 10px 10px 0; font-size: 13px; }
-.open-main:hover, .open-more:hover, .open-more[aria-expanded='true'] { border-color: var(--ink-2); color: var(--ink); position: relative; }
-.open-count { padding: 1px 8px; border-radius: 999px; background: var(--surface-2); font-size: 13px; font-weight: 600; color: var(--muted); }
+/* ▾ 메뉴 상자(조회하기 옆 탭 하나만 조회) */
 .open-menu {
   position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; display: grid; gap: 4px; min-width: 260px; padding: 12px;
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 10px 30px rgba(22, 32, 46, .18);
@@ -1456,6 +1412,9 @@ h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
   padding: 12px 18px; border-radius: 10px; background: var(--ink); color: #fff; font-size: 14px; font-weight: 600; box-shadow: 0 8px 24px rgba(22, 32, 46, .3);
 }
 .toast.err { background: var(--new); }
+.overlay.browse-overlay { align-items: start; overflow: auto; }
+.browse-dialog { position: relative; width: min(1100px, 100%); margin-block: 8px; }
+.browse-dialog :deep(.browse-queue) { width: 100%; margin: 0; box-shadow: 0 16px 48px rgba(22, 32, 46, .3); }
 .overlay { position: fixed; inset: 0; background: rgba(22, 32, 46, .45); display: grid; place-items: center; padding: 24px; z-index: 50; }
 .dialog { background: var(--surface); border-radius: 12px; width: min(1100px, 100%); max-height: 90vh; overflow: auto; padding: 20px; display: grid; gap: 10px; }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; }
@@ -1490,7 +1449,7 @@ summary { cursor: pointer; font-weight: 600; }
   .controls { position: relative; justify-content: flex-start; }
   .tabs { width: 100%; order: 3; gap: 2px; }
   .tab { min-height: 42px; padding-inline: 9px; font-size: 13px; }
-  .more-menu, .openall, .runall { position: static; }
+  .more-menu, .runall { position: static; }
   .management-menu { right: 0; }
   .open-menu, .run-menu { right: 0; min-width: 0; width: min(320px, 100%); }
   .source-filter { gap: 4px 14px; }
