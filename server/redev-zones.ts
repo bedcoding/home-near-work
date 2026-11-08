@@ -357,10 +357,21 @@ function ringDistM(lat: number, lng: number, ring: Ring) {
   return best;
 }
 
-/** 점(위도, 경도)이 든 정비사업 구역과 파일의 작성일. 구역 파일을 넣은 적이 없으면 null. */
-export function zonesAt(lat: number, lng: number): { hits: RedevHit[]; fileDate: string | null } | null {
+type ZonesAt = (lat: number, lng: number) => { hits: RedevHit[]; fileDate: string | null } | null;
+
+/**
+ * 구역 색인을 한 번 정해 두고 여러 점을 보는 함수. 매물 목록을 만들 때 쓴다.
+ * zonesAt은 부를 때마다 파일이 바뀌었는지 보는데, 매물 수만 건이면 그 확인에만 0.3초쯤 든다.
+ */
+export function zonesLookup(): ZonesAt {
   const idx = zoneIndex();
-  if (!idx) return null;
+  return (lat, lng) => (idx ? hitsAt(idx, lat, lng) : null);
+}
+
+/** 점(위도, 경도)이 든 정비사업 구역과 파일의 작성일. 구역 파일을 넣은 적이 없으면 null. */
+export const zonesAt: ZonesAt = (lat, lng) => zonesLookup()(lat, lng);
+
+function hitsAt(idx: NonNullable<typeof index>, lat: number, lng: number): { hits: RedevHit[]; fileDate: string | null } {
   const p: [number, number] = [lng, lat];
   const hits: RedevHit[] = [];
   for (const e of idx.entries) {

@@ -39,12 +39,14 @@ db.pragma('foreign_keys = ON');
 
 const dataSession = randomUUID();
 let fileRevision = 0;
+/** 자료 버전에 넣지 않는 쓰기로 바뀐 행 수(setQuietSetting). 같은 연결의 total_changes()에서 뺀다. */
+let quietChanges = 0;
 /** DB 밖의 지도 파일 등도 저장을 마친 뒤 화면 갱신에 포함한다. */
 export function touchDataRevision() { fileRevision++; }
-/** 같은 연결의 쓰기와 다른 연결의 커밋을 모두 감지한다. */
+/** 같은 연결의 쓰기와 다른 연결의 커밋을 모두 감지한다(setQuietSetting으로 쓴 것은 뺀다). */
 export function dataRevision(): string {
   const { changes } = db.prepare('SELECT total_changes() AS changes').get() as { changes: number };
-  return `${dataSession}:${changes}:${db.pragma('data_version', { simple: true })}:${fileRevision}`;
+  return `${dataSession}:${changes - quietChanges}:${db.pragma('data_version', { simple: true })}:${fileRevision}`;
 }
 
 db.exec(`
@@ -542,6 +544,14 @@ export function getSetting(key: string): string | null {
 
 export function setSetting(key: string, value: string) {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+}
+
+/**
+ * 자료 버전(dataRevision)을 바꾸지 않는 설정 쓰기. 자료 버전이 바뀌면 화면이 매물 목록 같은 큰 자료를 모두 다시 받으므로,
+ * 화면 자료(매물, 공고, 시세 등)에 들어가지 않으면서 자주 쓰는 값에만 쓴다(예: 크롬 확장이 0.5초마다 보내는 조회 진행 보고).
+ */
+export function setQuietSetting(key: string, value: string) {
+  quietChanges += db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value).changes;
 }
 
 // ---------- 서울 아파트 탭 ----------
@@ -1124,6 +1134,71 @@ export function allListings(): ListingRow[] {
 export function rawBySource(source: string): Map<string, unknown> {
   const rows = db.prepare('SELECT id, raw FROM listings WHERE source = ? AND raw IS NOT NULL').all(source) as { id: string; raw: string }[];
   return new Map(rows.map((r) => [r.id, JSON.parse(r.raw)]));
+}
+
+/**
+ * 매물 목록(buildListingViews)이 읽는 매물 행. data에서는 '원본 데이터' 버튼을 누를 때 따로 받는 설명표(explain)를 SQLite에서 뺀다(data의 절반쯤).
+ * 조회 당시 화면(seen_ref)은 스크린샷 주소(shot)와 조회 번호(shot_run)만 읽는다. 목록은 '출처 보기' 버튼을 보일지만 정하고, 나머지는 listingSeenRef로 따로 받는다.
+ */
+export interface ListingViewRow {
+  id: string;
+  source: string;
+  source_id: string;
+  data: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  status: 'active' | 'gone';
+  shot: unknown;
+  shot_run: unknown;
+}
+
+export function listingViewRows(): ListingViewRow[] {
+  return db.prepare(
+    `SELECT id, source, source_id, json_remove(data, '$.explain') AS data, first_seen_at, last_seen_at, status,
+       seen_ref ->> '$.screenshot' AS shot, seen_ref ->> '$.runId' AS shot_run
+     FROM listings`,
+  ).all() as ListingViewRow[];
+}
+
+/**
+ * 매물 목록이 읽는 네이버 원본 칸만 원본과 같은 모양으로 만든다. 네이버 원본은 매물 1만여 건에 100MB가 넘어
+ * 통째로 파싱하면 목록 만들기가 1초쯤 늘어서 SQLite에서 쓰는 칸만 뽑는다.
+ * views.ts(aptRef, tradeRef, naverZoneRef, optionsRef, ledgerRef)가 네이버 원본의 다른 칸을 읽게 되면 여기에도 더해야 한다.
+ * 읽는 칸: representativeArticleInfo의 complexNumber, complexName, articleDetail.articleFeatureDescription과
+ * duplicatedArticleInfo.articleInfoList 각각의 articleDetail.articleFeatureDescription.
+ */
+export function naverViewRaw(): Map<string, unknown> {
+  const rows = db.prepare(
+    `SELECT id,
+       json_extract(raw, '$.representativeArticleInfo.complexNumber', '$.representativeArticleInfo.complexName',
+         '$.representativeArticleInfo.articleDetail.articleFeatureDescription') AS rep,
+       CASE WHEN json_array_length(raw, '$.duplicatedArticleInfo.articleInfoList') > 0 THEN
+         (SELECT json_group_array(value -> '$.articleDetail.articleFeatureDescription') FROM json_each(raw, '$.duplicatedArticleInfo.articleInfoList'))
+       END AS dup
+     FROM listings WHERE source = 'naver' AND raw IS NOT NULL`,
+  ).all() as { id: string; rep: string; dup: string | null }[];
+  return new Map(rows.map((r) => {
+    const [complexNumber, complexName, intro] = JSON.parse(r.rep) as unknown[];
+    const dups = r.dup ? (JSON.parse(r.dup) as unknown[]) : [];
+    return [r.id, {
+      representativeArticleInfo: { complexNumber, complexName, articleDetail: { articleFeatureDescription: intro } },
+      duplicatedArticleInfo: { articleInfoList: dups.map((d) => ({ articleDetail: { articleFeatureDescription: d } })) },
+    }];
+  }));
+}
+
+/** 매물 목록이 읽는 피터팬 원본 칸(additional_options, optionsRef의 풀옵션 표시)만 원본과 같은 모양으로 만든다. naverViewRaw와 같은 까닭이다. */
+export function peterpanzViewRaw(): Map<string, unknown> {
+  const rows = db.prepare(`SELECT id, raw -> '$.additional_options' AS options FROM listings WHERE source = 'peterpanz' AND raw IS NOT NULL`)
+    .all() as { id: string; options: string | null }[];
+  return new Map(rows.map((r) => [r.id, r.options == null ? {} : { additional_options: JSON.parse(r.options) }]));
+}
+
+/** 매물 하나를 모은 조회 화면(조회 번호, 그때 연 페이지, 스크린샷). 매물이 없으면 undefined, 기록이 없으면 null. */
+export function listingSeenRef(id: string): SeenRef | null | undefined {
+  const row = db.prepare('SELECT seen_ref FROM listings WHERE id = ?').get(id) as { seen_ref: string | null } | undefined;
+  if (!row) return undefined;
+  return row.seen_ref ? (JSON.parse(row.seen_ref) as SeenRef | null) : null;
 }
 
 export function listingRaw(id: string): { data: NormalizedListing; raw: unknown } | null {

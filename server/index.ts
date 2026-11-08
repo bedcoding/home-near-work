@@ -38,7 +38,7 @@ import { saveNaverPreset, naverPresetState } from './naver-preset.js';
 import { refreshTradeSignals } from './trade-signals.js';
 import { collectPeakSources } from './peak-sources.js';
 import { collectRegionVolume } from './region-volume.js';
-import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, withTrustFacts } from './views.js';
+import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, listingSource, withTrustFacts } from './views.js';
 import { siteReport } from './site-report.js';
 import { lastAreaKindError, missingAreaKinds } from '../shared/regions.js';
 import { refreshDabangUrls } from './dabang-links.js';
@@ -381,6 +381,16 @@ app.get<{ Params: { id: string } }>('/api/listings/:id/raw', async (req, reply) 
     return { error: '매물을 찾지 못했습니다.' };
   }
   return { explain: found.data.explain ?? [], raw: found.raw };
+});
+
+/** '출처 보기': 매물을 모은 조회 번호, 그때 연 페이지, 스크린샷(기록이 없으면 null). 매물 목록에는 스크린샷이 있는지만 보낸다. */
+app.get<{ Params: { id: string } }>('/api/listings/:id/source', async (req, reply) => {
+  const ref = listingSource(req.params.id);
+  if (ref === undefined) {
+    reply.code(404);
+    return { error: '매물을 찾지 못했습니다.' };
+  }
+  return ref;
 });
 
 /** 법원경매 물건의 상세 화면을 보이는 크롬 창에 연다(사이트가 물건을 주소로 열 수 없어서 검색해서 누름). */
@@ -748,7 +758,8 @@ app.post('/api/browse/progress', async (req, reply) => {
   catch { reply.code(400); return { error: '조회 진행 정보가 올바르지 않습니다.' }; }
   const previous = latestBrowseProgress();
   if (previous && previous.updatedAt > progress.updatedAt) return { ok: true, ignored: true };
-  store.setSetting(BROWSE_PROGRESS_KEY, JSON.stringify(progress));
+  // 확장이 순회 중 0.5초마다 보내는 진단이라 자료 버전을 바꾸지 않는다. 바꾸면 화면이 폴링마다 매물 목록 같은 큰 자료를 모두 다시 받는다.
+  store.setQuietSetting(BROWSE_PROGRESS_KEY, JSON.stringify(progress));
   for (const line of browseConsoleLines(progress)) console.log(line);
   return { ok: true };
 });

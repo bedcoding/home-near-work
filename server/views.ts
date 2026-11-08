@@ -2,8 +2,8 @@ import * as store from './db.js';
 import { toNumber } from './collectors/types.js';
 import { looksSimilar } from './identity.js';
 import { parseLot, pnuOf } from './lots.js';
-import { zonesAt } from './redev-zones.js';
-import { compareTrades, type TradeMatch } from './trade-compare.js';
+import { zonesLookup } from './redev-zones.js';
+import { tradeComparer, type TradeMatch } from './trade-compare.js';
 import { zigbangItemPage } from './zigbang-parse.js';
 import { manwon } from '../shared/format.js';
 import { RUN_FILES_PURGED_KEY, screenshotPurged } from './run-files.js';
@@ -11,7 +11,7 @@ import { kindOf } from '../shared/kinds.js';
 import {
   isApartmentType, isDetachedHouseType, listingSection, NOTICE_SHORT, noticeSourcesOf, SEOUL, SEOUL_GUS, seniorInRemarks, seoulGuOf, type AptInfo, type AptRegistry, type AuctionResultSummary,
   type AuctionResultView, type AuctionSummaryKind, type CourtClaims, type LandZoneCheck, type LedgerHit, type ListingView, type NormalizedListing, type NoticeFacts, type NoticeView, type PlotZone,
-  type PriceChangeType, type PriceOption, type RatioStats, type SourceId, type TradeRef, type TrustDocRound, type TrustDocView,
+  type PriceChangeType, type PriceOption, type RatioStats, type SeenRef, type SourceId, type TradeRef, type TrustDocRound, type TrustDocView,
 } from '../shared/types.js';
 
 type CourtRow = {
@@ -226,9 +226,11 @@ function parcelJibun(addr: string | null, gu: string, dong: string): string | nu
 /**
  * 서울 아파트 매물 값을 같은 단지, 같은 전용면적의 국토부 실거래와 비교한다(trade-compare).
  * 경매와 공매 최저가는 주소 지번('lot:노원구 상계동 1234')이 같은 실거래, 없으면 주소의 단지 이름으로,
- * 네이버 매매가는 단지 이름으로, 없으면 단지 좌표로 찾은 필지(points)의 번지로 단지를 맞춘다.
+ * 네이버 매매가는 단지 이름으로, 없으면 단지 좌표로 찾은 필지(points)의 번지로 단지를 맞춘다. compareTrades는 목록을 만들 때 한 번 정한 비교 함수(tradeComparer).
  */
-function tradeRef(source: string, l: NormalizedListing, raw: unknown, points: Map<string, store.PointParcel>): TradeRef | null {
+function tradeRef(
+  source: string, l: NormalizedListing, raw: unknown, points: Map<string, store.PointParcel>, compareTrades: ReturnType<typeof tradeComparer>,
+): TradeRef | null {
   if (!isApartmentType(l.buildingType)) return null;
   if (source === 'courtauction' || source === 'onbid') {
     const price = l.prices.find((p) => p.deal === 'auction')?.price ?? null;
@@ -391,22 +393,27 @@ export function ledgerRef(source: string, l: NormalizedListing, raw: unknown): L
   return neigh || violation ? { neigh, violation } : null;
 }
 
-/** 매물 + 판정 + 확인하지 않은 변화를 화면용으로 합친다. */
-/** 사는 매물(매매, 경매, 공매)이면 좌표가 든 정비사업 구역. 구역 밖이거나 좌표가 없거나 전월세만 있는 매물이면 null. */
-function redevRef(source: string, l: NormalizedListing): ListingView['redev'] {
+/**
+ * 사는 매물(매매, 경매, 공매)이면 좌표가 든 정비사업 구역. 구역 밖이거나 좌표가 없거나 전월세만 있는 매물이면 null.
+ * zonesAt은 목록을 만들 때 한 번 정한 구역 찾기 함수(zonesLookup).
+ */
+function redevRef(source: string, l: NormalizedListing, zonesAt: ReturnType<typeof zonesLookup>): ListingView['redev'] {
   if (l.lat == null || l.lng == null) return null;
   if (source !== 'courtauction' && source !== 'onbid' && !l.prices.some((p) => p.deal === 'sale' || p.deal === 'auction')) return null;
   const at = zonesAt(l.lat, l.lng);
   return at?.hits.length ? at : null;
 }
 
+/** 매물 + 판정 + 확인하지 않은 변화를 화면용으로 합친다. */
 export function buildListingViews(): ListingView[] {
-  const rows = store.allListings();
+  const rows = store.listingViewRows();
   const courtRaw = store.rawBySource('courtauction');
   const onbidRaw = store.rawBySource('onbid');
   const courtClaims = store.courtClaimsAll();
-  /** 옵션을 읽는 원본(집토스 옵션 목록, 피터팬 풀옵션 표시, 네이버 소개 글과 단지 번호) */
-  const optionRaw = new Map([...store.rawBySource('ziptoss'), ...store.rawBySource('peterpanz'), ...store.rawBySource('naver')]);
+  /** 옵션을 읽는 원본(집토스 옵션 목록, 피터팬 풀옵션 표시, 네이버 소개 글과 단지 번호). 큰 네이버와 피터팬 원본은 쓰는 칸만 읽는다. */
+  const optionRaw = new Map([...store.rawBySource('ziptoss'), ...store.peterpanzViewRaw(), ...store.naverViewRaw()]);
+  const redevAt = zonesLookup();
+  const compareTrades = tradeComparer();
   const households = store.complexHouseholds();
   const registry = store.registryRows();
   const zones = store.zoneChecks();
@@ -441,12 +448,11 @@ export function buildListingViews(): ListingView[] {
     const verdict = verdicts.get(row.id);
     const raw = row.source === 'courtauction' ? courtRaw.get(row.id) : row.source === 'onbid' ? onbidRaw.get(row.id) : optionRaw.get(row.id);
     const reason = verdict?.reason ?? null;
-    // 원본 데이터 설명표는 '원본 데이터' 버튼을 누를 때 따로 불러온다.
-    const { explain: _explain, ...rest } = data;
+    // 원본 데이터 설명표(explain)는 '원본 데이터' 버튼을 누를 때 따로 불러온다(listingViewRows가 이미 뺐다). 건물 구분 값은 화면이 쓰지 않는다.
+    const { buildingKey: _buildingKey, ...rest } = data;
     return {
       ...rest,
       id: row.id,
-      identityKey: row.identity_key,
       firstSeenAt: row.first_seen_at,
       lastSeenAt: row.last_seen_at,
       status: row.status,
@@ -460,19 +466,28 @@ export function buildListingViews(): ListingView[] {
       noteAt: notes.get(row.id)?.updatedAt ?? null,
       relistedOf: reason?.startsWith('relisted:') ? reason.slice('relisted:'.length) : null,
       similarToDiscarded: !verdict && discarded.some((d) => d.row.id !== row.id && looksSimilar(data, d.data)),
-      seenRef: (() => {
-        const ref = row.seen_ref ? JSON.parse(row.seen_ref) : null;
-        return ref && screenshotPurged(ref, purgedThrough) ? { ...ref, screenshot: null } : ref;
-      })(),
+      // 조회 번호, 그때 연 페이지 주소, 스크린샷은 '출처 보기'를 열 때 listingSource로 받는다(페이지 주소만 목록의 3분의 1쯤 됐다).
+      sourceShot: !!row.shot && !screenshotPurged({ runId: row.shot_run }, purgedThrough),
       auction: row.source === 'courtauction' ? auctionRef(courtRaw.get(row.id), courtClaims) : row.source === 'onbid' ? onbidRef(onbidRaw.get(row.id)) : null,
       options: optionsRef(row.source, optionRaw.get(row.id), data.title ?? ''),
       apt: aptRef(row.id, row.source, data, raw, households, registry),
       zone: zoneRef(row.source, data, raw, zones, points),
-      trade: tradeRef(row.source, data, raw, points),
-      redev: redevRef(row.source, data),
+      trade: tradeRef(row.source, data, raw, points, compareTrades),
+      redev: redevRef(row.source, data, redevAt),
       ledger: ledgerRef(row.source, data, raw),
     };
   });
+}
+
+/**
+ * 매물 하나를 모은 조회 화면('출처 보기'): 조회 번호, 그때 연 페이지, 스크린샷. 30일 지나 폴더를 지운 조회면 스크린샷은 null.
+ * 매물이 없으면 undefined, 기록이 없으면 null.
+ */
+export function listingSource(id: string): SeenRef | null | undefined {
+  const ref = store.listingSeenRef(id);
+  if (!ref) return ref;
+  const purgedThrough = Number(store.getSetting(RUN_FILES_PURGED_KEY) ?? 0) || 0;
+  return screenshotPurged(ref, purgedThrough) ? { ...ref, screenshot: null } : ref;
 }
 
 /** 법원 물건 상태 코드의 이름. moved, unsold는 경매사건검색으로 본 그 날 결과가 없는 경우. */

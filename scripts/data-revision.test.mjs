@@ -38,6 +38,20 @@ test('data revision is stable for reads and changes after DB/file writes or serv
   assert.notEqual(memoryStore(t).dataRevision(), initial);
 });
 
+test('확장 조회 진행 보고처럼 조용히 쓴 설정은 자료 버전을 바꾸지 않는다', t => {
+  const store = memoryStore(t);
+  const initial = store.dataRevision();
+  store.setQuietSetting('synthetic_progress', '1');
+  store.setQuietSetting('synthetic_progress', '2');
+  assert.equal(store.getSetting('synthetic_progress'), '2');
+  assert.equal(store.dataRevision(), initial);
+  store.setSetting('synthetic', 'updated');
+  const changed = store.dataRevision();
+  assert.notEqual(changed, initial);
+  store.setQuietSetting('synthetic_progress', '3');
+  assert.equal(store.dataRevision(), changed);
+});
+
 test('administrative metadata survives area updates and replacement without changing legacy rows', t => {
   const store = memoryStore(t);
   const region = { kind: 'gu', code: '99123', sido: '예시도', sigungu: '가상구', dong: null, name: '예시도 가상구' };

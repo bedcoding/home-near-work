@@ -1,4 +1,4 @@
-import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, LineViewSetting, RedevZonesView, RentView, RunDetail, RunInfo, RunScope, SiteReport, SourceId, Station, Verdict } from '../../shared/types';
+import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, LineViewSetting, RedevZonesView, RentView, RunDetail, RunInfo, RunScope, SeenRef, SiteReport, SourceId, Station, Verdict } from '../../shared/types';
 import type { Filters } from '../../shared/filters';
 import type { WalkPin, WalkView } from '../../shared/walk';
 
@@ -21,6 +21,8 @@ export const api = {
   /** 사이트별 탭: 소스마다 최근 조회 기록과 크롬 확장 사이트가 받은 화면 데이터 요약 */
   siteReport: () => request<SiteReport>('GET', '/api/site-report'),
   raw: (id: string) => request<{ explain: ExplainRow[]; raw: unknown }>('GET', `/api/listings/${enc(id)}/raw`),
+  /** '출처 보기': 매물을 모은 조회 번호, 그때 연 페이지, 스크린샷(기록이 없으면 null). 목록에는 스크린샷이 있는지만 온다. */
+  source: (id: string) => request<SeenRef | null>('GET', `/api/listings/${enc(id)}/source`),
   /** before와 after는 바꾸기 전후 자료 버전('봤음'과 같음). 화면은 그 사이에 다른 변화가 없었으면 매물 목록을 다시 받지 않는다. */
   setVerdict: (id: string, verdict: Verdict | null) => request<{ ok: boolean; before: string; after: string }>('POST', `/api/listings/${enc(id)}/verdict`, { verdict }),
   seen: (ids: string[]) => request<{ before: string; after: string }>('POST', '/api/listings/seen', { ids }),

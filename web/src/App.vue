@@ -4,7 +4,7 @@ import {
   COLLECT_MARGIN_M, hasHomeListings, inGus, isPartialMiss, isRunFailure, nearReason, NOTICE_SHORT, noticeSection, noticeSourcesOf, RUN_ALL_SOURCES, RUN_PARALLEL_SITES, RUN_SCOPES, SOURCE_LABEL,
   type RunSiteProgress,
   type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type DealType, type ExplainRow, type HouseTradeSummary, type ListingView, type MarketView as MarketData,
-  type NoticeSection, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type RunScope, type SourceId, type Verdict,
+  type NoticeSection, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type RunScope, type SeenRef, type SourceId, type Verdict,
 } from '../../shared/types';
 import { api } from './api';
 import { createRevisionRefresh } from './refresh';
@@ -72,13 +72,24 @@ const error = ref<string | null>(null);
 /** 대시보드 서버와 연결이 끊겼을 때만 보이고, 다시 연결되면 사라진다. */
 const connectionError = ref<string | null>(null);
 const selected = ref(0);
-const sourceOf = ref<ListingView | null>(null);
+/** '출처 보기' 창의 매물과 그 매물을 모은 조회 화면. 목록에는 스크린샷이 있는지(sourceShot)만 와서 열 때 따로 받는다. */
+const sourceOf = ref<{ listing: ListingView; ref: SeenRef } | null>(null);
 const rawOf = ref<{ listing: ListingView; explain: ExplainRow[]; raw: unknown } | null>(null);
 
 async function showRaw(l: ListingView) {
   try {
     const data = await api.raw(l.id);
     rawOf.value = { listing: l, ...data };
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+async function showSource(l: ListingView) {
+  try {
+    const ref = await api.source(l.id);
+    if (ref) sourceOf.value = { listing: l, ref };
+    else error.value = '이 매물을 모은 조회 기록이 없습니다.';
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
   }
@@ -1267,7 +1278,7 @@ const filterUse = computed<string[] | 'all'>(() => {
         <Overview
           ref="overview" :listings="homes" :filters="filters" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected"
           @visible="setOverviewVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
-          @source="(l) => (sourceOf = l)" @raw="showRaw" @areas="(ids) => (filters.areaIds = ids)" @deals="(d) => (filters.deals = d)" @station="toggleStation"
+          @source="showSource" @raw="showRaw" @areas="(ids) => (filters.areaIds = ids)" @deals="(d) => (filters.deals = d)" @station="toggleStation"
           @area="turnOffArea"
         />
       </template>
@@ -1277,7 +1288,7 @@ const filterUse = computed<string[] | 'all'>(() => {
         <div class="list">
           <ListingCard
             v-for="(l, i) in currentList" :key="l.id" :listing="l" :areas="areas" :selected="i === selected"
-            @select="selected = i" @open="openOriginal(l)" @verdict="(v) => setVerdict(l, v)" @source="sourceOf = l" @raw="showRaw(l)"
+            @select="selected = i" @open="openOriginal(l)" @verdict="(v) => setVerdict(l, v)" @source="showSource(l)" @raw="showRaw(l)"
             zone-banner :zone-key-set="zoneCheck.key"
           />
           <p v-if="!currentList.length" class="empty muted">
@@ -1290,7 +1301,7 @@ const filterUse = computed<string[] | 'all'>(() => {
         </div><aside class="listing-side">
           <ListingDetail
             :listing="selectedListing" :areas="areas" @open="selectedListing && openOriginal(selectedListing)"
-            @verdict="(v) => selectedListing && setVerdict(selectedListing, v)" @source="sourceOf = selectedListing"
+            @verdict="(v) => selectedListing && setVerdict(selectedListing, v)" @source="selectedListing && showSource(selectedListing)"
             @raw="selectedListing && showRaw(selectedListing)"
           />
         </aside></div>
@@ -1307,7 +1318,7 @@ const filterUse = computed<string[] | 'all'>(() => {
           :house-trades="houseTrades" :house-age="houseAge" :house-fetching="houseFetching" :house-error="houseError"
           @house-age="(a) => (houseAge = a)" @house-fetch="fetchHouseTrades"
           @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
-          @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
+          @source="showSource" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
           @ack-notices="ackNotices" @run="startRun('auction')"
         />
       </template>
@@ -1323,7 +1334,7 @@ const filterUse = computed<string[] | 'all'>(() => {
           :house-trades="houseTrades" :house-age="houseAge" :house-fetching="houseFetching" :house-error="houseError"
           @house-age="(a) => (houseAge = a)" @house-fetch="fetchHouseTrades"
           @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
-          @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
+          @source="showSource" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
           @ack-notices="ackNotices" @run="startRun('auction')" @zone-check="checkZones"
         />
       </template>
@@ -1332,20 +1343,20 @@ const filterUse = computed<string[] | 'all'>(() => {
         :apt-gus="state?.aptGus ?? []" :near-gus="state?.gus ?? []" :region-stats="auctionResults.stats"
         :fill="state?.householdsFill ?? { key: false, last: null }" :filling="householdsFill.running" :fill-error="householdsFill.error" :zone="zoneCheck"
         @visible="setAptVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
-        @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
+        @source="showSource" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
         @run="startRun('auction')" @gus="setAptGus" @households="setHouseholds" @fill="fillHouseholds" @zone-check="checkZones"
       />
       <LineView
         v-else-if="tab === 'line' && state" :listings="lineListings" :filters="filters" :line-view="state.lineView" :running="!!running"
         :rest-seconds="state.restSeconds" @line-view="setLineView" @run="startLineRun" @open-sites="(a) => openAll(undefined, a)"
-        @open="openOriginal" @verdict="setVerdict" @source="(l) => (sourceOf = l)" @raw="showRaw"
+        @open="openOriginal" @verdict="setVerdict" @source="showSource" @raw="showRaw"
       />
       <MarketView v-else-if="tab === 'market'" :view="market" :fetching="marketFetching" :error="marketError ?? marketLoadError" :running="!!running" @fetch="fetchMarket" />
       <template v-else-if="tab === 'rooms'">
         <RoomsView
           ref="roomsView" :listings="rooms" :outside="roomsOutside" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected"
           @visible="setRoomsVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal"
-          @verdict="setVerdict" @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
+          @verdict="setVerdict" @source="showSource" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
         />
       </template>
       <SubscriptionsView v-else-if="tab === 'subs'" :notices="subNotices" :sources="noticeSourcesOf('subscription')" :status="noticeStatus" @ack="ackNotices" />
@@ -1374,17 +1385,17 @@ const filterUse = computed<string[] | 'all'>(() => {
     <div v-if="courtNote" class="toast" :class="{ err: !courtNote.ok }" role="status">{{ courtNote.text }}</div>
   </div>
 
-  <div v-if="sourceOf?.seenRef" class="overlay" @click.self="sourceOf = null">
+  <div v-if="sourceOf" class="overlay" @click.self="sourceOf = null">
     <div class="dialog">
       <div class="dialog-head">
         <h3>이 매물을 모은 화면</h3>
         <button class="btn btn-sm" @click="sourceOf = null">닫기</button>
       </div>
       <p class="muted small">
-        조회 #{{ sourceOf.seenRef.runId }}, {{ SOURCE_LABEL[sourceOf.source] }},
-        <a v-if="sourceOf.seenRef.pageUrl" :href="sourceOf.seenRef.pageUrl" target="_blank" rel="noopener">그때 연 페이지</a>
+        조회 #{{ sourceOf.ref.runId }}, {{ SOURCE_LABEL[sourceOf.listing.source] }},
+        <a v-if="sourceOf.ref.pageUrl" :href="sourceOf.ref.pageUrl" target="_blank" rel="noopener">그때 연 페이지</a>
       </p>
-      <img v-if="sourceOf.seenRef.screenshot" :src="sourceOf.seenRef.screenshot" alt="조회 당시 화면" class="shot" />
+      <img v-if="sourceOf.ref.screenshot" :src="sourceOf.ref.screenshot" alt="조회 당시 화면" class="shot" />
     </div>
   </div>
 

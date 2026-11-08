@@ -56,7 +56,7 @@ const heading = computed(() => {
         </div>
       </div>
       <div class="detail-tools">
-        <button v-if="listing.seenRef?.screenshot" type="button" @click="emit('source')">출처 보기</button>
+        <button v-if="listing.sourceShot" type="button" @click="emit('source')">출처 보기</button>
         <button type="button" @click="emit('raw')">원본 데이터</button>
       </div>
     </template>

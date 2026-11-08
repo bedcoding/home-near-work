@@ -341,7 +341,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
           v-for="s in siteLinks" :key="s.name" class="btn btn-sm site-link" :href="s.url" target="_blank" rel="noopener"
           :title="`${s.name}에서 이 물건 보기`"
         >{{ s.name }} ↗</a>
-        <button v-if="l.seenRef?.screenshot" class="btn btn-ghost btn-sm" title="이 매물을 어디서 어떻게 모았는지" @click="emit('source')">출처 보기</button>
+        <button v-if="l.sourceShot" class="btn btn-ghost btn-sm" title="이 매물을 어디서 어떻게 모았는지" @click="emit('source')">출처 보기</button>
         <button class="btn btn-ghost btn-sm" title="사이트가 준 원래 값과 저장한 값 비교" @click="emit('raw')">원본 데이터</button>
         <a v-if="naverMapUrl" class="btn btn-ghost btn-sm" :href="naverMapUrl" target="_blank" rel="noopener" title="매물 위치를 네이버 부동산 지도로 엽니다(그 자리 단지와 실거래가 확인)">네이버 지도 ↗</a>
       </div>

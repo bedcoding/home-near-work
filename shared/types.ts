@@ -478,9 +478,12 @@ export interface SeenRef {
   screenshot: string | null;
 }
 
-export interface ListingView extends NormalizedListing {
+/**
+ * 매물 목록(GET /api/listings)의 매물 하나. 수만 건을 한 번에 받으므로 화면이 쓰지 않는 칸은 뺀다:
+ * 설명표(explain)는 '원본 데이터'를 열 때, 조회 당시 화면(SeenRef)은 '출처 보기'를 열 때 따로 받고, 건물 구분 값(buildingKey)은 보내지 않는다.
+ */
+export interface ListingView extends Omit<NormalizedListing, 'explain' | 'buildingKey'> {
   id: string;
-  identityKey: string;
   firstSeenAt: string;
   lastSeenAt: string;
   status: 'active' | 'gone';
@@ -500,7 +503,8 @@ export interface ListingView extends NormalizedListing {
   relistedOf: string | null;
   /** 버림한 매물과 위치, 층, 면적이 비슷하다. */
   similarToDiscarded: boolean;
-  seenRef: SeenRef | null;
+  /** 모은 조회 화면의 스크린샷이 남아 있어 '출처 보기'를 열 수 있다. 조회 번호, 연 페이지, 스크린샷(SeenRef)은 열 때 GET /api/listings/:id/source로 받는다. */
+  sourceShot: boolean;
   /**
    * 법원경매, 온비드만. 법원, 사건번호('2024타경12345'), 물건번호는 다른 경매 사이트 주소를 만들 때 쓴다(온비드는 court '온비드', caseNo 물건관리번호).
    * appraisal 감정가(만원, 모르면 null), failed 유찰 횟수, lots 함께 매각하는 목록 수(1이면 단독).

@@ -78,8 +78,19 @@ function median(values: number[]): number {
  * 그런 거래가 없으면 null.
  */
 export function compareTrades(ways: TradeMatch[], areaM2: number | null, price: number | null): TradeRef | null {
-  if (!areaM2 || !price) return null;
-  const idx = index();
+  return tradeComparer()(ways, areaM2, price);
+}
+
+/**
+ * 거래 묶음을 한 번 정해 두고 여러 매물을 비교하는 함수(compareTrades와 같은 규칙). 매물 목록을 만들 때 쓴다.
+ * compareTrades는 부를 때마다 묶음이 새로 받은 것인지 설정을 읽어 보는데, 아파트 매물이 많으면 그것만 0.25초쯤 든다.
+ */
+export function tradeComparer(): (ways: TradeMatch[], areaM2: number | null, price: number | null) => TradeRef | null {
+  let idx: Index | null = null;
+  return (ways, areaM2, price) => (areaM2 && price ? compareWith((idx ??= index()), ways, areaM2, price) : null);
+}
+
+function compareWith(idx: Index, ways: TradeMatch[], areaM2: number, price: number): TradeRef | null {
   for (const m of ways) {
     const same = tradesOf(idx, m).filter((t) => Math.abs(t.area_m2 - areaM2) <= AREA_TOL);
     if (!same.length) continue;
