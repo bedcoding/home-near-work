@@ -10,7 +10,7 @@ import { roomRange } from '../rooms';
 import { naverCenter } from '../siteLinks';
 import { looksSeen, markSeen } from '../marks';
 import { rentRate } from '../rentRate';
-import { distanceText, priceText, pyeong } from '../format';
+import { distanceText, priceAmount, priceText, pyeong } from '../format';
 import { addWalkPin, ensureWalk, markDistances, moveWalkPin, pinCount, pinMax, removeWalkPin, renameWalkPin, setPinKind, walkPins, walkState } from '../walk';
 import { WALK_NAME_MAX, type PinKind } from '../../../shared/walk';
 import {
@@ -460,10 +460,14 @@ const priceLevel = () => {
   return z >= PRICE_ZOOM.normal ? 2 : z >= PRICE_ZOOM.strong ? 1 : 0;
 };
 
-/** 가격 글자. 고시원과 쉐어의 가장 싼 방과 비싼 방은 '월세 0/22 ~ 0/40'처럼 잇는다. */
+/**
+ * 가격 글자(정보 창, 올리면 보이는 글). 월세는 지도 표시처럼 낱말 없이 '5,000/10'으로 쓴다(보증금이 큰 월세를
+ * '월세'라고 못 박지 않고 숫자로 보이게). 전세, 단기, 매매, 경매는 '전세 1억 5,000'처럼 거래 이름을 붙인다.
+ * 고시원과 쉐어의 가장 싼 방과 비싼 방은 '0/22 ~ 0/40'처럼 잇는다.
+ */
 function pricesText(l: ListingView) {
   const range = roomRange(l);
-  return range ? `월세 ${range}` : l.prices.map(priceText).join(', ');
+  return range ?? l.prices.map((p) => (p.deal === 'monthly' ? priceAmount(p) : priceText(p))).join(', ');
 }
 
 const line = (className: string, text: string) => {
@@ -486,7 +490,7 @@ function withSelectedFirst(items: ListingView[]) {
 
 /**
  * 누르면 보이는 창: 맨 위에 건수 머리글(창 안을 스크롤해도 남음), 그 아래 매물마다 카드 하나.
- * 카드에는 가격(크게)과 전용 평수(땅은 토지), 그 아래 '원본 열기', '네이버 지도' 단추만 둔다. 옆에 목록이 있으면 카드를 누를 때
+ * 카드에는 가격(크게, 월세는 낱말 없이)과 오른쪽 끝 평수 상자, 그 아래 '원본 열기', '네이버 지도' 단추만 둔다. 옆에 목록이 있으면 카드를 누를 때
  * 목록에서 그 매물을 고른다(예전 '목록에서 보기' 단추). 층, 유형, 사이트, 내 표시(봤음, 문의함 등), 메모는 매물 카드와
  * 올리면 보이는 글에 있어서 창에는 쓰지 않는다(가격을 먼저 보게).
  * 고른 매물이 맨 위, 나머지는 싼 순(월세와 전세는 환산 월세), 별로는 맨 아래.
@@ -506,10 +510,9 @@ function popup(g: Group) {
     price.textContent = pricesText(l) || '가격 정보 없음';
     top.appendChild(price);
     if (l.areaM2 != null) {
-      // 매물 카드처럼 전용면적(땅은 토지 면적)이라고 이름을 붙인다.
-      const area = document.createElement('span');
-      area.className = 'mp-area';
-      area.append(line('mp-label', kindOf(l) === 'land' ? '토지' : '전용'), ` ${pyeong(l.areaM2)}평`);
+      // 평수는 가격 줄 오른쪽 끝에 작은 상자로 둔다(카드마다 같은 자리라 위아래로 훑기 쉽다). 올리면 전용면적(땅은 토지 면적) ㎡.
+      const area = line('mp-area', `${pyeong(l.areaM2)}평`);
+      area.title = `${kindOf(l) === 'land' ? '토지' : '전용'} ${l.areaM2}㎡`;
       top.appendChild(area);
     }
     card.appendChild(top);
@@ -1374,11 +1377,13 @@ onBeforeUnmount(() => {
 /* 옆에 목록이 있으면 카드를 누르면 목록에서 그 매물을 고른다. */
 :deep(.mp-card.go) { cursor: pointer; }
 :deep(.mp-card.go:hover) { border-color: var(--line-strong); background: #e7ebee; }
-/* 가격 줄: 가격과 평수를 한 줄에 둔다(줄바꿈하지 않아 창 폭이 이 줄보다 좁아지지 않는다). */
-:deep(.mp-top) { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 10px; white-space: nowrap; }
+/* 가격 줄: 왼쪽에 가격, 오른쪽 끝에 평수 상자(줄바꿈하지 않아 창 폭이 이 줄보다 좁아지지 않는다). */
+:deep(.mp-top) { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; white-space: nowrap; }
 :deep(.mp-top strong) { font-size: 15px; font-weight: 800; color: var(--ink); }
-:deep(.mp-area) { font-weight: 700; color: var(--ink-2); }
-:deep(.mp-label) { margin-right: 1px; font-size: 12px; font-weight: 600; color: var(--muted); }
+:deep(.mp-area) {
+  margin-left: auto; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 6px;
+  background: #fff; color: var(--ink-2); font-size: 12px; font-weight: 700; line-height: 20px;
+}
 /* 단추 줄은 줄바꿈하지 않는다(Leaflet이 이 줄 폭에 맞춰 창 폭을 정한다. 단추는 많아야 넷). */
 :deep(.mp-actions) { display: flex; flex-wrap: nowrap; gap: 6px; }
 :deep(.mp-actions button), :deep(.mp-actions a) {
