@@ -39,6 +39,7 @@ import { refreshTradeSignals } from './trade-signals.js';
 import { collectPeakSources } from './peak-sources.js';
 import { collectRegionVolume } from './region-volume.js';
 import { buildAuctionResultSummary, buildAuctionResultViews, buildListingViews, listingSource, withTrustFacts } from './views.js';
+import { createListingsBody } from './listings-body.js';
 import { siteReport } from './site-report.js';
 import { lastAreaKindError, missingAreaKinds } from '../shared/regions.js';
 import { refreshDabangUrls } from './dabang-links.js';
@@ -232,21 +233,13 @@ app.put<{ Body: unknown }>('/api/alerts', async (req, reply) => {
 app.get('/api/stations/catalog', async () => stationCatalog());
 
 /**
- * 매물 목록 응답은 수만 건(수십 MB)이라 만드는 데 몇 초 걸린다. 자료 버전(DB에 무엇이든 쓰면 바뀜)이 같고 10분이 안 지났으면
- * 만들어 둔 JSON을 그대로 보낸다. 10분 제한은 날짜에 따라 달라지는 표시가 오래 묵지 않게 둔다.
+ * 매물 목록 응답은 수만 건(수십 MB)이라 만드는 데 2초쯤 걸린다. 그동안 서버가 멈추지 않게 워커에서 만들고(listings-body.ts),
+ * 자료 버전(DB에 무엇이든 쓰면 바뀜)이 같고 10분이 안 지났으면 만들어 둔 JSON을 그대로 보낸다.
  */
-const LISTINGS_CACHE_MS = 10 * 60 * 1000;
-let listingsCache: { revision: string; at: number; body: string } | null = null;
-function listingsBody(): string {
-  if (listingsCache && listingsCache.revision === store.dataRevision() && Date.now() - listingsCache.at < LISTINGS_CACHE_MS) return listingsCache.body;
-  const body = JSON.stringify(buildListingViews());
-  // 만드는 중에 쓴 것까지 반영한 버전으로 기억한다.
-  listingsCache = { revision: store.dataRevision(), at: Date.now(), body };
-  return body;
-}
+const listings = createListingsBody({ revision: store.dataRevision, buildHere: () => JSON.stringify(buildListingViews()) });
 app.get('/api/listings', async (_req, reply) => {
   reply.type('application/json; charset=utf-8');
-  return listingsBody();
+  return listings.body();
 });
 /** 사이트별 탭: 소스마다 최근 조회 기록, 크롬 확장 사이트마다 사이트 화면이 센 수와 받은 수 */
 app.get('/api/site-report', async () => siteReport());
@@ -844,7 +837,7 @@ console.log(`회사근처 내집마련: ${DASHBOARD_URL} (켜는 데 ${process.u
 startAutoCheck();
 // 대시보드를 처음 열 때 기다리지 않게 매물 목록 응답을 미리 만들어 둔다.
 setTimeout(() => {
-  try { listingsBody(); } catch (e) { console.error('매물 목록 미리 만들기 오류:', e instanceof Error ? e.message : e); }
+  listings.body().catch((e) => console.error('매물 목록 미리 만들기 오류:', e instanceof Error ? e.message : e));
 }, 500);
 /** 끝난 지 30일 지난 조회 폴더(스크린샷, 응답 원본)를 지운다. 켠 뒤 잠시 있다가, 그 뒤로는 하루에 한 번. 조회 기록(로그, 요약)은 남는다. */
 function tidyRunFiles() {
