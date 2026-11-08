@@ -363,7 +363,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 
 <style scoped>
 .selection-label { display: none; }
-/* 넓으면 버튼을 한 줄로 두고 그 아래 작은 버튼들, 좁으면(지도 옆 목록) 버튼을 세로로 쌓고 작은 버튼들은 왼쪽 맨 아래로. */
+/* 넓으면 버튼을 오른쪽 위에 한 줄로 두고 그 아래 작은 버튼들. 좁으면(지도 옆 목록) 버튼을 주소 줄 아래 맨 밑에 한 줄로 둔다. */
 .card {
   display: grid; gap: 6px 16px; align-items: start;
   grid-template-columns: 112px minmax(0, 1fr) auto;
@@ -458,26 +458,28 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
   flex: 1; min-width: 0; min-height: 34px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px;
   background: var(--surface); color: var(--ink); font: inherit; font-size: 14px;
 }
-/* 목록 칸 너비에 맞춘다(매물 탭과 경매 탭은 지도 옆이라 좁다). */
+/*
+ * 목록 칸 너비에 맞춘다(매물 탭과 경매 탭은 지도 옆이라 좁다). 버튼을 세로로 쌓으면 카드가 버튼 높이만큼 길어져서,
+ * 버튼은 주소 줄 아래 맨 밑에 한 줄로 두고(넘치면 다음 줄), 작은 버튼들은 넓을 때처럼 주소 줄 오른쪽에 둔다.
+ */
 @container (max-width: 1060px) {
   .card {
-    grid-template-columns: 112px minmax(0, 1fr) 104px;
+    grid-template-columns: 112px minmax(0, 1fr) auto;
     grid-template-areas:
-      'thumb stats actions'
-      'thumb tags  actions'
-      'thumb meta  actions'
-      'thumb more  actions';
+      'thumb stats   stats'
+      'thumb tags    tags'
+      'thumb meta    more'
+      'thumb actions actions';
   }
   .card.no-thumb {
-    grid-template-columns: minmax(0, 1fr) 104px;
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      'stats actions'
-      'tags  actions'
-      'meta  actions'
-      'more  actions';
+      'stats   stats'
+      'tags    tags'
+      'meta    more'
+      'actions actions';
   }
-  .actions { display: grid; }
-  .more { justify-content: flex-start; margin-left: -8px; }
+  .actions { flex-wrap: wrap; justify-content: flex-start; }
 }
 /* 더 좁으면 사진은 숫자 줄 옆에만 두고, 주소와 버튼은 카드 너비를 다 쓴다. 숫자 칸도 조금 좁힌다. */
 @container (max-width: 780px) {
@@ -493,6 +495,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
   .stat.floor { min-width: 44px; }
   .stat.dist { width: 72px; }
   .actions { display: flex; flex-wrap: wrap; justify-content: flex-start; }
+  .more { justify-content: flex-start; margin-left: -8px; }
 }
 @container (max-width: 480px) {
   .card { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'thumb' 'stats' 'tags' 'meta' 'actions' 'more'; }

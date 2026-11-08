@@ -10,6 +10,7 @@ import { ledgerChips } from '../ledger';
 import { isRoomStay, roomRange, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
 import { looksSeen, markSeen, NOTE_MAX, saveNote, setContacted } from '../marks';
+import { rentRate } from '../rentRate';
 import { distanceText, manwon, perPyeong, priceText, pyeong } from '../format';
 import { addWalkPin, ensureWalk, markDistances, moveWalkPin, pinCount, pinMax, removeWalkPin, renameWalkPin, setPinKind, walkPins, walkState, walkTimes } from '../walk';
 import { WALK_NAME_MAX, type PinKind } from '../../../shared/walk';
@@ -22,7 +23,8 @@ import InfoModal from './InfoModal.vue';
 // 매물 탭 오른쪽 지도와 경매 탭, 고시원과 쉐어 탭의 지도가 같이 쓴다.
 // - 매물(같은 자리는 숫자 동그라미로 묶음)을 누르면 정보 창이 뜨고, 거기서 '목록에서 보기'나 '원본 열기'를 누른다.
 //   확대해 보면(PRICE_ZOOM) 동그라미 대신 가격('보증금/월세', 전세 '전 1.5억')을 쓴 표시로 그린다. 가격 표시끼리 글자가 가려질 만큼
-//   겹치면 지금 확대에서 한 표시로 묶어(더 확대하면 풀림) 별로가 아닌 매물 중 가장 싼 가격과 건수를 쓰고, 뒤에 카드가 깔린 모양으로 그린다.
+//   겹치면 지금 확대에서 한 표시로 묶어(더 확대하면 풀림) 별로가 아닌 매물 중 가장 싼 매물(월세와 전세는 매물 카드의 환산 월세로 견줌)의
+//   가격과 건수를 쓰고, 뒤에 카드가 깔린 모양으로 그린다.
 //   옆에 목록이 있으면 누를 때 그 묶음 매물들을 reveal 이벤트로 알려 목록도 그 매물로 옮기게 한다.
 // - 매물 표시는 화면 근처에 있는 것만 그리고, 지도를 옮기거나 확대하면 바뀐 묶음만 갈아 끼운다(수천 건을 한꺼번에 다시 만들면 느려서).
 // - 역(흰 동그라미, 켜진 지역은 검은 동그라미)을 누르면 그 역 지역을 켜고 끈다(station 이벤트, 확대 12 이상에서 보임).
@@ -135,7 +137,7 @@ interface Group {
   sum: Summary;
   /** 든 자리마다 매물(각각 showOrder 순) */
   parts: ListingView[][];
-  /** 별로가 아닌 매물을 가격이 낮은 순으로, 별로는 맨 뒤. 정보 창이나 올리면 보이는 글을 처음 열 때 늘어놓는다. */
+  /** 별로가 아닌 매물을 싼 순(comparePrice)으로, 별로는 맨 뒤. 정보 창이나 올리면 보이는 글을 처음 열 때 늘어놓는다. */
   readonly items: ListingView[];
 }
 
@@ -232,18 +234,41 @@ function mapPrice(p: PriceOption): string {
 
 const DEAL_ORDER: Record<DealType, number> = { monthly: 0, short: 1, jeonse: 2, sale: 3, auction: 4 };
 
-/** 첫 가격(카드 가격 줄의 첫 값) 비교: 월세와 단기 먼저 월세가 낮은 것, 그다음 보증금, 매매가가 낮은 것. 가격이 없으면 뒤로 */
+/** 매물 카드의 환산 월세가 쓰는 전환율(연 %). 모르면 null */
+const currentRate = () => rentRate.value.local ?? rentRate.value.legal;
+/** 묶음 순서를 낼 때 쓰는 전환율. 같은 자리 묶음을 다시 만들 때 currentRate()를 읽어 둔다(견줄 때마다 읽지 않게). */
+let rateNow: number | null = null;
+
+/** 환산 월세(만원/월): 월세 + 보증금 × 전환율 ÷ 12, 전세는 전세금 × 전환율 ÷ 12. 매물 카드(convertedRent)와 같은 식이고, 낼 수 없으면 null */
+function converted(p: PriceOption): number | null {
+  if (rateNow == null || p.deposit == null) return null;
+  if (p.deal === 'monthly' && p.monthly != null) return p.monthly + (p.deposit * rateNow) / 1200;
+  if (p.deal === 'jeonse' && p.deposit > 0) return (p.deposit * rateNow) / 1200;
+  return null;
+}
+
+/**
+ * 첫 가격(카드 가격 줄의 첫 값) 비교. 월세와 전세는 환산 월세가 낮은 것(같으면 보증금이 낮은 것)을 먼저 둔다.
+ * 환산 월세를 낼 수 없는 가격(단기, 매매, 경매, 전환율을 모를 때)은 그 뒤에 거래 종류, 월세, 보증금, 매매가가 낮은 순으로 둔다. 가격이 없으면 맨 뒤.
+ */
 function comparePrice(a: PriceOption | undefined, b: PriceOption | undefined) {
   if (!a || !b) return Number(!a) - Number(!b);
+  const ca = converted(a);
+  const cb = converted(b);
+  if (ca != null || cb != null) {
+    if (ca == null) return 1;
+    if (cb == null) return -1;
+    return ca - cb || (a.deposit ?? 0) - (b.deposit ?? 0);
+  }
   return DEAL_ORDER[a.deal] - DEAL_ORDER[b.deal] || (a.monthly ?? 0) - (b.monthly ?? 0) || (a.deposit ?? 0) - (b.deposit ?? 0) || (a.price ?? 0) - (b.price ?? 0);
 }
 
-/** 묶음 안 순서(정보 창, 올리면 보이는 글, 목록에 알리는 순서): 별로가 아닌 매물을 가격이 낮은 순으로, 별로는 맨 뒤 */
+/** 묶음 안 순서(정보 창, 올리면 보이는 글, 목록에 알리는 순서): 별로가 아닌 매물을 싼 순(comparePrice)으로, 별로는 맨 뒤 */
 const showOrder = (a: ListingView, b: ListingView) => Number(a.verdict === 'meh') - Number(b.verdict === 'meh') || comparePrice(a.prices[0], b.prices[0]);
 
 /**
  * 묶음 요약. 확대할 때마다 다시 묶으므로 매물을 다시 훑지 않고 이 값만 더해 가며, 표시 모양도 이것으로 정한다.
- * best는 가격 표시에 쓸 매물(별로가 아닌 매물 중 첫 가격이 가장 싼 것, 모두 별로면 별로 중에서, 가격이 없으면 null), text는 그 가격 글자,
+ * best는 가격 표시에 쓸 매물(별로가 아닌 매물 중 comparePrice로 가장 싼 것, 모두 별로면 별로 중에서, 가격이 없으면 null), text는 그 가격 글자,
  * textW는 그 글자 폭(그 묶음이 그려질 글자 크기), n은 든 매물 수. 나머지 수와 표시는 별로가 아닌 매물만 센다. 표시 앞 글자(📞, ✓, ✕)는
  * called와 '별로가 아닌 매물을 다 봤는지'(nonMehSeen === nonMeh, 모두 별로여도 같음)로 정해진다.
  */
@@ -316,20 +341,21 @@ function textWidth(text: string, px: number) {
 
 /**
  * 가격 표시 상자의 대략 폭(px). 겹치는지 따질 때만 쓰며 아래 CSS의 .price span에 맞춘다.
- * 안쪽 여백과 테두리, 📞나 ✓나 ✕(글자 한 칸으로 침), 건수 동그라미(.price span b)를 더한다. 높이는 LABEL_H.
+ * 안쪽 여백과 테두리, 가격 앞 📞나 ✓나 ✕(drawGroup과 같은 순서로 고른 그 글자 폭), 건수 동그라미(.price span b)를 더한다. 높이는 LABEL_H.
  */
 function labelWidth(s: Summary, strong: boolean) {
   const fs = strong ? 12 : 11;
   let w = (strong ? 16 : 13) + s.textW;
-  if (s.called || s.nonMehSeen === s.nonMeh) w += 3 + fs;
+  const mark = s.called ? '📞' : s.nonMehSeen === s.nonMeh ? (s.nonMeh ? '✓' : '✕') : '';
+  if (mark) w += 3 + textWidth(mark, fs);
   if (s.n > 1) w += countWidth(s.n);
   return w;
 }
-/** 건수 동그라미 폭과 그 앞 틈(px) */
+/** 건수 동그라미 폭과 그 앞 틈(px). 모든 상자가 border-box라 동그라미는 '최소 14px'과 '글자 + 좌우 여백 3px씩' 중 넓은 쪽이다. */
 const countWidths = new Map<number, number>();
 function countWidth(n: number) {
   let w = countWidths.get(n);
-  if (w == null) countWidths.set(n, (w = 3 + 6 + Math.max(14, textWidth(String(n), 10))));
+  if (w == null) countWidths.set(n, (w = 3 + Math.max(14, textWidth(String(n), 10) + 6)));
   return w;
 }
 const LABEL_H = { normal: 20.5, strong: 25 };
@@ -409,7 +435,10 @@ let spotCache: Spot[] | null = null;
  * 펼친 목록의 매물(진한 표시)과 나머지는 섞지 않고, 진한 묶음이 위에 오게 뒤에 둔다.
  */
 function computeGroups(level: number, zoom: number): Group[] {
-  spotCache ??= spots();
+  if (!spotCache) {
+    rateNow = currentRate();
+    spotCache = spots();
+  }
   const out: Group[] = [];
   const labels: Record<'b' | 's', Spot[]> = { b: [], s: [] };
   const head = (strong: boolean, priced: boolean) => `${level}${strong ? 's' : 'b'}${priced ? 'p' : 'd'}|`;
@@ -456,7 +485,8 @@ function withSelectedFirst(items: ListingView[]) {
 
 /**
  * 누르면 보이는 창: 묶음 매물마다 가격, 평, 평당, 층, 유형, 방, 사이트, 제목과 '목록에서 보기', '원본 열기'.
- * 고른 매물이 맨 위, 나머지는 가격이 낮은 순, 별로는 맨 아래.
+ * 고른 매물이 맨 위, 나머지는 싼 순(월세와 전세는 환산 월세), 별로는 맨 아래. 폭은 Leaflet이 가장 긴 줄에 맞추되
+ * 300px보다 좁히지 않는다(내용이 짧은 창에서 단추가 한 줄에 하나씩 쌓이지 않게).
  */
 function popup(g: Group) {
   const items = withSelectedFirst(g.items);
@@ -591,7 +621,7 @@ function popup(g: Group) {
     more.textContent = `외 ${items.length - POPUP_MAX}건`;
     box.appendChild(more);
   }
-  L.popup({ maxWidth: 340, className: 'mp-popup' }).setLatLng([g.lat, g.lng]).setContent(box).openOn(map!);
+  L.popup({ maxWidth: 340, minWidth: 300, className: 'mp-popup' }).setLatLng([g.lat, g.lng]).setContent(box).openOn(map!);
 }
 
 /** 역: 켜진 지역이면 검은 동그라미, 아니면 흰 동그라미. 누르면 station 이벤트로 켜고 끈다. */
@@ -1055,6 +1085,8 @@ watch(
     drawDots(fit);
   },
 );
+// 환산 월세 전환율이 바뀌면(매물이나 기준금리가 바뀌어 카드 값이 바뀔 때) 대표 가격과 묶음 안 순서를 다시 낸다.
+watch(currentRate, () => drawDots(false));
 watch(
   () => props.areas,
   () => {
@@ -1158,8 +1190,9 @@ onBeforeUnmount(() => {
             </dd>
             <dt><b class="price-sample multi-sample">500/40<i class="cnt">4</i></b></dt>
             <dd>
-              <b>묶음</b>: 가격 표시끼리 글자가 가려질 만큼 겹치면 한 표시로 묶고, 별로가 아닌 매물 중 가장 싼 가격과 건수를 씁니다.
-              뒤에 카드가 깔린 모양이면 묶음이고, 더 확대하면 풀립니다. 누르면 고른 매물이 맨 위, 나머지는 가격이 낮은 순, 별로는 맨 아래로 뜹니다.
+              <b>묶음</b>: 가격 표시끼리 글자가 가려질 만큼 겹치면 한 표시로 묶고, 별로가 아닌 매물 중 가장 싼 매물의 가격과 건수를 씁니다.
+              월세와 전세는 매물 카드의 환산 월세(월세 + 보증금 × 전환율 ÷ 12)로 견줍니다. 뒤에 카드가 깔린 모양이면 묶음이고, 더 확대하면 풀립니다.
+              누르면 고른 매물이 맨 위, 나머지는 싼 순, 별로는 맨 아래로 뜹니다.
             </dd>
             <dt><b class="price-sample seen-sample">✓ 500/40</b></dt>
             <dd>
