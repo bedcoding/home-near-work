@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
-import { RUN_SCOPES, SOURCE_LABEL, type RunDetail, type RunInfo, type RunScope } from '../../../shared/types';
+import { isPartialMiss, isRunFailure, RUN_SCOPES, SOURCE_LABEL, type RunDetail, type RunInfo, type RunScope, type RunSourceSummary } from '../../../shared/types';
 import { api } from '../api';
 import { dateTime } from '../format';
 
@@ -22,6 +22,14 @@ onMounted(load);
 watch(() => props.refreshKey, load);
 
 const statusText: Record<RunInfo['status'], string> = { running: '조회 중', done: '완료', error: '실패', stopped: '중단' };
+/** 빨간 점을 붙일 조회: 조회 전체가 오류로 끝났거나 진짜 실패한 사이트가 있다(직접 중단한 것과 일부만 못 본 것은 빼고) */
+const hasFailure = (run: RunInfo) => run.status === 'error' || (run.summary?.sources ?? []).some(isRunFailure);
+/** 사이트 한 줄 결과: 직접 중단은 흐리게, 일부만 못 본 것은 주황, 실패는 빨강 */
+function sourceResult(s: RunSourceSummary): { tone: 'muted' | 'warn' | 'err'; text: string } {
+  if (s.error === '중단함') return { tone: 'muted', text: '중단' };
+  if (isPartialMiss(s.error)) return { tone: 'warn', text: `일부 빠짐: ${s.error!.replace(/^일부를 보지 못함:\s*/, '')}` };
+  return { tone: 'err', text: `실패: ${s.error ?? '이유가 남지 않음'}` };
+}
 const kindText: Record<'page' | 'data' | 'action', string> = { page: '페이지', data: '데이터', action: '화면 조작' };
 </script>
 
@@ -36,7 +44,7 @@ const kindText: Record<'page' | 'data' | 'action', string> = { page: '페이지'
         <tr v-for="run in runs" :key="run.id">
           <td class="num tight">#{{ run.id }}</td>
           <td class="num tight">{{ dateTime(run.startedAt) }}</td>
-          <td class="words">{{ run.status === 'done' && run.summary?.complete === false ? '일부 확인' : statusText[run.status] }}<span v-if="run.error" class="muted">, {{ run.error }}</span></td>
+          <td class="words"><span v-if="hasFailure(run)" class="issue-dot" role="img" aria-label="실패 있음"></span>{{ run.status === 'done' && run.summary?.complete === false ? '일부 확인' : statusText[run.status] }}<span v-if="run.error" class="muted">, {{ run.error }}</span></td>
           <td class="tight">{{ run.auto ? '자동, ' : '' }}{{ run.noticesOnly ? '공고만, ' : '' }}{{ run.scope ? `${scopeLabel(run.scope)}만, ` : '' }}{{ run.line ? `${run.line} 노선, ` : '' }}{{ run.visible ? '보면서' : '조용히' }}</td>
           <td class="words">
             <div v-for="s in run.summary?.sources ?? []" :key="s.source" class="src">
@@ -45,7 +53,7 @@ const kindText: Record<'page' | 'data' | 'action', string> = { page: '페이지'
                 저장 {{ s.kept }}건<span v-if="s.incidentalCount"> (주변·지역 미확인 {{ s.incidentalCount }}건 포함)</span>, 신규 {{ s.newCount }}, 가격 변동 {{ s.priceChanged }}<span v-if="s.relisted">, 재등록 숨김 {{ s.relisted }}</span>
                 <span v-if="s.baselineAreas.length" class="muted">, 기준점: {{ s.baselineAreas.join(', ') }}</span>
               </template>
-              <span v-else class="err">일부 확인·오류: {{ s.error }} · 받은 매물 저장 {{ s.kept }}건</span>
+              <span v-else :class="sourceResult(s).tone">{{ sourceResult(s).text }}, 받은 매물 저장 {{ s.kept }}건</span>
             </div>
           </td>
           <td><button class="btn btn-sm" @click="open(run)">자세히</button></td>
@@ -126,6 +134,8 @@ th { background: var(--surface-2); font-size: 13px; color: var(--ink-2); }
 .list td:nth-child(3) { min-width: 64px; }
 .src { margin-bottom: 2px; }
 .err { color: var(--new); }
+.warn { color: var(--up); }
+.issue-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; vertical-align: middle; border-radius: 50%; background: var(--new); }
 .overlay { position: fixed; inset: 0; background: rgba(22, 32, 46, .45); display: grid; place-items: center; padding: 24px; z-index: 50; }
 .dialog { background: var(--surface); border-radius: 12px; width: min(1100px, 100%); max-height: 90vh; overflow: auto; padding: 20px; display: grid; gap: 10px; }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; }

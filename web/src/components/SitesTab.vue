@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { NOTICE_SOURCE_LABEL, type AppState, type ListingView, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type SiteReport, type SourceId } from '../../../shared/types';
+import { isPartialMiss, NOTICE_SOURCE_LABEL, type AppState, type ListingView, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type SiteReport, type SourceId } from '../../../shared/types';
 import { priceText } from '../../../shared/format';
 import { api } from '../api';
 import { ago, dateTime, distanceM, pyeong } from '../format';
@@ -168,11 +168,10 @@ interface RowInfo {
 const OLD_DAYS = 8;
 const daysSince = (iso: string) => (Date.now() - new Date(iso).getTime()) / 86400000;
 /** 조회 결과 글자와 색: 일부만 읽은 것('일부를 보지 못함: …')은 실패와 따로 주황으로 */
-const partial = (error: string | null) => !!error?.startsWith('일부를 보지 못함');
 const resultText = (status: string, error: string | null) =>
-  status === 'ok' ? '성공' : error === '중단함' ? '중단' : partial(error) ? '일부 빠짐' : '실패';
+  status === 'ok' ? '성공' : error === '중단함' ? '중단' : isPartialMiss(error) ? '일부 빠짐' : '실패';
 const resultTone = (status: string, error: string | null): RowInfo['tone'] =>
-  status === 'ok' ? 'ok' : error === '중단함' ? 'muted' : partial(error) ? 'warn' : 'bad';
+  status === 'ok' ? 'ok' : error === '중단함' ? 'muted' : isPartialMiss(error) ? 'warn' : 'bad';
 
 /** 왼쪽 목록 한 줄: 상태 점(받은 지 오래됐으면 주황, 실패면 빨강), 매물이나 공고 수, 마지막으로 받은 때 */
 function rowInfo(s: Site): RowInfo {

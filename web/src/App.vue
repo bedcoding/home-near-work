@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, triggerRef, watch } from 'vue';
 import {
-  COLLECT_MARGIN_M, hasHomeListings, inGus, nearReason, NOTICE_SHORT, noticeSection, noticeSourcesOf, RUN_ALL_SOURCES, RUN_PARALLEL_SITES, RUN_SCOPES, SOURCE_LABEL,
+  COLLECT_MARGIN_M, hasHomeListings, inGus, isPartialMiss, isRunFailure, nearReason, NOTICE_SHORT, noticeSection, noticeSourcesOf, RUN_ALL_SOURCES, RUN_PARALLEL_SITES, RUN_SCOPES, SOURCE_LABEL,
   type RunSiteProgress,
   type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type DealType, type ExplainRow, type HouseTradeSummary, type ListingView, type MarketView as MarketData,
   type NoticeSection, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type RunScope, type SourceId, type Verdict,
@@ -857,14 +857,18 @@ const runAllTitle =
   '네이버는 크롬 확장이 모읍니다.';
 /** 조회 중 사이트 상태 이름 */
 const SITE_STATE: Record<RunSiteProgress['status'], string> = { waiting: '대기', running: '도는 중', done: '끝', error: '실패', skipped: '안 돎' };
+/** 끝까지 돌았지만 일부를 못 본 사이트는 '실패'가 아니라 '일부 빠짐'(주황)으로 보인다 */
+const sitePartial = (s: RunSiteProgress) => s.status === 'error' && isPartialMiss(s.message);
 function runScope(id: RunScope | 'market') {
   runMenu.value = false;
   if (id === 'market') void fetchMarket();
   else void startRun(id);
 }
 
-/** 마지막 조회에서 실패한 사이트(사용자가 중단한 것은 빼고) */
-const failedSources = computed(() => (state.value?.lastRun?.summary?.sources ?? []).filter((s) => s.status !== 'ok' && s.error !== '중단함'));
+/** 마지막 조회에서 실패한 사이트(사용자가 중단한 것과 일부만 못 본 것은 빼고, 일부 빠짐은 사이트별 탭과 조회 기록에 주황으로 남는다) */
+const failedSources = computed(() => (state.value?.lastRun?.summary?.sources ?? []).filter(isRunFailure));
+/** 더보기 버튼과 그 안의 '조회 기록'에 빨간 점을 붙일지: 마지막 조회가 오류로 끝났거나 실패한 사이트가 있을 때 */
+const runIssue = computed(() => failedSources.value.length > 0 || state.value?.lastRun?.status === 'error');
 const failedTitle = computed(() =>
   [state.value?.lastRun?.status === 'error' ? state.value.lastRun.error : null, ...failedSources.value.map((s) => `${SOURCE_LABEL[s.source]}: ${s.error ?? '실패'}`)]
     .filter(Boolean)
@@ -965,7 +969,7 @@ onBeforeUnmount(() => {
 });
 
 /** 보기 탭. count는 탭 옆 숫자, news는 '신규 N' 표시. main은 앞쪽 큰 탭, 나머지는 오른쪽 작은 탭. */
-const tabs = computed<{ id: Tab; label: string; count: number | null; news?: number; near?: number; title?: string; main?: boolean }[]>(() => [
+const tabs = computed<{ id: Tab; label: string; count: number | null; news?: number; near?: number; title?: string; main?: boolean; issue?: boolean }[]>(() => [
   { id: 'overview', label: '매물', count: null, news: homeNews.value, title: '매매와 전월세', main: true },
   {
     id: 'auction', label: '경매', count: auctionsOfTab.value.length,
@@ -1003,7 +1007,7 @@ const tabs = computed<{ id: Tab; label: string; count: number | null; news?: num
   { id: 'checklist', label: '체크리스트', count: null, title: '집을 볼 때 확인할 하자와 계약 전에 확인할 것(전세, 월세, 매매, 경매마다)' },
   { id: 'sites', label: '사이트별', count: null, title: '사이트마다 모은 매물 수, 마지막으로 받은 때, 사이트 화면에 있던 수와 받은 수, 조회 기록', main: true },
   { id: 'marked', label: '관심, 별로, 버림', count: markedCounts.value.star + markedCounts.value.meh + markedCounts.value.discard, title: '관심, 별로, 버림으로 표시한 매물' },
-  { id: 'runs', label: '조회 기록', count: null },
+  { id: 'runs', label: '조회 기록', count: null, issue: runIssue.value, title: runIssue.value ? '마지막 조회에 실패한 사이트가 있습니다. 빨간 점이 붙은 줄을 보세요.' : undefined },
   { id: 'areas', label: '지역', count: null },
   { id: 'alerts', label: '설정', count: null, title: '조회 방식과 조회가 끝나면 띄울 알림' },
 ]);
@@ -1104,19 +1108,19 @@ const filterUse = computed<string[] | 'all'>(() => {
       <div ref="moreMenuEl" class="more-menu">
         <button class="more-trigger" :class="{ on: moreTabs.some((t) => t.id === tab) }" :aria-expanded="moreMenu" aria-controls="management-menu" @click="moreMenu = !moreMenu">
           {{ moreTabs.find((t) => t.id === tab)?.label ?? '더보기' }}
-          <span v-if="failedSources.length || state?.lastRun?.status === 'error'" class="issue-dot" aria-label="조회 오류 있음"></span>
+          <span v-if="runIssue" class="issue-dot" role="img" aria-label="조회 실패 있음"></span>
           <span aria-hidden="true">▾</span>
         </button>
         <div v-if="moreMenu" id="management-menu" class="management-menu">
           <nav aria-label="관리 메뉴">
             <button v-for="t in moreTabs" :key="t.id" :aria-current="tab === t.id ? 'page' : undefined" :title="t.title" @click="selectManagementTab(t.id)">
-              {{ t.label }}<span v-if="t.count" class="muted num">{{ t.count }}</span>
+              <span class="menu-name">{{ t.label }}<span v-if="t.issue" class="issue-dot" role="img" aria-label="실패 있음"></span></span><span v-if="t.count" class="muted num">{{ t.count }}</span>
             </button>
           </nav>
           <div v-if="state" class="when">
-            <span v-if="state.lastRun && !running">
+            <span v-if="state.lastRun">
               마지막 조회 {{ dateTime(state.lastRun.finishedAt ?? state.lastRun.startedAt) }}<template v-if="state.lastRun.scope"> ({{ RUN_SCOPES.find((s) => s.id === state!.lastRun!.scope)?.label ?? (state.lastRun.scope === 'naver' ? '네이버 시험 조회' : state.lastRun.scope) }})</template><template v-if="state.lastRun.status === 'stopped'"> 중단</template>
-              <button v-if="failedSources.length || state.lastRun.status === 'error'" class="linkish err" :title="failedTitle" @click="tab = 'sites'; moreMenu = false">실패 {{ failedSources.length || '' }}곳</button>
+              <button v-if="runIssue" class="linkish err" :title="failedTitle" @click="tab = 'sites'; moreMenu = false">실패 {{ failedSources.length || '' }}곳</button>
             </span>
             <button class="linkish" title="자동 확인 요일과 시각, 창 띄우기는 설정에서 바꿉니다" @click="tab = 'alerts'; moreMenu = false">{{ autoCheckText }}</button>
           </div>
@@ -1144,9 +1148,9 @@ const filterUse = computed<string[] | 'all'>(() => {
     <div class="progress-body">
       <strong>{{ running.message }}</strong>
       <ul v-if="running.sites?.length" class="run-sites" aria-label="사이트별 진행">
-        <li v-for="s in running.sites" :key="s.source" class="run-site" :class="s.status" :title="s.message ?? ''">
+        <li v-for="s in running.sites" :key="s.source" class="run-site" :class="[s.status, { partial: sitePartial(s) }]" :title="s.message ?? ''">
           <span class="run-site-name">{{ SOURCE_LABEL[s.source] }}</span>
-          <span class="run-site-state">{{ s.status === 'done' && s.message ? s.message : SITE_STATE[s.status] }}</span>
+          <span class="run-site-state">{{ s.status === 'done' && s.message ? s.message : sitePartial(s) ? '일부 빠짐' : SITE_STATE[s.status] }}</span>
         </li>
         <li v-if="running.noticeCount" class="run-site notices">
           <span class="run-site-name">공고</span>
@@ -1370,6 +1374,7 @@ h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .when { display: grid; gap: 8px; padding: 12px; margin-top: 6px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .when .linkish { text-align: left; }
 .issue-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--new); }
+.menu-name { display: inline-flex; align-items: center; gap: 7px; }
 .linkish {
   padding: 0; border: 0; background: none; font: inherit; color: var(--muted); cursor: pointer;
   text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px;
@@ -1427,6 +1432,8 @@ h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .run-site.done .run-site-state { color: var(--ink-2); }
 .run-site.error { border-color: var(--new); }
 .run-site.error .run-site-state { color: var(--new); font-weight: 700; }
+.run-site.error.partial { border-color: var(--up); }
+.run-site.error.partial .run-site-state { color: var(--up); }
 .run-site.skipped, .run-site.waiting { opacity: 0.75; }
 .run-site.notices { border-style: dashed; }
 .progress .stop { border-color: var(--new); color: var(--new); }

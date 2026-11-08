@@ -880,6 +880,12 @@ export interface RunSourceSummary {
   coverage?: CollectionCoverage[];
 }
 
+/** 끝까지 돌았지만 일부를 못 본 사이트('일부를 보지 못함: …'). 받은 매물은 저장하고 '사라짐' 처리만 건너뛴 것이라 실패와 따로 본다. */
+export const isPartialMiss = (error: string | null | undefined): boolean => !!error?.startsWith('일부를 보지 못함');
+/** 조회에서 진짜 실패한 사이트인지: 직접 중단한 것과 일부만 못 본 것은 빼고 */
+export const isRunFailure = (s: { status: string; error?: string | null }): boolean =>
+  s.status !== 'ok' && s.error !== '중단함' && !isPartialMiss(s.error);
+
 export interface RunSummary {
   sources: RunSourceSummary[];
   newCount: number;
