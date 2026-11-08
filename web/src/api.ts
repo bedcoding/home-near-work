@@ -21,7 +21,8 @@ export const api = {
   /** 사이트별 탭: 소스마다 최근 조회 기록과 크롬 확장 사이트가 받은 화면 데이터 요약 */
   siteReport: () => request<SiteReport>('GET', '/api/site-report'),
   raw: (id: string) => request<{ explain: ExplainRow[]; raw: unknown }>('GET', `/api/listings/${enc(id)}/raw`),
-  setVerdict: (id: string, verdict: Verdict | null) => request('POST', `/api/listings/${enc(id)}/verdict`, { verdict }),
+  /** before와 after는 바꾸기 전후 자료 버전('봤음'과 같음). 화면은 그 사이에 다른 변화가 없었으면 매물 목록을 다시 받지 않는다. */
+  setVerdict: (id: string, verdict: Verdict | null) => request<{ ok: boolean; before: string; after: string }>('POST', `/api/listings/${enc(id)}/verdict`, { verdict }),
   seen: (ids: string[]) => request<{ before: string; after: string }>('POST', '/api/listings/seen', { ids }),
   contact: (id: string, on: boolean) => request<{ before: string; after: string }>('POST', `/api/listings/${enc(id)}/contact`, { on }),
   note: (id: string, note: string) => request<{ before: string; after: string }>('PUT', `/api/listings/${enc(id)}/note`, { note }),

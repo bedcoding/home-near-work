@@ -1,7 +1,7 @@
 import { normalizeFilters, type Filters } from '../../shared/filters';
 
 // 목록 필터는 이 브라우저에만 저장한다. 알림 조건은 설정에서 독립적으로 저장한다.
-export { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, isNoOption, passes, type Filters } from '../../shared/filters';
+export { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, isNoOption, passes, plainFilters, type Filters } from '../../shared/filters';
 
 const KEY = 'hnw-filters-v1';
 

@@ -16,8 +16,9 @@ import { WALK_KMH } from '../../../shared/walk';
 import { convertedRent, loanMonthly } from '../rentRate';
 import { ledgerChips } from '../ledger';
 import CountTooltip from './CountTooltip.vue';
+import ZoneBanner from './ZoneBanner.vue';
 import { dabangAddressBusy, dabangAddressErrors, dabangAddresses, loadDabangAddress } from '../dabangAddress';
-import { looksSeen, markSeen, marksVersion, NOTE_MAX, saveNote, setContacted } from '../marks';
+import { looksSeen, markSeen, marksOf, NOTE_MAX, saveNote, setContacted } from '../marks';
 
 const props = defineProps<{
   listing: ListingView;
@@ -27,12 +28,22 @@ const props = defineProps<{
   hideSaleDate?: boolean;
   /** 경매 탭: 감정가 × 지역 매각가율로 낸 예상 낙찰가(동이나 구 평균, 서울 평균) */
   expect?: ExpectedPrice[];
+  /**
+   * 재개발 구역 안 매물이면 이름표 줄 맨 위에 경고 띠(ZoneBanner)를 붙인다. zoneKeySet은 토지이용계획 인증키가 있는지.
+   * 예전에는 부모가 띠를 v-for 안의 슬롯으로 넘겼는데, 그러면 Vue가 부모를 다시 그릴 때마다 카드를 전부 다시 그려서
+   * (펼친 카드가 수천 장이면 그것만 1초 넘게) 띠는 카드가 직접 그린다.
+   */
+  zoneBanner?: boolean;
+  zoneKeySet?: boolean;
 }>();
 const emit = defineEmits<{ open: []; verdict: [Verdict | null]; source: []; raw: []; select: [] }>();
 
 const l = computed(() => props.listing);
-/** 내가 남긴 표시('봤음', '📞 문의함'). 매물은 깊이 감시하지 않아서 marksVersion으로 표시가 바뀐 것을 알고 다시 그린다. */
-const marks = computed(() => (marksVersion.value, {
+/**
+ * 내가 남긴 표시('봤음', '📞 문의함', 메모). 매물은 깊이 감시하지 않아서 이 매물의 표시 횟수(marksOf)로 바뀐 것을 알고 다시 그린다.
+ * 관심, 별로, 버림과 '버림한 매물과 비슷'도 같은 때 다시 그려진다.
+ */
+const marks = computed(() => (marksOf(props.listing.id), {
   seen: looksSeen(props.listing), contactedAt: props.listing.contactedAt ?? null, note: props.listing.note ?? null,
 }));
 
@@ -266,7 +277,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       </div>
 
       <div class="tags">
-        <slot name="banner" />
+        <ZoneBanner v-if="zoneBanner && l.zone" part="banner" :listing="l" :key-set="zoneKeySet" />
         <CountTooltip v-if="redev" :text="redev.tip" :max-width="480"><span class="chip redev-chip" :class="`chip-${redev.tone}`">{{ redev.label }}</span></CountTooltip>
         <CountTooltip v-for="c in ledger" :key="c.label" :text="c.tip" :max-width="520"><span class="chip" :class="`chip-${c.tone}`">{{ c.label }}</span></CountTooltip>
         <CountTooltip v-if="loan" :text="loan.tip" :max-width="500">

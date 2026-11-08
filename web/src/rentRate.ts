@@ -51,7 +51,11 @@ export function updateRentRate(listings: ListingView[], baseRate: RentRate['base
     }
   }
   const legal = baseRate ? Math.min(10, baseRate.value + 2) : null;
-  rentRate.value = { local: rates.length >= MIN_PAIRS ? Math.round(median(rates) * 10) / 10 : null, pairs: rates.length, legal, baseRate };
+  const next: RentRate = { local: rates.length >= MIN_PAIRS ? Math.round(median(rates) * 10) / 10 : null, pairs: rates.length, legal, baseRate };
+  // 값이 같으면 그대로 둔다. 새 객체로 바꾸면 이 값을 읽는 카드가 모두 다시 그려진다('봤음'이나 버림 하나에 펼친 카드 수천 장이 다시 그려졌다).
+  const now = rentRate.value;
+  if (now.local === next.local && now.pairs === next.pairs && now.legal === next.legal && now.baseRate?.value === next.baseRate?.value && now.baseRate?.date === next.baseRate?.date) return;
+  rentRate.value = next;
 }
 
 const round1 = (v: number) => Math.round(v * 10) / 10;

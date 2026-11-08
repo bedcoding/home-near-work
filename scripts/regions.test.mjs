@@ -36,6 +36,19 @@ test('gu/dong identity requires jurisdiction and respects codes over approximate
   assert.equal(regions.validRegion({ ...dong, dong: '<invalid>' }), false);
 });
 
+test('구 판정은 매물마다 기억하고, 판정에 쓰는 칸이 바뀌면 다시 낸다', () => {
+  const listing = row('memo');
+  assert.equal(regions.matchesRegion(listing, region), true);
+  assert.equal(regions.matchesRegion(listing, region), true, '같은 매물과 같은 구는 기억한 값');
+  listing.address = '다른도 다른구 샘플동';
+  assert.equal(regions.matchesRegion(listing, region), false, '주소가 바뀌면 다시 판정한다');
+  listing.address = '예시도 가상구 샘플동';
+  listing.legalDongCode = '1111010100';
+  assert.equal(regions.matchesRegion(listing, region), false, '법정동코드가 생기면 그것으로 다시 판정한다');
+  const other = { ...region, code: '99999', sigungu: '다른구', name: '예시도 다른구' };
+  assert.equal(regions.matchesRegion(row('memo2'), other), false, '구가 다르면 따로 판정한다');
+});
+
 test('list collection regions and station alert circles are independent', () => {
   const alerts = compile('../server/alerts.ts', { '../shared/alert-scope.js': alertScope, '../shared/filters.js': filters, '../shared/types.js': types });
   const settings = { ...alerts.DEFAULT_ALERTS, homeFilter: filters.DEFAULT_FILTERS };

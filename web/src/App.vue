@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, triggerRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, toRaw, triggerRef, watch } from 'vue';
 import {
   COLLECT_MARGIN_M, hasHomeListings, inGus, isPartialMiss, isRunFailure, nearReason, NOTICE_SHORT, noticeSection, noticeSourcesOf, RUN_ALL_SOURCES, RUN_PARALLEL_SITES, RUN_SCOPES, SOURCE_LABEL,
   type RunSiteProgress,
@@ -8,11 +8,12 @@ import {
 } from '../../shared/types';
 import { api } from './api';
 import { createRevisionRefresh } from './refresh';
-import { isPick, marksVersion, NOTE_MAX, onMarks, picksOnly } from './marks';
+import { isPick, NOTE_MAX, onMarks, picksOnly, touchMarks } from './marks';
 import { reloadZones, zonesNeedReload } from './redevZones';
-import { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, loadFilters, passes, saveFilters, type Filters } from './filters';
+import { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, loadFilters, passes, plainFilters, saveFilters, type Filters } from './filters';
 import { dateTime, radiusText } from './format';
 import { primaryAreas, selectedArea } from '../../shared/regions';
+import { looksSimilar } from '../../shared/similar';
 import AlertsTab from './components/AlertsTab.vue';
 import AptView from './components/AptView.vue';
 import AreaSettings from './components/AreaSettings.vue';
@@ -32,7 +33,6 @@ import SubscriptionsView from './components/SubscriptionsView.vue';
 import SupportView from './components/SupportView.vue';
 import FraudView from './components/FraudView.vue';
 import ChecklistView from './components/ChecklistView.vue';
-import ZoneBanner from './components/ZoneBanner.vue';
 import { setAreaEnabled, toggleStationArea, type CatalogStation } from './areaActions';
 import { aptKindOf } from './apt';
 import { auctionKindOf, inAuctionKind, isAuction, originalUrl, sortAuctions, type AuctionKind } from './auction';
@@ -66,6 +66,8 @@ const state = ref<AppState | null>(null);
 // 매물은 수만 건이라 깊은 감시(ref)를 걸면 받을 때마다 화면이 몇 초씩 멈춘다. 목록을 통째로 바꿀 때만 다시 그린다(직접 고치면 triggerRef).
 const listings = shallowRef<ListingView[]>([]);
 const filters = ref(loadFilters());
+/** 필터의 평범한 복사본. 매물을 도는 계산은 filters 대신 이것을 반복 밖에서 한 번 읽는다(plainFilters 설명). */
+const filtersNow = computed(() => plainFilters(filters.value));
 const error = ref<string | null>(null);
 /** 대시보드 서버와 연결이 끊겼을 때만 보이고, 다시 연결되면 사라진다. */
 const connectionError = ref<string | null>(null);
@@ -167,14 +169,20 @@ const homes = computed(() => nearCurrent.value.filter((l) => sectionOf(l) === 'h
 const lineListings = computed(() => current.value.filter((l) => sectionOf(l) === 'home'));
 /** 필터 거래 유형 칸: 단기는 단기 매물이 있을 때(지역 반경 밖 포함, 거래 유형 필터는 빼고)나 골라 둔 때만 보인다. */
 const dealChoices = computed<DealType[]>(() => {
-  const loose = { ...filters.value, deals: [], insideAreas: false };
-  const short = filters.value.deals.includes('short') || homes.value.some((l) => dealOptions(l, 'short', loose, areas.value).length > 0);
+  const f = filtersNow.value;
+  const a = areas.value;
+  const loose = { ...f, deals: [], insideAreas: false };
+  const short = f.deals.includes('short') || homes.value.some((l) => dealOptions(l, 'short', loose, a).length > 0);
   return FILTER_DEALS.filter((d) => d !== 'short' || short);
 });
 const byNewest = (a: ListingView, b: ListingView) => b.firstSeenAt.localeCompare(a.firstSeenAt);
 const hasNews = (l: ListingView) => l.isNew || !!l.priceChange;
 /** 매물 탭 이름 옆 빨간 점: 거래 유형을 빼고 필터를 통과한 매매와 전월세 중 새 소식이 있는 수 */
-const homeNews = computed(() => homes.value.filter((l) => hasNews(l) && passes(l, { ...filters.value, deals: [] }, areas.value)).length);
+const homeNews = computed(() => {
+  const f = { ...filtersNow.value, deals: [] };
+  const a = areas.value;
+  return homes.value.filter((l) => hasNews(l) && passes(l, f, a)).length;
+});
 /** 표시한 매물 탭의 종류 칸(관심, 별로, 버림). 고른 것은 localStorage 'hnw-marked-kind'. */
 const MARKED_KINDS: { id: Verdict; label: string; empty: string }[] = [
   { id: 'star', label: '관심', empty: '관심 표시한 매물이 없습니다. 매물에서 ★ 관심(S)을 누르세요.' },
@@ -208,20 +216,17 @@ const siteTabs = computed(() => {
 function outsideCount(all: ListingView[], f: Filters, shown: number) {
   if (!f.insideAreas) return 0;
   const loose = { ...f, insideAreas: false };
-  return all.filter((l) => passes(l, loose, areas.value)).length - shown;
+  const a = areas.value;
+  return all.filter((l) => passes(l, loose, a)).length - shown;
 }
 
 // ---------- 경매 ----------
 /** 경매 탭은 거래 유형과 무옵션 필터를 보지 않는다(나머지 필터는 같이 쓴다). 상가와 토지는 지역 칸과 검색어만 본다(나머지는 집 찾는 조건이라서). */
-const auctionFilters = computed(() => ({ ...filters.value, deals: [], noOptionsOnly: false }));
-const shopFilters = computed<Filters>(() => ({
-  ...DEFAULT_FILTERS,
-  areaIds: filters.value.areaIds,
-  insideAreas: filters.value.insideAreas,
-  distanceMax: filters.value.distanceMax,
-  text: filters.value.text,
-}));
-const auctionFilterOf = (l: ListingView) => (auctionKindOf(l) === 'home' ? auctionFilters.value : shopFilters.value);
+const auctionFilters = computed(() => ({ ...filtersNow.value, deals: [], noOptionsOnly: false }));
+const shopFilters = computed<Filters>(() => {
+  const f = filtersNow.value;
+  return { ...DEFAULT_FILTERS, areaIds: f.areaIds, insideAreas: f.insideAreas, distanceMax: f.distanceMax, text: f.text };
+});
 const auctionsAll = computed(() => nearCurrent.value.filter((l) => sectionOf(l) === 'auction'));
 /** 경매 탭에서 고른 종류(주거, 상가). 다음에 열어도 유지한다. 단독과 토지는 집터 탭에서 본다. */
 const AUCTION_KINDS: AuctionKind[] = ['home', 'shop'];
@@ -233,9 +238,12 @@ const ofAuctionKind = (l: ListingView) => inAuctionKind(l, auctionKind.value);
 const auctionSort = ref<'default' | 'pyeong'>(localStorage.getItem('hnw-auction-sort') === 'pyeong' ? 'pyeong' : 'default');
 watch(auctionSort, (s) => localStorage.setItem('hnw-auction-sort', s));
 /** 필터를 통과한 경매(주거, 상가, 토지 모두, 탭 숫자에 씀) */
-const auctionsBoth = computed(() =>
-  sortAuctions(auctionsAll.value.filter((l) => passes(l, auctionFilterOf(l), areas.value)), auctionSort.value === 'pyeong'),
-);
+const auctionsBoth = computed(() => {
+  const home = auctionFilters.value;
+  const shop = shopFilters.value;
+  const a = areas.value;
+  return sortAuctions(auctionsAll.value.filter((l) => passes(l, auctionKindOf(l) === 'home' ? home : shop, a)), auctionSort.value === 'pyeong');
+});
 /** 경매 탭 목록: 고른 종류만(키보드 이동도 이 순서) */
 const auctions = computed(() => auctionsBoth.value.filter(ofAuctionKind));
 /** 경매 탭에 드는 경매(주거와 상가, 탭 숫자에 씀). 땅만 파는 물건은 집터 탭에 있다. */
@@ -327,9 +335,12 @@ watch(
 );
 /** '지역 반경 안만' 때문에 가린 경매 수(고른 종류) */
 function auctionsOutsideOf(kind: AuctionKind, shown: number) {
-  if (!filters.value.insideAreas) return 0;
+  if (!filtersNow.value.insideAreas) return 0;
+  const home = { ...auctionFilters.value, insideAreas: false };
+  const shop = { ...shopFilters.value, insideAreas: false };
+  const a = areas.value;
   const all = auctionsAll.value.filter((l) => inAuctionKind(l, kind));
-  return all.filter((l) => passes(l, { ...auctionFilterOf(l), insideAreas: false }, areas.value)).length - shown;
+  return all.filter((l) => passes(l, auctionKindOf(l) === 'home' ? home : shop, a)).length - shown;
 }
 const auctionsOutside = computed(() => auctionsOutsideOf(auctionKind.value, auctions.value.length));
 
@@ -344,11 +355,16 @@ watch(plotKind, (k) => localStorage.setItem('hnw-plot-kind', k));
 /** 매매 매물 중 집터 칸에 맞는 것(단독은 거래 유형을 뺀 필터, 토지는 지역 칸과 검색어만). 새 소식 먼저, 그다음 매매가 낮은 순. */
 function plotSalesOf(kind: AuctionKind) {
   const f = kind === 'land' ? shopFilters.value : auctionFilters.value;
+  const a = areas.value;
   const want = kind === 'land' ? 'land' : 'house';
-  const price = (l: ListingView) => Math.min(...dealOptions(l, 'sale', f, areas.value).map((p) => p.price ?? Infinity));
-  return homes.value
-    .filter((l) => kindOf(l) === want && dealOptions(l, 'sale', f, areas.value).length > 0)
-    .sort((a, b) => Number(hasNews(b)) - Number(hasNews(a)) || price(a) - price(b));
+  // 매매가는 한 번만 내 둔다(정렬하면서 견줄 때마다 필터를 다시 돌리지 않게).
+  const priced: { l: ListingView; price: number }[] = [];
+  for (const l of homes.value) {
+    if (kindOf(l) !== want) continue;
+    const options = dealOptions(l, 'sale', f, a);
+    if (options.length) priced.push({ l, price: Math.min(...options.map((p) => p.price ?? Infinity)) });
+  }
+  return priced.sort((x, y) => Number(hasNews(y.l)) - Number(hasNews(x.l)) || x.price - y.price).map((x) => x.l);
 }
 /**
  * 집터 탭은 헐고 새로 지을 집과 땅이라 주인이 여럿인 지분 매각은 뺀다(경매 탭에는 '지분' 표시로 그대로 나온다).
@@ -374,7 +390,7 @@ const plotKinds = computed(() => {
 /** 서울 아파트 탭: 서울 아파트 경매와 공매, 매매 매물(고른 구라서 모은 먼 것과 회사 근처 것 모두). 필터는 탭 안에 따로 있다. */
 const aptAll = computed(() => current.value.filter((l) => !!l.apt && aptKindOf(l) !== null));
 /** 서울 아파트 탭에서 보이는 매물(화면 순서). 키보드 이동에 쓴다. */
-const aptVisible = ref<ListingView[]>([]);
+const aptVisible = shallowRef<ListingView[]>([]);
 /** 서울 아파트 탭에서 고른 구를 바꾼다(다음 조회부터 그 구의 아파트를 모음). */
 async function setAptGus(gus: string[]) {
   error.value = null;
@@ -423,12 +439,16 @@ async function setHouseholds(key: string, name: string, households: number | nul
 
 // ---------- 고시원과 쉐어 ----------
 /** 고시원과 쉐어 탭은 거래 유형, 매물 유형, 무옵션 필터를 보지 않는다(모두 월세이고, 종류는 탭 안 종류 칸으로 고름). */
-const roomFilters = computed(() => ({ ...filters.value, deals: [], kinds: [], noOptionsOnly: false }));
+const roomFilters = computed(() => ({ ...filtersNow.value, deals: [], kinds: [], noOptionsOnly: false }));
 const roomsAll = computed(() => nearCurrent.value.filter((l) => sectionOf(l) === 'room'));
-const rooms = computed(() => sortRooms(roomsAll.value.filter((l) => passes(l, roomFilters.value, areas.value))));
+const rooms = computed(() => {
+  const f = roomFilters.value;
+  const a = areas.value;
+  return sortRooms(roomsAll.value.filter((l) => passes(l, f, a)));
+});
 const roomsOutside = computed(() => outsideCount(roomsAll.value, roomFilters.value, rooms.value.length));
 /** 고시원과 쉐어 탭에서 고른 종류의 매물(화면 순서). 키보드 이동에 쓴다. */
-const roomsVisible = ref<ListingView[]>([]);
+const roomsVisible = shallowRef<ListingView[]>([]);
 const roomsView = ref<InstanceType<typeof RoomsView> | null>(null);
 
 // ---------- 공고 ----------
@@ -477,7 +497,7 @@ async function ackNotices(ids: number[]) {
 }
 
 /** 매물 탭에서 지금 펼쳐져 보이는 매물(화면 순서). 키보드 이동에 쓴다. */
-const overviewVisible = ref<ListingView[]>([]);
+const overviewVisible = shallowRef<ListingView[]>([]);
 const overview = ref<InstanceType<typeof Overview> | null>(null);
 
 const lists: Partial<Record<Tab, { readonly value: ListingView[] }>> = {
@@ -486,6 +506,13 @@ const lists: Partial<Record<Tab, { readonly value: ListingView[] }>> = {
 const currentList = computed(() => lists[tab.value]?.value ?? []);
 const selectedId = computed(() => currentList.value[selected.value]?.id ?? null);
 const selectedListing = computed(() => currentList.value[selected.value] ?? null);
+/**
+ * 사용자가 직접 고른 매물(카드나 지도를 누르거나 ↑↓ 키). 지도는 고른 매물이 이것일 때만 그쪽으로 옮겨 간다.
+ * 버림처럼 목록에서 고른 매물이 빠져 같은 순번의 다음 매물이 골라진 때는 지도를 보던 자리에 그대로 둔다
+ * (목록은 가격순이라 다음 매물은 대개 다른 동네라서, 지도가 엉뚱한 곳으로 순간이동해 보였다).
+ */
+const chosenId = ref<string | null>(null);
+const panToSelected = computed(() => selectedId.value !== null && selectedId.value === chosenId.value);
 watch(tab, (t) => {
   localStorage.setItem('hnw-tab', t);
   selected.value = 0;
@@ -504,21 +531,23 @@ const setAptVisible = (list: ListingView[]) => setVisible(aptVisible, 'apt', lis
 
 function selectListing(l: ListingView) {
   const i = currentList.value.findIndex((x) => x.id === l.id);
-  if (i >= 0) selected.value = i;
+  if (i < 0) return;
+  selected.value = i;
+  chosenId.value = l.id;
 }
 
 /** 필터로 가려진 매물 수. 매물 탭은 매매와 전월세 모든 사이트를, 경매 탭과 집터 탭(경매만)과 고시원과 쉐어 탭은 그 탭 매물을 센다(관심과 숨김함은 필터를 안 씀). */
-const hiddenCount = computed(() =>
-  tab.value === 'overview'
-    ? homes.value.filter((l) => !passes(l, filters.value, areas.value)).length
-    : tab.value === 'auction'
-      ? auctionsAll.value.filter(ofAuctionKind).length - auctions.value.length
-      : tab.value === 'plot'
-        ? auctionsAll.value.filter((l) => inAuctionKind(l, plotKind.value)).length - plotAuctions.value.length
-        : tab.value === 'rooms'
-          ? roomsAll.value.length - rooms.value.length
-          : 0,
-);
+const hiddenCount = computed(() => {
+  if (tab.value === 'overview') {
+    const f = filtersNow.value;
+    const a = areas.value;
+    return homes.value.filter((l) => !passes(l, f, a)).length;
+  }
+  if (tab.value === 'auction') return auctionsAll.value.filter(ofAuctionKind).length - auctions.value.length;
+  if (tab.value === 'plot') return auctionsAll.value.filter((l) => inAuctionKind(l, plotKind.value)).length - plotAuctions.value.length;
+  if (tab.value === 'rooms') return roomsAll.value.length - rooms.value.length;
+  return 0;
+});
 
 async function refreshState() {
   state.value = await api.state();
@@ -541,7 +570,13 @@ const baseRateKey = computed(() => {
   const b = state.value?.baseRate;
   return b ? `${b.value}|${b.date}` : '';
 });
-watch([listings, baseRateKey], () => updateRentRate(listings.value, state.value?.baseRate ?? null, isRoomStay), { immediate: true });
+/** 마지막으로 전환율을 낸 매물 목록과 기준금리. '봤음'이나 버림처럼 같은 목록의 표시만 바꾼 때(triggerRef)는 가격이 그대로라 다시 내지 않는다. */
+let rateFor: { list: ListingView[]; key: string } | null = null;
+watch([listings, baseRateKey], () => {
+  if (rateFor && rateFor.list === listings.value && rateFor.key === baseRateKey.value) return;
+  rateFor = { list: listings.value, key: baseRateKey.value };
+  updateRentRate(listings.value, state.value?.baseRate ?? null, isRoomStay);
+}, { immediate: true });
 
 const refreshData = createRevisionRefresh(async () => {
   const results = await Promise.allSettled([
@@ -618,18 +653,45 @@ async function stopRun() {
   }
 }
 
-async function setVerdict(l: ListingView, verdict: Verdict | null) {
-  l.verdict = verdict;
-  l.isNew = false;
-  l.priceChange = null;
-  l.seenAt = new Date().toISOString();
+/**
+ * 버림이 바뀐 매물 x 둘레의 '버림한 매물과 비슷' 배지를 다시 낸다(서버 buildListingViews와 같은 규칙).
+ * 바뀔 수 있는 것은 x 자신과 x와 비슷한 매물뿐이라 그것만 다시 본다.
+ */
+function updateSimilar(all: ListingView[], x: ListingView): string[] {
+  let discarded: ListingView[] | null = null;
+  const touched: string[] = [];
+  for (const l of all) {
+    if (l !== x && !looksSimilar(l, x)) continue;
+    discarded ??= all.filter((d) => d.verdict === 'discard');
+    l.similarToDiscarded = !l.verdict && discarded.some((d) => d.id !== l.id && looksSimilar(l, d));
+    touched.push(l.id);
+  }
+  return touched;
+}
+
+/**
+ * 관심, 별로, 버림을 남기거나 푼다(verdict null). 남기면 '봤음'도 된다.
+ * '봤음'처럼 화면에 먼저 반영하고, 서버 자료가 이것 말고 바뀐 게 없으면 수만 건짜리 매물 목록을 다시 받지 않는다
+ * (예전에는 누를 때마다 목록 전체를 바로 한 번, 다음 폴링에서 또 한 번 받아 몇 초씩 멈췄다). 저장하지 못하면 되돌리고 알린다.
+ */
+async function setVerdict(input: ListingView, verdict: Verdict | null) {
+  const l = toRaw(input);
+  const before = { verdict: l.verdict, verdictReason: l.verdictReason, relistedOf: l.relistedOf, isNew: l.isNew, priceChange: l.priceChange, seenAt: l.seenAt ?? null };
+  // 서버는 사용자가 남긴 표시에 이유를 두지 않는다(재등록이라 숨김 같은 이유는 사라진다).
+  Object.assign(l, { verdict, verdictReason: null, relistedOf: null, isNew: false, priceChange: null, seenAt: new Date().toISOString() });
+  touchMarks([l.id, ...updateSimilar(listings.value, l)]);
   triggerRef(listings);
   try {
-    await api.setVerdict(l.id, verdict);
-  } finally {
-    await refreshListings();
-    await refreshState();
+    const r = await api.setVerdict(l.id, verdict);
+    refreshData.advance(r.before, r.after);
+  } catch (e) {
+    Object.assign(l, before);
+    touchMarks([l.id, ...updateSimilar(listings.value, l)]);
+    triggerRef(listings);
+    error.value = `관심, 별로, 버림 표시를 저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`;
   }
+  // 상태의 숫자(확인하지 않은 변화 수 등)만 새로 받는다. 매물 목록은 받지 않는다.
+  void refreshState().catch(() => {});
 }
 
 /** 법원경매 창을 여는 중과 결과 알림(화면 아래에 잠깐 뜸) */
@@ -670,7 +732,7 @@ async function saveSeen(items: ListingView[]) {
     l.priceChange = null;
   }
   triggerRef(listings);
-  marksVersion.value += 1;
+  touchMarks(todo.map((l) => l.id));
   try {
     const r = await api.seen(todo.map((l) => l.id));
     refreshData.advance(r.before, r.after);
@@ -690,14 +752,14 @@ async function setContacted(l: ListingView, on: boolean) {
     l.priceChange = null;
   }
   triggerRef(listings);
-  marksVersion.value += 1;
+  touchMarks([l.id]);
   try {
     const r = await api.contact(l.id, on);
     refreshData.advance(r.before, r.after);
   } catch (e) {
     Object.assign(l, before);
     triggerRef(listings);
-    marksVersion.value += 1;
+    touchMarks([l.id]);
     error.value = `문의함 표시를 저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
@@ -715,14 +777,14 @@ async function saveNote(l: ListingView, text: string) {
     l.priceChange = null;
   }
   triggerRef(listings);
-  marksVersion.value += 1;
+  touchMarks([l.id]);
   try {
     const r = await api.note(l.id, note ?? '');
     refreshData.advance(r.before, r.after);
   } catch (e) {
     Object.assign(l, before);
     triggerRef(listings);
-    marksVersion.value += 1;
+    touchMarks([l.id]);
     error.value = `메모를 저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
@@ -924,9 +986,11 @@ function onKey(e: KeyboardEvent) {
   const item = list[selected.value];
   if (e.key === 'ArrowDown' || e.key === 'j') {
     selected.value = Math.min(selected.value + 1, list.length - 1);
+    chosenId.value = list[selected.value]?.id ?? null;
     scrollToSelected();
   } else if (e.key === 'ArrowUp' || e.key === 'k') {
     selected.value = Math.max(selected.value - 1, 0);
+    chosenId.value = list[selected.value]?.id ?? null;
     scrollToSelected();
   } else if (e.key === 'x') {
     void setVerdict(item, item.verdict === 'discard' ? null : 'discard');
@@ -1201,7 +1265,7 @@ const filterUse = computed<string[] | 'all'>(() => {
 
       <template v-if="tab === 'overview'">
         <Overview
-          ref="overview" :listings="homes" :filters="filters" :areas="areas" :selected-id="selectedId"
+          ref="overview" :listings="homes" :filters="filters" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected"
           @visible="setOverviewVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
           @source="(l) => (sourceOf = l)" @raw="showRaw" @areas="(ids) => (filters.areaIds = ids)" @deals="(d) => (filters.deals = d)" @station="toggleStation"
           @area="turnOffArea"
@@ -1214,9 +1278,8 @@ const filterUse = computed<string[] | 'all'>(() => {
           <ListingCard
             v-for="(l, i) in currentList" :key="l.id" :listing="l" :areas="areas" :selected="i === selected"
             @select="selected = i" @open="openOriginal(l)" @verdict="(v) => setVerdict(l, v)" @source="sourceOf = l" @raw="showRaw(l)"
-          >
-            <template v-if="l.zone" #banner><ZoneBanner part="banner" :listing="l" :key-set="zoneCheck.key" /></template>
-          </ListingCard>
+            zone-banner :zone-key-set="zoneCheck.key"
+          />
           <p v-if="!currentList.length" class="empty muted">
             <template v-if="site === 'naver' && !listings.some((l) => l.source === 'naver')">
               <span title="네이버 매물은 크롬 확장으로 받습니다. 네이버 부동산 지도에서 동그라미를 눌러 목록을 보면 여기에 모입니다.">네이버 매물 없음, 받은 화면 데이터 {{ state?.naverCapture.total ?? 0 }}건</span>
@@ -1236,7 +1299,7 @@ const filterUse = computed<string[] | 'all'>(() => {
       <template v-else-if="tab === 'auction'">
         <AuctionView
           title="경매" :kind-ids="AUCTION_KINDS"
-          :listings="auctions" :outside="auctionsOutside" :areas="areas" :selected-id="selectedId" :running="!!running"
+          :listings="auctions" :outside="auctionsOutside" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :running="!!running"
           :kind="auctionKind" :kinds="auctionKinds" @kind="(k) => (auctionKind = k, selected = 0)"
           :sort="auctionSort" @sort="(v) => (auctionSort = v, selected = 0)"
           :notices="trustNotices" :lh-notices="lhByKind[auctionKind]" :lh-outside="auctionKind === 'shop' ? lhAll.shop.length - lhByKind.shop.length : 0"
@@ -1252,7 +1315,7 @@ const filterUse = computed<string[] | 'all'>(() => {
         <AuctionView
           title="집터" :kind-ids="PLOT_KINDS" :sales="plotSales" :trust="false" :links="MODULAR_LINKS" :zone="zoneCheck"
           :plot-share-hidden="plotShareHidden"
-          :listings="plotAuctions" :outside="plotOutside" :areas="areas" :selected-id="selectedId" :running="!!running"
+          :listings="plotAuctions" :outside="plotOutside" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :running="!!running"
           :kind="plotKind" :kinds="plotKinds" @kind="(k) => (plotKind = k, selected = 0)"
           :sort="auctionSort" @sort="(v) => (auctionSort = v, selected = 0)"
           :notices="[]" :lh-notices="lhByKind[plotKind]" :lh-outside="plotKind === 'land' ? lhAll.land.length - lhByKind.land.length : 0"
@@ -1265,7 +1328,7 @@ const filterUse = computed<string[] | 'all'>(() => {
         />
       </template>
       <AptView
-        v-else-if="tab === 'apt'" :listings="aptAll" :areas="areas" :selected-id="selectedId" :running="!!running"
+        v-else-if="tab === 'apt'" :listings="aptAll" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :running="!!running"
         :apt-gus="state?.aptGus ?? []" :near-gus="state?.gus ?? []" :region-stats="auctionResults.stats"
         :fill="state?.householdsFill ?? { key: false, last: null }" :filling="householdsFill.running" :fill-error="householdsFill.error" :zone="zoneCheck"
         @visible="setAptVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
@@ -1280,7 +1343,7 @@ const filterUse = computed<string[] | 'all'>(() => {
       <MarketView v-else-if="tab === 'market'" :view="market" :fetching="marketFetching" :error="marketError ?? marketLoadError" :running="!!running" @fetch="fetchMarket" />
       <template v-else-if="tab === 'rooms'">
         <RoomsView
-          ref="roomsView" :listings="rooms" :outside="roomsOutside" :areas="areas" :selected-id="selectedId"
+          ref="roomsView" :listings="rooms" :outside="roomsOutside" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected"
           @visible="setRoomsVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal"
           @verdict="setVerdict" @source="(l) => (sourceOf = l)" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
         />

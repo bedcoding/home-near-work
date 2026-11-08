@@ -401,15 +401,20 @@ app.post<{ Params: { id: string } }>('/api/listings/:id/open-court', async (req,
   }
 });
 
+/**
+ * 관심, 별로, 버림을 남기거나 푼다(verdict null). 남기면 '봤음'도 된다.
+ * before와 after는 '봤음'과 같은 자료 버전이다. 화면은 이미 바꿔 둔 표시라서, 그 사이에 다른 변화가 없었으면 큰 매물 목록을 다시 받지 않는다.
+ */
 app.post<{ Params: { id: string }; Body: { verdict: Verdict | null } }>('/api/listings/:id/verdict', async (req, reply) => {
   const verdict = req.body?.verdict ?? null;
   if (verdict !== null && !VERDICTS.includes(verdict)) {
     reply.code(400);
     return { error: 'verdict는 discard, star, meh 중 하나' };
   }
+  const before = store.dataRevision();
   store.setVerdict(req.params.id, verdict);
   store.markSeen([req.params.id]);
-  return { ok: true };
+  return { ok: true, before, after: store.dataRevision() };
 });
 
 /** 다방 매물 하나의 지번 주소를 다방 주변 정보 요청으로 받아 저장한다(카드의 '주소 보기'). 이미 받아 두었으면 다시 요청하지 않는다. */

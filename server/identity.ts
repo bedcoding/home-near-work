@@ -1,4 +1,3 @@
-import { distanceM } from './geo.js';
 import type { NormalizedListing, PriceChangeType, PriceOption } from '../shared/types.js';
 
 const dealSet = (l: NormalizedListing) => [...new Set(l.prices.map((p) => p.deal))].sort().join('+') || '?';
@@ -15,19 +14,8 @@ export function identityKey(l: NormalizedListing): string {
   return `${l.source}|${building}|${floor}|${area}|${dealSet(l)}`;
 }
 
-/**
- * 버림한 매물과 '비슷한지'. 사이트가 달라도 위치, 층, 면적이 거의 같으면 true.
- * 자동으로 숨기지 않고 배지만 붙이는 데 쓴다.
- */
-export function looksSimilar(a: NormalizedListing, b: NormalizedListing): boolean {
-  if (a.lat == null || a.lng == null || b.lat == null || b.lng == null) return false;
-  if (distanceM(a.lat, a.lng, b.lat, b.lng) > 30) return false;
-  if (a.areaM2 == null || b.areaM2 == null || Math.abs(a.areaM2 - b.areaM2) > 1.5) return false;
-  if (a.basement !== b.basement) return false;
-  if (a.floor != null && b.floor != null && a.floor !== b.floor) return false;
-  const deals = new Set(a.prices.map((p) => p.deal));
-  return b.prices.some((p) => deals.has(p.deal));
-}
+/** 버림한 매물과 '비슷한지'. 화면도 같은 판정을 써야 해서 공통 모듈로 옮겼다. */
+export { looksSimilar } from '../shared/similar.js';
 
 export function priceSignature(prices: PriceOption[]): string {
   return JSON.stringify(

@@ -4,19 +4,20 @@ import { SOURCE_LABEL, type Area, type DealType, type ListingView, type PriceOpt
 import {
   bandDeal, bandIdOf, bandsFor, bandValue, DEALS_OF, isRent, OVERVIEW_DEALS, OVERVIEW_LABEL, orderFor, overviewDealOf, type Band, type OverviewDeal,
 } from '../bands';
-import { DEFAULT_FILTERS, dealOptions, passes, type Filters } from '../filters';
+import { DEFAULT_FILTERS, dealOptions, passes, plainFilters, type Filters } from '../filters';
 import type { CatalogStation } from '../areaActions';
 import { money, radiusText } from '../format';
-import { primaryAreas } from '../../../shared/regions';
+import { areaMatches, hasRegions, primaryAreas } from '../../../shared/regions';
 import CountTooltip from './CountTooltip.vue';
 import ListingCard from './ListingCard.vue';
-import ZoneBanner from './ZoneBanner.vue';
 import OverviewMap from './OverviewMap.vue';
 import SplitHandle from './SplitHandle.vue';
 import { mapShareStyle } from '../mapWidth';
 import { walkPins, walkTimes } from '../walk';
 
-const props = defineProps<{ listings: ListingView[]; filters: Filters; areas: Area[]; selectedId: string | null }>();
+const props = defineProps<{ listings: ListingView[]; filters: Filters; areas: Area[]; selectedId: string | null; panToSelected?: boolean }>();
+/** 필터의 평범한 복사본. 매물 수만 건을 도는 계산은 props.filters(반응형) 대신 이것을 반복 밖에서 한 번 읽는다. */
+const filtersNow = computed(() => plainFilters(props.filters));
 const overviewEl = ref<HTMLElement | null>(null);
 const mapPanel = ref<HTMLElement | null>(null);
 const mapPanelHeight = ref<number>();
@@ -148,17 +149,49 @@ const uniq = (entries: Entry[]) => [...new Map(entries.map((e) => [e.listing.id,
 // ---------- 지역 ----------
 // 켜진 지역이 둘 이상이면 지역마다 따로 볼 수 있다.
 // 고른 지역은 왼쪽 필터의 지역(filters.areaIds)과 같은 값이라, 여기서 누르면 필터 칸도 바뀐다.
-/** 지역 칸의 건수: 그 지역만 골랐을 때 필터를 통과하는 매물 수. */
-const areaChips = computed(() => ({
-  all: props.listings.filter((l) => passes(l, { ...props.filters, areaIds: [] }, props.areas)).length,
-  list: primaryAreas(props.areas).map((a) => ({
-    id: a.id,
-    label: a.region ? `${a.name} ${a.region.kind === 'gu' ? '전체' : '법정동'}` : `${a.name} ${radiusText(a.radiusM)}`,
-    count: props.listings.filter((l) => passes(l, { ...props.filters, areaIds: [a.id] }, props.areas)).length,
-    on: props.filters.areaIds.includes(a.id),
-  })),
-}));
-const allAreas = computed(() => !primaryAreas(props.areas).some((a) => props.filters.areaIds.includes(a.id)));
+/**
+ * 지역 칸의 건수: 그 지역만 골랐을 때 필터를 통과하는 매물 수.
+ * 필터는 반복 밖에서 한 번만 만들어 쓴다(예전처럼 매물마다 반응형 필터를 펼치면 이 계산 하나에 1.6초씩 걸렸다).
+ */
+const areaChips = computed(() => {
+  const f = filtersNow.value;
+  const areas = props.areas;
+  const listings = props.listings;
+  const primary = primaryAreas(areas);
+  let all = 0;
+  let counts: number[];
+  if (hasRegions(areas)) {
+    // 구나 동 지역: 그 지역만 고른 건수는 지역을 고르지 않은 필터를 통과하면서 그 지역 안인 매물 수다(passes와 같은 규칙).
+    // 필터는 매물마다 한 번만 보고, 지역 안인지는 매물마다 기억해 둔 판정(matchesRegion)을 쓴다.
+    const base = { ...f, areaIds: [] };
+    counts = primary.map(() => 0);
+    for (const l of listings) {
+      if (!passes(l, base, areas)) continue;
+      all++;
+      for (let i = 0; i < primary.length; i++) if (areaMatches(l, primary[i])) counts[i]++;
+    }
+  } else {
+    // 역 반경 지역은 '가장 가까운 지역이 고른 지역인 매물' 규칙이 있어 지역마다 필터를 그대로 돌린다.
+    const count = (areaIds: number[]) => {
+      const g = { ...f, areaIds };
+      let n = 0;
+      for (const l of listings) if (passes(l, g, areas)) n++;
+      return n;
+    };
+    all = count([]);
+    counts = primary.map((a) => count([a.id]));
+  }
+  return {
+    all,
+    list: primary.map((a, i) => ({
+      id: a.id,
+      label: a.region ? `${a.name} ${a.region.kind === 'gu' ? '전체' : '법정동'}` : `${a.name} ${radiusText(a.radiusM)}`,
+      count: counts[i],
+      on: f.areaIds.includes(a.id),
+    })),
+  };
+});
+const allAreas = computed(() => !primaryAreas(props.areas).some((a) => filtersNow.value.areaIds.includes(a.id)));
 /** 지역이 이보다 많으면(노선 하나를 켠 때 등) 칸 대신 고르기 상자로 보인다(매물이 많은 지역 먼저). */
 const AREA_CHIP_MAX = 10;
 const areaOptions = computed(() => [...areaChips.value.list].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ko')));
@@ -172,17 +205,18 @@ function pickArea(event: Event) {
 // 고른 거래 유형은 왼쪽 필터의 거래 유형과 같은 값이다. 카드를 누르면 필터도 그 하나로 바뀌고(deals 이벤트),
 // 필터에서 거래 유형을 고르면 그 카드로 옮긴다. 카드의 건수는 거래 유형 필터를 빼고 센다(카드가 곧 거래 유형 고르기라서).
 /** 거래 유형 필터를 뺀 필터 */
-const anyDeal = computed<Filters>(() => ({ ...props.filters, deals: [] }));
+const anyDeal = computed<Filters>(() => ({ ...filtersNow.value, deals: [] }));
 
 /** 카드에 드는 가격 선택지(전월세는 월세와 전세를 함께) */
-const cardOptions = (listing: ListingView, deal: OverviewDeal, f: Filters) => DEALS_OF[deal].flatMap((d) => dealOptions(listing, d, f, props.areas));
+const cardOptions = (listing: ListingView, deal: OverviewDeal, f: Filters, areas: Area[]) => DEALS_OF[deal].flatMap((d) => dealOptions(listing, d, f, areas));
 
 /** 카드의 가격대 줄에 드는 매물들: 카드의 거래 유형마다(전월세는 월세와 전세 따로) 가장 싼 선택지 하나 */
 function entriesOf(deal: OverviewDeal, f: Filters): Entry[] {
   const entries: Entry[] = [];
+  const areas = props.areas;
   for (const listing of props.listings) {
     for (const d of DEALS_OF[deal]) {
-      const options = dealOptions(listing, d, f, props.areas);
+      const options = dealOptions(listing, d, f, areas);
       if (!options.length) continue;
       const option = cheapest(options);
       entries.push({ listing, option, value: bandValue(option) });
@@ -205,11 +239,13 @@ const counts = (entries: Entry[]) => ({
  */
 const outsideByDeal = computed(() => {
   const out = new Map<OverviewDeal, number>();
-  if (!props.filters.insideAreas) return out;
-  const loose = { ...anyDeal.value, insideAreas: false };
+  if (!filtersNow.value.insideAreas) return out;
+  const strict = anyDeal.value;
+  const loose = { ...strict, insideAreas: false };
+  const areas = props.areas;
   for (const deal of OVERVIEW_DEALS) {
     let n = 0;
-    for (const l of props.listings) if (cardOptions(l, deal, loose).length && !cardOptions(l, deal, anyDeal.value).length) n++;
+    for (const l of props.listings) if (cardOptions(l, deal, loose, areas).length && !cardOptions(l, deal, strict, areas).length) n++;
     out.set(deal, n);
   }
   return out;
@@ -275,39 +311,38 @@ watch(sortPin, (id) => {
 const distancePins = computed(() => walkPins.value.filter((p) => p.kind !== 'mark'));
 /** 지금 거리순으로 보는 핀 id(고른 핀을 뺐으면 null, 가격순) */
 const sortPinId = computed(() => distancePins.value.find((p) => p.id === sortPin.value)?.id ?? null);
-/** 매물에서 고른 핀까지 걷는 거리(m, 못 잰 매물은 Infinity) */
-function pinMeters(l: ListingView) {
-  return walkTimes(l.id).find((w) => w.pin.id === sortPinId.value)?.meters ?? Infinity;
-}
-/** 거리순이면 가까운 순(못 잰 매물은 뒤), 같으면 0 */
-function byPin(a: ListingView, b: ListingView) {
-  if (!sortPinId.value) return 0;
-  const d = pinMeters(a) - pinMeters(b);
-  return Number.isNaN(d) ? 0 : d;
-}
 
 /** 별로로 표시한 매물은 맨 뒤 */
 const byMeh = (a: ListingView, b: ListingView) => Number(a.verdict === 'meh') - Number(b.verdict === 'meh');
 
-/** 별로는 맨 뒤. 가격순이면 새 소식이 먼저, 그다음 싼 순서(전월세는 환산 월세 → 보증금). 거리순이면 고른 핀에 가까운 순서, 같으면 가격순. */
-function sortEntries(a: Entry, b: Entry) {
-  return (
+/**
+ * 가격대 안 순서. 별로는 맨 뒤. 가격순이면 새 소식이 먼저, 그다음 싼 순서(전월세는 환산 월세 → 보증금).
+ * 거리순(pinId)이면 고른 핀에 가까운 순서(못 잰 매물은 뒤), 같으면 가격순.
+ * 핀까지 거리는 정렬 전에 매물마다 한 번만 읽어 둔다(견줄 때마다 읽으면 반응형 값을 수십만 번 읽게 된다).
+ */
+function entryOrder(pinId: string | null, entries: Entry[]) {
+  const meters = pinId
+    ? new Map(entries.map((e) => [e.listing.id, walkTimes(e.listing.id).find((w) => w.pin.id === pinId)?.meters ?? Infinity]))
+    : null;
+  const byPin = (a: ListingView, b: ListingView) => {
+    if (!meters) return 0;
+    const d = meters.get(a.id)! - meters.get(b.id)!;
+    return Number.isNaN(d) ? 0 : d;
+  };
+  return (a: Entry, b: Entry) =>
     byMeh(a.listing, b.listing) ||
     byPin(a.listing, b.listing) ||
     Number(hasNews(b.listing)) - Number(hasNews(a.listing)) ||
     (a.value ?? Infinity) - (b.value ?? Infinity) ||
     (a.option.deposit ?? Infinity) - (b.option.deposit ?? Infinity) ||
-    b.listing.firstSeenAt.localeCompare(a.listing.firstSeenAt)
-  );
+    b.listing.firstSeenAt.localeCompare(a.listing.firstSeenAt);
 }
 
 /** 왼쪽 필터에서 지역 칸만 남긴 것(가격, 매물 유형, 면적, 층, 검색어를 뺌). 가격대마다 필터로 가린 수를 셀 때 쓴다. */
-const looseFilters = computed<Filters>(() => ({
-  ...DEFAULT_FILTERS,
-  areaIds: props.filters.areaIds,
-  insideAreas: props.filters.insideAreas,
-  distanceMax: props.filters.distanceMax,
-}));
+const looseFilters = computed<Filters>(() => {
+  const f = filtersNow.value;
+  return { ...DEFAULT_FILTERS, areaIds: f.areaIds, insideAreas: f.insideAreas, distanceMax: f.distanceMax };
+});
 
 /** 고른 카드의 가격대별 매물 수(지역 칸만 적용). 필터를 통과한 수와의 차이가 '필터로 가림'이다. */
 const looseByBand = computed(() => {
@@ -331,9 +366,11 @@ const rows = computed(() => {
   }
   const defs = new Map(bandsFor(d).map((b) => [b.id, b]));
   const open = saved.open[d] ?? {};
+  const pinId = sortPinId.value;
   return orderFor(d, saved.order[d])
     .map((id) => {
-      const entries = (groups.get(id) ?? []).sort(sortEntries);
+      const list = groups.get(id) ?? [];
+      const entries = list.sort(entryOrder(pinId, list));
       return rowOf(defs.get(id)!, entries, open, Math.max(0, (looseByBand.value.get(id) ?? 0) - entries.length));
     })
     .filter((r) => r.band.id !== 'unknown' || r.total > 0);
@@ -591,10 +628,8 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
                 <ListingCard
                   v-for="e in r.shown" :key="e.listing.id" :listing="e.listing" :areas="areas" :selected="e.listing.id === selectedId"
                   @select="emit('select', e.listing)" @open="emit('open', e.listing)" @verdict="(v) => emit('verdict', e.listing, v)"
-                  @source="emit('source', e.listing)" @raw="emit('raw', e.listing)"
-                >
-                  <template v-if="e.listing.zone" #banner><ZoneBanner part="banner" :listing="e.listing" :key-set="false" /></template>
-                </ListingCard>
+                  @source="emit('source', e.listing)" @raw="emit('raw', e.listing)" zone-banner
+                />
               </div>
             </div>
           </div>
@@ -603,7 +638,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
       <SplitHandle />
       <aside ref="mapPanel" class="ov-map" :style="mapPanelHeight ? { '--map-panel-height': `${mapPanelHeight}px` } : undefined">
         <OverviewMap
-          :listings="mapStrong" :background="mapBackground" :areas="areas" :selected-id="selectedId" :fit-key="mapFitKey"
+          :listings="mapStrong" :background="mapBackground" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="mapFitKey"
           @select="(l) => reveal([l])" @reveal="reveal" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />

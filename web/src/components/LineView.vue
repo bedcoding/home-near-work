@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import type { Area, DealType, LineViewSetting, ListingView, Verdict } from '../../../shared/types';
 import { loadCatalog, type CatalogStation } from '../areaActions';
-import { dealOptions, type Filters } from '../filters';
+import { dealOptions, plainFilters, type Filters } from '../filters';
 import { distanceM, manwon, radiusText } from '../format';
 import ListingCard from './ListingCard.vue';
 import OverviewMap from './OverviewMap.vue';
@@ -64,7 +64,7 @@ const stations = computed(() => (line.value ? catalog.value.filter((s) => s.line
 const stationAreas = computed<Area[]>(() => stations.value.map((s, i) => ({ id: -(i + 1), name: s.name, lat: s.lat, lng: s.lng, radiusM: radius.value, enabled: true })));
 
 /** 왼쪽 필터에서 지역 조건만 뺀 것(노선 역 반경으로 대신 고른다) */
-const loose = computed<Filters>(() => ({ ...props.filters, deals: [], areaIds: [], insideAreas: false, distanceMax: null }));
+const loose = computed<Filters>(() => ({ ...plainFilters(props.filters), deals: [], areaIds: [], insideAreas: false, distanceMax: null }));
 const priceOf = (deal: DealType, p: { deposit: number | null; monthly: number | null; price: number | null }) =>
   deal === 'monthly' ? p.monthly : deal === 'jeonse' ? p.deposit : p.price;
 function median(values: number[]): number | null {
@@ -78,20 +78,21 @@ function median(values: number[]): number | null {
 const rows = computed(() => {
   const located = props.listings.filter((l) => l.lat != null && l.lng != null);
   const deals = DEALS.filter((d) => !props.filters.deals.length || props.filters.deals.includes(d.id));
+  const f = loose.value;
   return stations.value.map((s) => {
     const near = located.filter((l) => distanceM(s.lat, s.lng, l.lat!, l.lng!) <= radius.value);
     const by = Object.fromEntries(
       DEALS.map((d) => {
         if (!deals.includes(d)) return [d.id, null];
         const prices = near.flatMap((l) => {
-          const opts = dealOptions(l, d.id, loose.value, []);
+          const opts = dealOptions(l, d.id, f, []);
           const values = opts.map((p) => priceOf(d.id, p)).filter((v): v is number => v != null);
           return values.length ? [Math.min(...values)] : [];
         });
         return [d.id, { count: prices.length, median: median(prices) }];
       }),
     ) as Record<(typeof DEALS)[number]['id'], { count: number; median: number | null } | null>;
-    const listings = near.filter((l) => deals.some((d) => dealOptions(l, d.id, loose.value, []).length));
+    const listings = near.filter((l) => deals.some((d) => dealOptions(l, d.id, f, []).length));
     return { station: s, by, listings, total: listings.length };
   });
 });

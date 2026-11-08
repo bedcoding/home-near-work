@@ -19,6 +19,8 @@ const props = defineProps<{
   outside: number;
   areas: Area[];
   selectedId: string | null;
+  /** 고른 매물 쪽으로 지도를 옮길지(직접 고른 매물일 때만, App의 panToSelected) */
+  panToSelected?: boolean;
 }>();
 const emit = defineEmits<{
   /** 고른 종류의 매물(화면 순서) */
@@ -94,7 +96,7 @@ defineExpose({ pickType });
       <SplitHandle />
       <aside class="map">
         <OverviewMap
-          :listings="none" :background="shown" :areas="areas" :selected-id="selectedId" :fit-key="type"
+          :listings="none" :background="shown" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="type"
           @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />

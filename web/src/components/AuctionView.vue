@@ -42,6 +42,8 @@ const props = defineProps<{
   outside: number;
   areas: Area[];
   selectedId: string | null;
+  /** 고른 매물 쪽으로 지도를 옮길지(직접 고른 매물일 때만, App의 panToSelected) */
+  panToSelected?: boolean;
   /** 조회 중(무엇이든)이면 '경매 조회하기'를 막는다 */
   running: boolean;
   /** 신탁 공매 공고(새 공고 먼저, 게시일 최신 순) */
@@ -300,11 +302,10 @@ const days = computed(() => {
           <div class="list">
             <ListingCard
               v-for="l in g.items" :key="l.id" :listing="l" :areas="areas" :selected="l.id === selectedId" hide-sale-date
-              :expect="expectedPrices(l, regionStats)"
+              :expect="expectedPrices(l, regionStats)" zone-banner :zone-key-set="zone?.key ?? false"
               @select="emit('select', l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
               @source="emit('source', l)" @raw="emit('raw', l)"
             >
-              <template v-if="l.zone" #banner><ZoneBanner part="banner" :listing="l" :key-set="zone?.key ?? false" /></template>
               <template v-if="l.zone && zone" #tags><ZoneBanner part="chip" :listing="l" :key-set="zone.key" /></template>
             </ListingCard>
           </div>
@@ -329,7 +330,7 @@ const days = computed(() => {
       <SplitHandle />
       <aside class="map">
         <OverviewMap
-          :listings="none" :background="all" :areas="areas" :selected-id="selectedId" :fit-key="kind"
+          :listings="none" :background="all" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="kind"
           @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />

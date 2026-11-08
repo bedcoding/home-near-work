@@ -16,7 +16,6 @@ import OverviewMap from './OverviewMap.vue';
 import SplitHandle from './SplitHandle.vue';
 import { mapShareStyle } from '../mapWidth';
 import RuleList from './RuleList.vue';
-import ZoneBanner from './ZoneBanner.vue';
 import { ZONE_CHECKED, ZONE_LINKS, ZONE_RULES } from '../zones';
 
 // 서울 아파트 탭: 회사와 멀어도 고른 서울 구의 아파트를 경매(법원경매), 공매(온비드), 매매(네이버)로 나눠 본다.
@@ -29,6 +28,8 @@ const props = defineProps<{
   listings: ListingView[];
   areas: Area[];
   selectedId: string | null;
+  /** 고른 매물 쪽으로 지도를 옮길지(직접 고른 매물일 때만, App의 panToSelected) */
+  panToSelected?: boolean;
   /** 조회 중(무엇이든)이면 '경매 조회하기'를 막는다 */
   running: boolean;
   /** 고른 구(법원경매, 온비드가 반경 밖이어도 아파트를 모으는 구) */
@@ -350,10 +351,9 @@ const none: ListingView[] = [];
           <div class="list">
             <ListingCard
               v-for="l in auctions" :key="l.id" :listing="l" :areas="areas" :selected="l.id === selectedId"
-              :expect="expectedPrices(l, regionStats)"
+              :expect="expectedPrices(l, regionStats)" zone-banner :zone-key-set="zone.key"
               @select="emit('select', l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)" @source="emit('source', l)" @raw="emit('raw', l)"
             >
-              <template v-if="l.zone" #banner><ZoneBanner part="banner" :listing="l" :key-set="zone.key" /></template>
               <template #tags>
                 <HouseholdsChip :listing="l" @save="(k, n, h) => emit('households', k, n, h)" />
                 <span v-if="chips.get(l.id)" class="chip" :class="TONE[chips.get(l.id)!.tone]" :title="chips.get(l.id)!.title">{{ chips.get(l.id)!.text }}</span>
@@ -367,10 +367,9 @@ const none: ListingView[] = [];
           </h3>
           <div class="list">
             <ListingCard
-              v-for="l in sales" :key="l.id" :listing="l" :areas="areas" :selected="l.id === selectedId"
+              v-for="l in sales" :key="l.id" :listing="l" :areas="areas" :selected="l.id === selectedId" zone-banner :zone-key-set="zone.key"
               @select="emit('select', l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)" @source="emit('source', l)" @raw="emit('raw', l)"
             >
-              <template v-if="l.zone" #banner><ZoneBanner part="banner" :listing="l" :key-set="zone.key" /></template>
               <template #tags>
                 <HouseholdsChip :listing="l" @save="(k, n, h) => emit('households', k, n, h)" />
                 <span v-if="chips.get(l.id)" class="chip" :class="TONE[chips.get(l.id)!.tone]" :title="chips.get(l.id)!.title">{{ chips.get(l.id)!.text }}</span>
@@ -387,7 +386,7 @@ const none: ListingView[] = [];
       <SplitHandle />
       <aside class="map">
         <OverviewMap
-          :listings="none" :background="shown" :areas="areas" :selected-id="selectedId" :fit-key="fitKey"
+          :listings="none" :background="shown" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="fitKey"
           @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)"
           @area="(a) => emit('area', a)" @station="(s) => emit('station', s)"
         />

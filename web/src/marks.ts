@@ -1,4 +1,4 @@
-import { ref, watch } from 'vue';
+import { reactive, ref, watch } from 'vue';
 import type { ListingView } from '../../shared/types';
 
 // 대시보드에서 매물에 남기는 내 표시: '봤음'(눌러 본 매물), '문의함'(중개사에게 문의한 매물, 📞), 메모(📝).
@@ -16,9 +16,18 @@ let handlers: Handlers = { seen: () => {}, contact: () => {}, note: () => {} };
 export const NOTE_MAX = 300;
 
 /**
- * 표시를 바꿀 때마다 늘린다. 매물은 수만 건이라 깊이 감시하지 않아서(App.vue), 카드가 이 값을 읽어 표시가 바뀌면 다시 그린다.
+ * 매물마다 표시를 바꾼 횟수. 매물은 수만 건이라 깊이 감시하지 않아서(App.vue), 카드가 자기 매물의 이 값을 읽어 표시가 바뀌면 다시 그린다.
+ * 예전에는 전체 횟수 하나를 모든 카드가 읽어서, 매물 하나에 '봤음'을 남겨도 펼친 카드 수천 장이 다 다시 그려졌다.
  */
-export const marksVersion = ref(0);
+const versions = reactive(new Map<string, number>());
+
+/** ids 매물의 표시(봤음, 문의함, 메모, 관심, 별로, 버림)가 바뀌었다고 알린다. 그 매물 카드만 다시 그린다. */
+export function touchMarks(ids: Iterable<string>) {
+  for (const id of ids) versions.set(id, (versions.get(id) ?? 0) + 1);
+}
+
+/** 카드가 읽는 자기 매물의 표시 횟수 */
+export const marksOf = (id: string) => versions.get(id) ?? 0;
 
 export function onMarks(h: Handlers) {
   handlers = h;

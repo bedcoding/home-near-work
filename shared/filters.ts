@@ -96,6 +96,15 @@ export function normalizeFilters(saved: unknown): Filters {
   };
 }
 
+/**
+ * 필터를 평범한 객체로 한 번 복사한다(목록 칸도 새 배열로). 화면의 반응형 필터(Vue ref)를 computed 안에서 넘기면 모든 칸을 감시 대상으로 잡는다.
+ * 매물 수만 건을 도는 계산은 반응형 필터를 매물마다 펼치거나 읽지 말고 이 복사본을 반복 밖에서 한 번 만들어 쓴다
+ * (반응형 객체는 읽을 때마다 감시를 기록해서, 지역 칸 건수처럼 매물마다 펼치면 같은 계산이 10배 느려진다).
+ */
+export function plainFilters(f: Filters): Filters {
+  return { ...f, deals: [...f.deals], kinds: [...f.kinds], areaIds: [...f.areaIds] };
+}
+
 /** 범위 안인지. 값이 없으면 통과한다. */
 function inRange(value: number | null, min: number | null, max: number | null) {
   if (value == null) return true;
@@ -115,7 +124,8 @@ function priceOk(p: PriceOption, f: Filters) {
  * 거래 유형 체크는 매물 탭의 거래 유형 탭이 대신하므로 여기서는 보지 않는다.
  */
 export function dealOptions(l: FilterTarget, deal: DealType, f: Filters, areas: Area[]): PriceOption[] {
-  if (!passes(l, { ...f, deals: [deal] }, areas)) return [];
+  // 필터 객체를 { ...f, deals: [deal] }로 새로 만들지 않고 거래 유형만 바꿔 본다(화면은 매물마다 여러 번 부른다).
+  if (!passesAs(l, deal, f, areas)) return [];
   return l.prices.filter((p) => p.deal === deal && priceOk(p, f));
 }
 
@@ -123,8 +133,20 @@ export function dealOptions(l: FilterTarget, deal: DealType, f: Filters, areas: 
 export const isNoOption = (l: Pick<ListingView, 'options'>) => !!l.options && !l.options.full && l.options.list?.length === 0;
 
 export function passes(l: FilterTarget, f: Filters, areas: Area[]): boolean {
-  const options = l.prices.filter((p) => f.deals.length === 0 || f.deals.includes(p.deal));
-  if (!options.some((p) => priceOk(p, f))) return false;
+  return passesAs(l, null, f, areas);
+}
+
+/** passes와 같고, deal을 주면 필터의 거래 유형 대신 그 거래 유형만 본다(dealOptions). */
+function passesAs(l: FilterTarget, deal: DealType | null, f: Filters, areas: Area[]): boolean {
+  let priced = false;
+  for (const p of l.prices) {
+    if (deal ? p.deal !== deal : f.deals.length > 0 && !f.deals.includes(p.deal)) continue;
+    if (priceOk(p, f)) {
+      priced = true;
+      break;
+    }
+  }
+  if (!priced) return false;
   if (f.kinds.length && !f.kinds.includes(kindOf(l))) return false;
   if (!inRange(l.areaM2, f.areaMin, f.areaMax)) return false;
   if (f.excludeBasement && l.basement) return false;
@@ -132,22 +154,33 @@ export function passes(l: FilterTarget, f: Filters, areas: Area[]): boolean {
   if (f.excludeFirstFloor && l.floor === 1 && !l.basement) return false;
   if (f.noOptionsOnly && !isNoOption(l)) return false;
 
-  // 고른 지역(없거나 모두 꺼졌으면 켜진 지역 전체)
-  const eligible = primaryAreas(areas);
-  const picked = eligible.filter((a) => f.areaIds.includes(a.id));
-  const chosen = picked.length ? picked : eligible;
-  if (hasRegions(areas)) {
+  // 고른 지역(없거나 모두 꺼졌으면 켜진 지역 전체). 지역 조건이 하나도 없으면 지역 목록을 만들지 않는다(매물마다 부르므로).
+  const regions = hasRegions(areas);
+  const areaRule = regions
+    ? f.insideAreas || f.areaIds.length > 0
+    : (f.insideAreas || f.distanceMax != null || f.areaIds.length > 0) && l.lat != null && l.lng != null;
+  if (!areaRule) {
+    // 지역을 보지 않는다.
+  } else if (regions) {
+    const eligible = primaryAreas(areas);
+    const picked = eligible.filter((a) => f.areaIds.includes(a.id));
+    const chosen = picked.length ? picked : eligible;
     if ((f.insideAreas || picked.length > 0) && !selectedArea(l, chosen)) return false;
-  } else if (eligible.length && (f.insideAreas || f.distanceMax != null || picked.length) && l.lat != null && l.lng != null) {
-    const distances = eligible.map((a) => ({ a, d: distanceM(a.lat, a.lng, l.lat!, l.lng!) }));
-    const mine = distances.filter(({ a }) => chosen.includes(a));
-    if (f.insideAreas && !mine.some(({ a, d }) => d <= a.radiusM)) return false;
-    // 반경 밖도 볼 때는 가장 가까운 지역이 고른 지역인 매물만 보인다.
-    if (!f.insideAreas && picked.length) {
-      const closest = distances.reduce((x, y) => (y.d < x.d ? y : x), distances[0]);
-      if (closest && !chosen.includes(closest.a)) return false;
+  } else {
+    const eligible = primaryAreas(areas);
+    const picked = eligible.filter((a) => f.areaIds.includes(a.id));
+    const chosen = picked.length ? picked : eligible;
+    if (eligible.length && (f.insideAreas || f.distanceMax != null || picked.length)) {
+      const distances = eligible.map((a) => ({ a, d: distanceM(a.lat, a.lng, l.lat!, l.lng!) }));
+      const mine = distances.filter(({ a }) => chosen.includes(a));
+      if (f.insideAreas && !mine.some(({ a, d }) => d <= a.radiusM)) return false;
+      // 반경 밖도 볼 때는 가장 가까운 지역이 고른 지역인 매물만 보인다.
+      if (!f.insideAreas && picked.length) {
+        const closest = distances.reduce((x, y) => (y.d < x.d ? y : x), distances[0]);
+        if (closest && !chosen.includes(closest.a)) return false;
+      }
+      if (f.distanceMax != null && !mine.some(({ d }) => d <= f.distanceMax!)) return false;
     }
-    if (f.distanceMax != null && !mine.some(({ d }) => d <= f.distanceMax!)) return false;
   }
 
   if (f.text.trim()) {

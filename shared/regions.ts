@@ -53,8 +53,32 @@ export function validRegion(value: unknown): value is AdministrativeRegion {
       region[key as 'sido' | 'sigungu' | 'name'].trim().length > 0 && region[key as 'sido' | 'sigungu' | 'name'].length <= 160 && !/[\u0000-\u001f<>]/.test(region[key as 'sido' | 'sigungu' | 'name']));
 }
 
+/**
+ * 매물과 구(또는 동)를 견준 결과를 매물 객체마다 기억한다. 화면은 매물이 바뀔 때마다 수만 건을 지역마다 다시 견주는데
+ * (지역 칸 건수, 고른 지역 필터, 카드의 지역 이름), 주소를 낱말로 나누고 구 경계 안인지 보는 일이 무거워서다.
+ * 판정에 쓰는 칸(법정동코드, 주소, 좌표, 동)이 바뀌면 기억을 버리고 다시 낸다.
+ */
+interface RegionMemo { legalDongCode: unknown; address: unknown; lat: unknown; lng: unknown; dong: unknown; hits: Map<string, boolean> }
+const regionMemo = new WeakMap<object, RegionMemo>();
+const regionKey = (region: AdministrativeRegion) => `${region.kind}|${region.code}|${region.sido}|${region.sigungu}|${region.dong ?? ''}`;
+
 /** Full jurisdiction is required: a same-named dong in another city must not match. */
 export function matchesRegion(listing: RegionalListing, region: AdministrativeRegion): boolean {
+  let memo = regionMemo.get(listing);
+  if (!memo || memo.legalDongCode !== listing.legalDongCode || memo.address !== listing.address || memo.lat !== listing.lat || memo.lng !== listing.lng || memo.dong !== listing.dong) {
+    memo = { legalDongCode: listing.legalDongCode, address: listing.address, lat: listing.lat, lng: listing.lng, dong: listing.dong, hits: new Map() };
+    regionMemo.set(listing, memo);
+  }
+  const key = regionKey(region);
+  let hit = memo.hits.get(key);
+  if (hit === undefined) {
+    hit = judgeRegion(listing, region);
+    memo.hits.set(key, hit);
+  }
+  return hit;
+}
+
+function judgeRegion(listing: RegionalListing, region: AdministrativeRegion): boolean {
   if (listing.legalDongCode && /^[1-9]\d{9}$/.test(listing.legalDongCode)) return region.kind === 'gu' ? listing.legalDongCode.startsWith(region.code) : listing.legalDongCode === region.code;
   const address = tokens(listing.address ?? '');
   const jurisdiction = [...tokens(region.sido), ...tokens(region.sigungu)];

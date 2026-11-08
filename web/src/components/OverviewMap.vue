@@ -50,8 +50,13 @@ const props = withDefaults(
      * 같은 값에서 매물만 바뀌면(10초마다 상태를 받을 때, 버림, 필터) 사용자가 보던 확대와 위치를 그대로 둔다.
      */
     fitKey?: string;
+    /**
+     * 고른 매물이 바뀔 때 그 매물이 화면 가장자리나 밖에 있으면 지도를 그쪽으로 옮길지. 사용자가 직접 고른 매물일 때만 true다
+     * (버림으로 목록에서 빠져 다음 매물이 골라진 때는 false라서 보던 자리를 그대로 둔다). 강조 표시는 어느 쪽이든 한다.
+     */
+    panToSelected?: boolean;
   }>(),
-  { listMode: true, fitKey: '', visible: true },
+  { listMode: true, fitKey: '', visible: true, panToSelected: true },
 );
 const emit = defineEmits<{ select: [ListingView]; reveal: [ListingView[]]; open: [ListingView]; area: [Area]; station: [CatalogStation] }>();
 
@@ -63,6 +68,13 @@ const big = ref(false);
 let map: L.Map | null = null;
 let base: L.LayerGroup | null = null; // 지역 원, 역 이름이 아닌 지역 표시
 let dots: L.LayerGroup | null = null; // 매물
+/**
+ * 가격을 쓰지 않는 매물 표시(점과 같은 자리 숫자 동그라미)를 그리는 캔버스. 예전에는 숫자 동그라미를 HTML 요소로 그려서
+ * 보통 확대에서 3천 개 가까이 되면 지도를 끄는 동안 한 프레임에 0.3초씩 걸렸다. 가격 표시는 지금처럼 HTML이다.
+ */
+let dotRenderer: L.Canvas | null = null;
+/** dotRenderer의 캔버스. 평소에는 마우스를 아래(역, 정비구역)로 흘려보내고, 표시 위에 있을 때만 받는다(onMapPointer). */
+let dotCanvas: HTMLCanvasElement | null = null;
 let stationLayer: L.LayerGroup | null = null; // 역
 let stationRenderer: L.Renderer | null = null;
 let zoneLayer: L.GeoJSON | null = null; // 정비사업 구역
@@ -89,7 +101,10 @@ const areaSample = computed(() => {
 });
 /** 마지막으로 그린 가격 표시 단계(0 동그라미만, 1 펼친 목록만 가격, 2 모두 가격) */
 let drawnPriceLevel = -1;
-/** 그린 표시와 그 묶음. base는 동그라미 표시의 원래 모양, z는 글자 표시의 원래 쌓는 순서(고른 표시를 풀 때 되돌린다). */
+/**
+ * 그린 표시와 그 묶음. base는 점 표시의 원래 모양, z는 쌓는 순서(가격 표시는 zIndexOffset, 캔버스 표시는 그리는 순서).
+ * 고른 표시를 풀 때 되돌린다.
+ */
 interface Drawn {
   marker: L.Layer;
   group: Group;
@@ -181,7 +196,6 @@ const MEH_MARK = '<i class="ck">✕</i>';
 /** 묶음에 별로가 아닌 '📞 문의함' 매물이 있는지. 가격 앞(멀리서 보면 왼쪽 위)에 📞를 붙인다. */
 const hasContacted = (s: Summary) => s.called;
 const PHONE_MARK = '<i class="ck">📞</i>';
-const PHONE_BADGE = '<em class="ph">📞</em>';
 
 const positions = computed(() => new Set(props.background.filter((l) => l.lat != null).map((l) => `${l.lat!.toFixed(5)},${l.lng!.toFixed(5)}`)).size);
 
@@ -321,14 +335,19 @@ function combine(a: Summary, b: Summary): Summary {
 let measure: CanvasRenderingContext2D | null = null;
 let measureFont = '';
 const widths = new Map<string, number>();
-function textWidth(text: string, px: number) {
-  const key = `${px}|${text}`;
-  const known = widths.get(key);
-  if (known != null) return known;
+/** 지도 글자 글꼴(화면의 --font). 캔버스 표시도 같은 글꼴로 쓴다. */
+function mapFont() {
   if (!measureFont) {
     measure = document.createElement('canvas').getContext('2d');
     measureFont = getComputedStyle(document.documentElement).getPropertyValue('--font').trim() || 'sans-serif';
   }
+  return measureFont;
+}
+function textWidth(text: string, px: number) {
+  const key = `${px}|${text}`;
+  const known = widths.get(key);
+  if (known != null) return known;
+  mapFont();
   let w = text.length * px * 0.6;
   if (measure) {
     measure.font = `700 ${px}px ${measureFont}`;
@@ -758,9 +777,129 @@ function fitTo(points: L.LatLng[]) {
   if (bounds.isValid()) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
 }
 
-/** 묶음 하나를 지도에 그리고, 누르면 정보 창을 띄우게 한다. */
+/** 캔버스 숫자 동그라미(CountMarker)의 모양: 가운데 글자(건수나 ✕), 신규 딱지, 📞, 그림자, 고른 표시 테두리 */
+interface CountLook {
+  text: string;
+  textColor: string;
+  fontPx: number;
+  /** NEW 딱지가 동그라미 상자의 [위, 오른쪽]으로 튀어나오는 길이(px, 예전 HTML 표시의 .nw 자리). 딱지가 없으면 null */
+  newAt: [number, number] | null;
+  phone: boolean;
+  /** 그림자 진하기(0이면 없음) */
+  shadow: number;
+  selected: boolean;
+}
+/** Leaflet 캔버스 그리기의 안쪽 값(공개 타입에 없어서 여기서만 쓴다) */
+interface CanvasPath {
+  options: L.CircleMarkerOptions & { look?: CountLook };
+  _renderer: { _ctx: CanvasRenderingContext2D; _drawing: boolean };
+  _point?: L.Point;
+  _radius: number;
+  _pxBounds: L.Bounds;
+  _empty(): boolean;
+  _containsPoint(p: L.Point): boolean;
+}
+const circleProto = L.CircleMarker.prototype as unknown as { _updateBounds(this: unknown): void; _updatePath(this: unknown): void };
+const NEW_COLOR = '#e5484d';
+/** NEW 딱지 글자 폭(기울인 굵은 9px, 처음 그릴 때 잰다) */
+let newTextWidth = 0;
+
+/**
+ * 캔버스에 그리는 숫자 동그라미. Leaflet이 그리는 동그라미(채우기와 테두리) 위에 가운데 글자와 딱지를 더 그린다.
+ * 모양은 예전 HTML 표시(.stack)에 맞춘다. 누름과 올리면 보이는 글은 Leaflet 캔버스가 동그라미 안에서만 받는다.
+ */
+const CountMarker = L.CircleMarker.extend({
+  _updateBounds(this: CanvasPath) {
+    circleProto._updateBounds.call(this);
+    const look = this.options.look!;
+    // 딱지와 고른 표시 테두리는 동그라미 밖으로 나가므로, 캔버스에서 다시 그릴 범위를 그만큼 넓힌다.
+    const pad = look.newAt || look.phone ? 36 : 6;
+    this._pxBounds = L.bounds(this._pxBounds.min!.subtract([pad, pad]), this._pxBounds.max!.add([pad, pad]));
+  },
+  _updatePath(this: CanvasPath) {
+    const r = this._renderer;
+    if (!r._drawing || this._empty() || !this._point) return;
+    const ctx = r._ctx;
+    const { x, y } = this._point;
+    const look = this.options.look!;
+    const outer = this._radius + (this.options.weight ?? 0) / 2;
+    if (look.shadow) {
+      ctx.globalAlpha = look.shadow;
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc(x, y + 1, outer + 0.75, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    circleProto._updatePath.call(this);
+    ctx.save();
+    if (look.selected) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#16202e';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, outer + 2.5, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (look.text) {
+      ctx.globalAlpha = this.options.opacity ?? 1;
+      ctx.fillStyle = look.textColor;
+      ctx.font = `700 ${look.fontPx}px ${mapFont()}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(look.text, x, y + 0.5);
+    }
+    if (look.newAt) {
+      ctx.globalAlpha = 1;
+      ctx.font = `italic 800 9px ${mapFont()}`;
+      newTextWidth ||= ctx.measureText('NEW').width;
+      const w = newTextWidth + 8;
+      const h = 13.25;
+      const left = x + outer + look.newAt[1] - w;
+      const top = y - outer - look.newAt[0];
+      ctx.beginPath();
+      ctx.roundRect(left, top, w, h, 4);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = NEW_COLOR;
+      ctx.stroke();
+      ctx.fillStyle = NEW_COLOR;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('NEW', left + w / 2, top + h / 2 + 0.5);
+    }
+    if (look.phone) {
+      ctx.globalAlpha = 1;
+      ctx.font = `12px ${mapFont()}`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText('📞', x - outer - 13, y - outer - 11);
+    }
+    ctx.restore();
+  },
+}) as unknown as new (latlng: L.LatLngExpression, options: L.CircleMarkerOptions & { look: CountLook }) => L.CircleMarker;
+
+/**
+ * 숫자 동그라미 하나(size는 테두리까지 지름 px). 색칠한 표시는 흰 테두리와 흰 글자, 본 매물은 흰 바탕에 색 테두리와 색 글자다.
+ * 예전 HTML 표시처럼 누름이 지도로 번지지 않게 한다(핀 꽂는 중에 눌러도 핀이 꽂히지 않게).
+ */
+function countMarker(g: Group, size: number, colors: { fill: string; stroke: string }, look: Omit<CountLook, 'selected'>, opacity = 1): L.CircleMarker {
+  const weight = g.strong ? 2 : 1.5;
+  const options = {
+    renderer: dotRenderer ?? undefined, radius: size / 2 - weight / 2, weight, color: colors.stroke, opacity, fillColor: colors.fill, fillOpacity: opacity,
+    bubblingMouseEvents: false, look: { ...look, selected: false },
+  };
+  return new CountMarker([g.lat, g.lng], options);
+}
+/** 색칠한 표시와 본 표시(흰 바탕)의 바탕, 테두리, 글자 색 */
+const stackColors = (c: string, seen: boolean) => (seen ? { fill: '#fff', stroke: c, text: c } : { fill: c, stroke: '#fff', text: '#fff' });
+
+/** 지금 그리는 지도에 펼친 목록이 있는지(있으면 그 밖의 매물은 회색으로 연하게). render가 그리기 전에 한 번 정한다. */
+let dimNow = false;
+
+/** 묶음 하나를 지도에 그리고, 누르면 정보 창을 띄우게 한다. 가격 표시는 HTML, 점과 숫자 동그라미는 캔버스로 그린다. */
 function drawGroup(layer: L.LayerGroup, g: Group): Drawn {
-  const dim = props.listings.length > 0;
+  const dim = dimNow;
   const muted = dim && !g.strong;
   const n = g.sum.n;
   const c = muted ? MUTED : groupColor(g.sum);
@@ -797,50 +936,34 @@ function drawGroup(layer: L.LayerGroup, g: Group): Drawn {
       zIndexOffset,
     });
   } else if (n === 1 && (badge || called)) {
-    // 신규나 문의함 한 건: 딱지를 붙이려고 동그라미를 글자 없는 묶음 표시로 그린다(크기는 아래 동그라미와 같음).
-    const size = g.strong ? 14 : 10;
-    marker = L.marker([g.lat, g.lng], {
-      icon: L.divIcon({
-        className: `stack one${g.strong ? ' strong' : ''}${seen ? ' seen' : ''}`,
-        html: `<span style="${boxStyle(c, seen)}">${badge}${called ? PHONE_BADGE : ''}</span>`,
-        iconSize: [size, size],
-        iconAnchor: [size / 2, size / 2],
-      }),
-      keyboard: false,
-      zIndexOffset,
+    // 신규나 문의함 한 건: 딱지를 붙이려고 점 대신 글자 없는 작은 동그라미로 그린다.
+    const colors = stackColors(c, seen);
+    marker = countMarker(g, g.strong ? 14 : 10, colors, {
+      text: '', textColor: colors.text, fontPx: 11, newAt: badge ? [11, 20] : null, phone: called, shadow: seen ? 0.15 : 0.25,
     });
+    z = zIndexOffset + 50;
   } else if (n === 1 && meh) {
-    // 별로 한 건: 동그라미 대신 회색 바탕에 ✕
-    const size = g.strong ? 14 : 12;
-    marker = L.marker([g.lat, g.lng], {
-      icon: L.divIcon({
-        className: `stack one meh${g.strong ? ' strong' : ''}`,
-        html: `<span style="background:${c}">✕</span>`,
-        iconSize: [size, size],
-        iconAnchor: [size / 2, size / 2],
-      }),
-      keyboard: false,
-      zIndexOffset,
-    });
+    // 별로 한 건: 점 대신 회색 바탕에 ✕
+    marker = countMarker(g, g.strong ? 14 : 12, { fill: c, stroke: '#fff' }, { text: '✕', textColor: '#fff', fontPx: 8, newAt: null, phone: false, shadow: 0.25 });
+    z = zIndexOffset + 50;
   } else if (n === 1) {
     // 펼친 가격대 밖 매물(회색)도 그 일대 시세를 볼 때 쓰므로, 색만 회색으로 두고 크기는 보통 점과 같게 그린다.
     // 본 매물은 속이 흰 동그라미(색 테두리)로 그린다.
     base = { radius: g.strong ? 7 : 5, color: seen ? c : '#fff', weight: seen || g.strong ? 2 : dim ? 1.5 : 1 };
-    marker = L.circleMarker([g.lat, g.lng], { ...base, fillColor: seen ? '#fff' : c, fillOpacity: seen ? 1 : g.strong ? 0.95 : 0.8 });
-    z = undefined;
+    marker = L.circleMarker([g.lat, g.lng], { ...base, fillColor: seen ? '#fff' : c, fillOpacity: seen ? 1 : g.strong ? 0.95 : 0.8, renderer: dotRenderer ?? undefined });
   } else {
-    // 같은 자리 여러 건: 숫자 동그라미
-    const size = g.strong ? 26 : dim ? 18 : 20;
-    marker = L.marker([g.lat, g.lng], {
-      icon: L.divIcon({
-        className: `stack${g.strong ? ' strong' : ''}${dim && !g.strong ? ' dim' : ''}${seen ? ' seen' : ''}${meh ? ' meh' : ''}`,
-        html: `<span style="${boxStyle(c, seen)}">${meh ? '✕' : n}${badge}${called ? PHONE_BADGE : ''}</span>`,
-        iconSize: [size, size],
-        iconAnchor: [size / 2, size / 2],
-      }),
-      keyboard: false,
-      zIndexOffset,
-    });
+    // 같은 자리 여러 건: 숫자 동그라미(모두 별로면 ✕). 펼친 목록 밖이면 작고 연하게 그린다.
+    const colors = stackColors(c, seen);
+    const faint = dim && !g.strong;
+    marker = countMarker(
+      g, g.strong ? 26 : faint ? 18 : 20, colors,
+      {
+        text: meh ? '✕' : String(n), textColor: colors.text, fontPx: meh || faint ? 10 : g.strong ? 13 : 11,
+        newAt: badge ? [9, 14] : null, phone: called, shadow: seen ? 0.15 : 0.25,
+      },
+      faint ? 0.9 : 1,
+    );
+    z = zIndexOffset + 50;
   }
   // 올리면 보이는 글은 올릴 때 만든다(표시를 수백 개씩 새로 그릴 때 글까지 미리 만들면 느려서).
   (marker as L.Marker).bindTooltip(() => tooltip(g), { direction: 'top' });
@@ -871,6 +994,7 @@ function render(full: boolean) {
     selected = null;
   }
   drawnPriceLevel = level;
+  dimNow = props.listings.length > 0;
   // 동그라미만 그리는 단계는 같은 자리끼리만 묶어 확대와 상관없으므로 다시 나누지 않는다.
   if (full || !shown || shown.level !== level || (level > 0 && shown.zoom !== zoom)) {
     shown = { zoom, level, groups: computeGroups(level, zoom) };
@@ -879,17 +1003,14 @@ function render(full: boolean) {
   }
   const view = map.getBounds().pad(0.3);
   const keep = new Set<string>();
+  let added = false;
   for (const g of shown.groups) {
     if (!view.contains([g.lat, g.lng])) continue;
     keep.add(g.key);
     if (drawn.has(g.key)) continue;
     const d = drawGroup(dots, g);
     drawn.set(g.key, d);
-    // 옮기다 새로 그린 동그라미가 진한 동그라미를 덮지 않게 한다(처음부터 그릴 때는 그리는 순서가 맞음).
-    if (!fresh && d.marker instanceof L.CircleMarker) {
-      if (g.strong) d.marker.bringToFront();
-      else d.marker.bringToBack();
-    }
+    if (d.marker instanceof L.CircleMarker) added = true;
   }
   for (const [key, d] of drawn) {
     if (keep.has(key)) continue;
@@ -897,7 +1018,59 @@ function render(full: boolean) {
     dots.removeLayer(d.marker);
     drawn.delete(key);
   }
+  if (added) orderCanvas();
+  buildHitGrid();
   highlight(false);
+}
+
+/**
+ * 캔버스 표시를 쌓는 순서대로 다시 늘어놓는다(나중에 그린 것이 위). 진한 표시(펼친 목록), 신규, 문의함이 위로, 별로는 아래로 가고,
+ * 같은 단계에서는 숫자 동그라미가 점 위에 온다. 지도를 옮기다 새로 그린 표시가 맨 위에 붙으므로 그릴 때마다 맞춘다.
+ */
+function orderCanvas() {
+  const list = [...drawn.values()].filter((d) => d.marker instanceof L.CircleMarker);
+  list.sort((a, b) => (a.z ?? 0) - (b.z ?? 0));
+  for (const d of list) (d.marker as L.CircleMarker).bringToFront();
+}
+
+/** 마우스가 캔버스 표시 위인지 빨리 알아보려고, 그린 캔버스 표시를 지도 좌표 32px 칸으로 나눠 둔다(그릴 때마다 다시 만든다). */
+const HIT_CELL = 32;
+let hitGrid = new Map<string, L.CircleMarker[]>();
+function buildHitGrid() {
+  hitGrid = new Map();
+  for (const d of drawn.values()) {
+    if (!(d.marker instanceof L.CircleMarker)) continue;
+    const p = (d.marker as unknown as CanvasPath)._point;
+    if (!p) continue;
+    const key = `${Math.floor(p.x / HIT_CELL)},${Math.floor(p.y / HIT_CELL)}`;
+    const cell = hitGrid.get(key);
+    if (cell) cell.push(d.marker);
+    else hitGrid.set(key, [d.marker]);
+  }
+}
+/** 지도 좌표 p에 캔버스 표시가 있는지(표시 반지름은 칸보다 작아서 둘레 아홉 칸만 본다) */
+function canvasMarkerAt(p: L.Point) {
+  const gx = Math.floor(p.x / HIT_CELL);
+  const gy = Math.floor(p.y / HIT_CELL);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (const m of hitGrid.get(`${gx + dx},${gy + dy}`) ?? []) if ((m as unknown as CanvasPath)._containsPoint(p)) return true;
+    }
+  }
+  return false;
+}
+/**
+ * 캔버스는 지도 전체를 덮어서 그냥 두면 아래의 역(누르면 알림 켜고 끔), 정비구역(올리면 이름), 구 경계가 마우스를 못 받는다.
+ * 그래서 캔버스 칸은 평소 마우스를 흘려보내고, 마우스가 캔버스 표시 위에 올라가면 그때만 받아 Leaflet이 누름과 글을 처리하게 한다.
+ */
+function onMapPointer(e: MouseEvent) {
+  if (!map || !dotCanvas) return;
+  const dragging = (map.dragging as unknown as { moving?: () => boolean }).moving?.() ?? false;
+  const want = !dragging && canvasMarkerAt(map.mouseEventToLayerPoint(e)) ? 'auto' : '';
+  if (dotCanvas.style.pointerEvents !== want) dotCanvas.style.pointerEvents = want;
+}
+function onMapLeave() {
+  if (dotCanvas) dotCanvas.style.pointerEvents = '';
 }
 
 /** 매물이 바뀌면 처음부터 다시 그린다. fit: 매물에 맞춰 지도를 다시 맞춘다(처음, fitKey가 바뀔 때). */
@@ -945,9 +1118,16 @@ function syncVisibleSize() {
 
 function setSelected(s: Drawn, on: boolean) {
   if (s.marker instanceof L.CircleMarker) {
-    const base = s.base ?? { radius: s.group.strong ? 7 : 5, color: '#fff', weight: s.group.strong ? 2 : 1 };
-    s.marker.setStyle(on ? { color: '#16202e', weight: 3 } : { color: base.color, weight: base.weight });
-    s.marker.setRadius(on ? 9 : base.radius);
+    const look = (s.marker as unknown as CanvasPath).options.look;
+    if (look) {
+      // 숫자 동그라미: 크기는 그대로 두고 바깥에 짙은 테두리(예전 HTML 표시의 outline과 같은 자리)
+      look.selected = on;
+      s.marker.redraw();
+    } else {
+      const base = s.base ?? { radius: s.group.strong ? 7 : 5, color: '#fff', weight: s.group.strong ? 2 : 1 };
+      s.marker.setStyle(on ? { color: '#16202e', weight: 3 } : { color: base.color, weight: base.weight });
+      s.marker.setRadius(on ? 9 : base.radius);
+    }
     if (on) s.marker.bringToFront();
   } else {
     (s.marker as L.Marker).getElement()?.classList.toggle('sel', on);
@@ -980,6 +1160,15 @@ onMounted(() => {
   // 정비사업 구역은 역보다도 아래 층에 그린다(구역 수가 많아 canvas로).
   map.createPane('zones').style.zIndex = '350';
   zoneRenderer = L.canvas({ pane: 'zones', padding: 0.3 }).addTo(map);
+  // 점과 숫자 동그라미는 구 경계(400)보다 위, 가격 표시(600)보다 아래의 캔버스에 그린다.
+  // 이 칸은 마우스를 흘려보내고, 마우스가 표시 위에 있을 때만 캔버스가 받는다(onMapPointer).
+  const dotsPane = map.createPane('dots');
+  dotsPane.style.zIndex = '450';
+  dotsPane.style.pointerEvents = 'none';
+  dotRenderer = L.canvas({ pane: 'dots', padding: 0.3 }).addTo(map);
+  dotCanvas = (dotRenderer as unknown as { _container: HTMLCanvasElement })._container;
+  el.value.addEventListener('mousemove', onMapPointer, { passive: true });
+  el.value.addEventListener('mouseleave', onMapLeave);
   // 핀은 지역 이름표(툴팁 층 650)보다 위, 정보 창(700)보다 아래에 그린다(역 자리에 꽂아도 이름표에 가리지 않게).
   map.createPane('walkpins').style.zIndex = '660';
   stationLayer = L.layerGroup().addTo(map);
@@ -1036,7 +1225,7 @@ watch(
 );
 watch(
   () => props.selectedId,
-  () => highlight(true),
+  () => highlight(props.panToSelected),
 );
 watch([zones, zonesOn], drawZones);
 watch(walkPins, drawPins, { deep: true });
@@ -1066,6 +1255,8 @@ watch(big, async () => {
 });
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey);
+  el.value?.removeEventListener('mousemove', onMapPointer);
+  el.value?.removeEventListener('mouseleave', onMapLeave);
   resize?.disconnect();
   if (map) {
     // 확대 애니메이션 중에 지우면 Leaflet이 250ms 뒤 이미 지운 칸을 읽다가 오류를 내서, 애니메이션 표시를 끄고 지운다.
@@ -1075,10 +1266,13 @@ onBeforeUnmount(() => {
   // 늦게 끝난 역 목록 받기 등이 지운 지도에 그리지 않게 한다.
   map = null;
   base = dots = stationLayer = zoneLayer = pinLayer = null;
+  dotRenderer = null;
+  dotCanvas = null;
   shown = null;
   spotCache = null;
   drawn.clear();
   groupOf.clear();
+  hitGrid.clear();
   selected = null;
 });
 </script>
@@ -1322,14 +1516,7 @@ onBeforeUnmount(() => {
 :deep(.pin-pop input) {
   width: 9em; min-height: 32px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; font: 600 13px var(--font);
 }
-:deep(.stack span) {
-  position: relative; box-sizing: border-box;
-  display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%;
-  color: #fff; font: 700 11px/1 var(--font); border: 1.5px solid #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
-}
-:deep(.stack.strong span) { font-size: 13px; border-width: 2px; }
-:deep(.stack.dim span) { font-size: 10px; opacity: .9; }
-:deep(.stack.sel span) { outline: 3px solid #16202e; outline-offset: 1px; }
+/* 점과 같은 자리 숫자 동그라미는 캔버스에 그린다(CountMarker). 모양은 그 코드에 있다. */
 /* 가격 표시: 크기 0인 표시 칸의 가운데에 글자 상자를 놓는다(글자 길이만큼 넓어짐) */
 :deep(.price span), .price-sample {
   display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; border-radius: 9px; white-space: nowrap;
@@ -1349,14 +1536,11 @@ onBeforeUnmount(() => {
   background: #fff; color: #16202e; font: normal 700 10px/1 var(--font);
 }
 /* 대시보드에서 본 매물: 흰 바탕에 색 테두리와 글자(색은 표시마다 style로 준다), 가격 앞에 ✓ */
-:deep(.price.seen span), :deep(.stack.seen span) { box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
+:deep(.price.seen span) { box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
 :deep(.price.seen span b) { background: #e9edf2; }
 :deep(.price .ck) { font-style: normal; }
 .price-sample.seen-sample { background: #fff; color: #1f5fbf; border-color: #1f5fbf; box-shadow: none; }
 .legend i.seen-dot { background: #fff; box-shadow: inset 0 0 0 2px #1f5fbf; }
-/* 모두 별로인 자리: 회색 표시 앞에 ✕(멀리서 보는 동그라미는 ✕만) */
-:deep(.stack.meh span) { font-size: 10px; }
-:deep(.stack.one.meh span) { font-size: 8px; }
 .key-dot.meh-dot { display: inline-grid; place-items: center; color: #fff; font: normal 700 9px/1 var(--font); }
 :deep(.tip-site) { color: var(--muted); }
 /* 신규 딱지: 표시 오른쪽 위 모서리에 걸친다. 누르면 아래 표시가 눌리게 한다. */
@@ -1365,7 +1549,6 @@ onBeforeUnmount(() => {
   color: #e5484d; font: italic 800 9px/1.25 var(--font); letter-spacing: .02em; white-space: nowrap;
 }
 :deep(.nw) { position: absolute; top: -9px; right: -14px; box-shadow: 0 1px 2px rgba(0, 0, 0, .3); pointer-events: none; }
-:deep(.stack.one .nw) { top: -11px; right: -20px; }
 .nw-sample { display: inline-block; margin-left: 4px; vertical-align: 1px; }
 :deep(.st-tip) { color: var(--muted); font-size: 12px; }
 /* 여러 건이면 창 안을 스크롤한다(높이 400px까지). */
@@ -1393,9 +1576,4 @@ onBeforeUnmount(() => {
 :deep(.mp-more) { color: var(--muted); }
 /* 올리면 보이는 글의 메모 */
 :deep(.tip-note) { color: var(--star); }
-/* 문의함: 지도 표시 왼쪽 위 📞(가격을 쓴 표시는 가격 앞에 붙인다) */
-:deep(.ph) {
-  position: absolute; top: -11px; left: -13px; font-style: normal; font-size: 12px; line-height: 1;
-  pointer-events: none; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .35));
-}
 </style>

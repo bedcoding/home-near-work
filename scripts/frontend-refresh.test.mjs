@@ -25,8 +25,8 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 function appHarness(t) {
   storage.clear();
   const state = { dataRevision: 'session-a:1', running: null, naverCapture: { total: 0 }, newNotices: 0, gus: [], areas: [], autoCheck: { visible: true } };
-  const data = { listings: [], market: { fixture: 'market' }, failNotices: false, failMarket: false };
-  const calls = { listings: 0, notices: 0, market: 0, zones: 0 };
+  const data = { listings: [], market: { fixture: 'market' }, failNotices: false, failMarket: false, failVerdict: false };
+  const calls = { listings: 0, notices: 0, market: 0, zones: 0, verdict: 0 };
   const mounted = [];
   const api = {
     state: async () => ({ ...state }),
@@ -36,6 +36,14 @@ function appHarness(t) {
     houseTrades: async () => ({ fetchedAt: null }),
     market: async () => { calls.market += 1; if (data.failMarket) throw new Error('fixture unavailable'); return data.market; },
     setAutoCheck: async () => ({}),
+    // 서버처럼 저장하면 자료 버전이 바뀌고, 바꾸기 전후 버전을 돌려준다.
+    setVerdict: async () => {
+      calls.verdict += 1;
+      if (data.failVerdict) throw new Error('fixture unavailable');
+      const before = state.dataRevision;
+      state.dataRevision = `${before}+verdict${calls.verdict}`;
+      return { ok: true, before, after: state.dataRevision };
+    },
   };
   const exports = {};
   const scope = vue.effectScope();
@@ -57,7 +65,7 @@ function appHarness(t) {
     history: { replaceState() {} },
     URLSearchParams,
     window: { clearTimeout() {}, setTimeout() { return 1; }, addEventListener() {}, postMessage() {} },
-    document: { addEventListener() {} },
+    document: { addEventListener() {}, querySelector() { return null; } },
   }, { filename: 'App.synthetic-test.cjs' });
   const app = scope.run(() => exports.default.setup({}, { expose() {} }));
   return { app, state, data, calls, mount: async () => { for (const fn of mounted) await fn(); await settle(); } };
@@ -136,6 +144,78 @@ test('조회 중 버전 변경은 큰 응답을 반복 요청하지 않고 완�
   h.state.running = null;
   await h.app.poll();
   assert.equal(h.calls.listings, initialCalls + 1);
+});
+
+/** 화면 계산에 필요한 칸만 채운 가짜 매물(같은 자리, 같은 층, 같은 면적이면 서로 '비슷'하다) */
+const listing = (id, extra = {}) => ({
+  id, source: 'naver', status: 'active', verdict: null, verdictReason: null, relistedOf: null, isNew: true, priceChange: null, seenAt: null,
+  similarToDiscarded: false, prices: [{ deal: 'monthly', deposit: 1000, monthly: 50, price: null }], lat: 37.5, lng: 127, areaM2: 20, floor: 3,
+  basement: false, firstSeenAt: '2026-11-01T00:00:00.000Z', ...extra,
+});
+const key = (k) => ({ key: k, target: { tagName: 'BODY', isContentEditable: false }, ctrlKey: false, metaKey: false, altKey: false, preventDefault() {} });
+
+test('관심, 별로, 버림은 화면에서 바로 바꾸고 매물 목록을 다시 받지 않는다(다음 폴링에서도)', async (t) => {
+  const h = appHarness(t);
+  h.data.listings = [listing('a'), listing('b', { lat: 37.6 })];
+  await h.mount();
+  const loads = h.calls.listings;
+  const b = h.app.listings.value[1];
+  await h.app.setVerdict(b, 'discard');
+  assert.equal(b.verdict, 'discard');
+  assert.equal(b.isNew, false);
+  assert.ok(b.seenAt);
+  assert.equal(h.calls.verdict, 1);
+  assert.equal(h.calls.listings, loads, '버림 직후 목록 전체를 다시 받지 않는다');
+  assert.ok(!h.app.current.value.some((l) => l.id === 'b'), '버린 매물은 목록에서 바로 빠진다');
+  await h.app.poll();
+  assert.equal(h.calls.listings, loads, '버림만 바뀐 버전이면 다음 폴링도 다시 받지 않는다');
+  h.state.dataRevision = `${h.state.dataRevision}+other`;
+  await h.app.poll();
+  assert.equal(h.calls.listings, loads + 1, '다른 변화가 생기면 그때는 다시 받는다');
+});
+
+test('버림한 매물과 비슷한 매물에는 바로 배지를 붙이고, 되돌리면 뗀다', async (t) => {
+  const h = appHarness(t);
+  h.data.listings = [listing('a'), listing('twin', { source: 'dabang', lat: 37.50001 }), listing('far', { lat: 37.6 }), listing('starred', { verdict: 'star' })];
+  await h.mount();
+  const [a, twin, far, starred] = h.app.listings.value;
+  await h.app.setVerdict(a, 'discard');
+  assert.equal(twin.similarToDiscarded, true);
+  assert.equal(far.similarToDiscarded, false);
+  assert.equal(starred.similarToDiscarded, false, '내가 표시한 매물에는 붙이지 않는다');
+  assert.equal(a.similarToDiscarded, false);
+  await h.app.setVerdict(a, null);
+  assert.equal(twin.similarToDiscarded, false);
+});
+
+test('저장하지 못하면 관심, 별로, 버림 표시를 되돌리고 알린다', async (t) => {
+  const h = appHarness(t);
+  h.data.listings = [listing('a', { verdict: 'discard', verdictReason: 'relisted:old', relistedOf: 'old' })];
+  await h.mount();
+  const a = h.app.listings.value[0];
+  h.data.failVerdict = true;
+  await h.app.setVerdict(a, null);
+  assert.equal(a.verdict, 'discard');
+  assert.equal(a.relistedOf, 'old');
+  assert.equal(a.isNew, true);
+  assert.equal(a.seenAt, null);
+  assert.ok(h.app.error.value);
+});
+
+test('버림으로 고른 매물이 빠져 다음 매물이 골라지면 지도는 따라가지 않고, 직접 고르면 따라간다', async (t) => {
+  const h = appHarness(t);
+  await h.mount();
+  const [a, b, c] = ['a', 'b', 'c'].map((id) => listing(id));
+  h.app.setOverviewVisible([a, b, c]);
+  h.app.selectListing(b);
+  assert.equal(h.app.selectedId.value, 'b');
+  assert.equal(h.app.panToSelected.value, true);
+  h.app.setOverviewVisible([a, c]); // 버림으로 b가 목록에서 빠짐
+  assert.equal(h.app.selectedId.value, 'c', '같은 순번의 다음 매물이 골라진다');
+  assert.equal(h.app.panToSelected.value, false, '지도는 보던 자리에 둔다');
+  h.app.onKey(key('k'));
+  assert.equal(h.app.selectedId.value, 'a');
+  assert.equal(h.app.panToSelected.value, true, '키로 직접 옮기면 지도도 따라간다');
 });
 
 test('지도는 첫 실패를 재시도하고 캐시와 진행 중인 이전 요청 뒤에도 새 파일을 읽는다', async (t) => {
