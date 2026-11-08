@@ -476,8 +476,8 @@ const line = (className: string, text: string) => {
 
 /** 정보 창에 보이는 매물 수. 더 있으면 '외 N건'으로 줄인다. */
 const POPUP_MAX = 12;
-/** 정보 창 내용 폭(px). 지도가 좁으면 창이 지도 안에 들어가게 줄이되(창 여백 몫 90px) min 아래로는 줄이지 않는다. */
-const POPUP_WIDTH = { max: 420, min: 300 };
+/** 정보 창 내용 폭의 한계(px). 폭은 Leaflet이 내용에 맞춰 정하는데, 단추 줄은 줄바꿈하지 않아 사실상 단추 줄 폭에 맞는다. */
+const POPUP_WIDTH = { min: 200, max: 480 };
 
 /** 고른 매물이 묶음에 들어 있으면 맨 앞으로 옮긴다(나머지는 묶음 순서 그대로). */
 function withSelectedFirst(items: ListingView[]) {
@@ -486,9 +486,10 @@ function withSelectedFirst(items: ListingView[]) {
 }
 
 /**
- * 누르면 보이는 창: 묶음 매물마다 가격, 평, 평당, 층, 유형, 방, 사이트, 메모와 '목록에서 보기', '원본 열기', '네이버 지도'.
- * 고른 매물이 맨 위, 나머지는 싼 순(월세와 전세는 환산 월세), 별로는 맨 아래. 폭은 내용과 상관없이 POPUP_WIDTH.max로 정해
- * 단추가 한 줄에 놓이게 한다(Leaflet은 가장 긴 줄에 맞춰서, 짧은 창은 단추가 한 줄에 하나씩 쌓였다).
+ * 누르면 보이는 창: 맨 위에 건수 머리글(창 안을 스크롤해도 남음), 그 아래 매물마다 가격 줄과 카드 하나.
+ * 카드에는 평, 평당, 층, 유형, 방, 사이트 줄과 메모, '목록에서 보기', '원본 열기', '네이버 지도' 단추를 둔다.
+ * 고른 매물이 맨 위, 나머지는 싼 순(월세와 전세는 환산 월세), 별로는 맨 아래.
+ * 폭은 Leaflet이 줄바꿈 없이 잰 내용 폭에 맞추므로, 단추 줄(.mp-actions)은 줄바꿈하지 않게 해서 창이 단추 줄에 딱 맞게 한다.
  */
 function popup(g: Group) {
   const items = withSelectedFirst(g.items);
@@ -498,8 +499,6 @@ function popup(g: Group) {
   for (const l of items.slice(0, POPUP_MAX)) {
     const row = document.createElement('div');
     row.className = 'mp-row';
-    const text = document.createElement('div');
-    text.className = 'mp-text';
     const top = document.createElement('div');
     top.className = 'mp-top';
     const price = document.createElement('strong');
@@ -528,9 +527,12 @@ function popup(g: Group) {
     for (const f of [floorText, kindText, roomText, SOURCE_LABEL[l.source]]) {
       if (f) facts.appendChild(line('', f));
     }
-    text.append(top, facts);
+    // 가격 줄 아래 정보 줄, 메모, 단추를 카드 하나로 묶는다.
+    const card = document.createElement('div');
+    card.className = 'mp-card';
+    card.appendChild(facts);
     // 핀까지 걷는 시간과 제목은 매물 카드에 있어서 창에는 쓰지 않는다(제목은 올리면 보이는 글에도 있다).
-    if (l.note) text.appendChild(line('mp-memo', `📝 ${l.note}`));
+    if (l.note) card.appendChild(line('mp-memo', `📝 ${l.note}`));
     const actions = document.createElement('div');
     actions.className = 'mp-actions';
     if (props.listMode) {
@@ -566,7 +568,8 @@ function popup(g: Group) {
       site.title = `${s.name}에서 이 물건 보기`;
       actions.appendChild(site);
     }
-    row.append(text, actions);
+    card.appendChild(actions);
+    row.append(top, card);
     box.appendChild(row);
   }
   if (items.length > POPUP_MAX) {
@@ -575,8 +578,7 @@ function popup(g: Group) {
     more.textContent = `외 ${items.length - POPUP_MAX}건`;
     box.appendChild(more);
   }
-  const width = Math.max(POPUP_WIDTH.min, Math.min(POPUP_WIDTH.max, map!.getSize().x - 90));
-  L.popup({ minWidth: width, maxWidth: width, className: 'mp-popup' }).setLatLng([g.lat, g.lng]).setContent(box).openOn(map!);
+  L.popup({ minWidth: POPUP_WIDTH.min, maxWidth: POPUP_WIDTH.max, className: 'mp-popup' }).setLatLng([g.lat, g.lng]).setContent(box).openOn(map!);
 }
 
 /** 역: 켜진 지역이면 검은 동그라미, 아니면 흰 동그라미. 누르면 station 이벤트로 켜고 끈다. */
@@ -1384,10 +1386,13 @@ onBeforeUnmount(() => {
 :deep(.stack.one .nw) { top: -11px; right: -20px; }
 .nw-sample { display: inline-block; margin-left: 4px; vertical-align: 1px; }
 :deep(.st-tip) { color: var(--muted); font-size: 12px; }
-:deep(.mp) { display: grid; gap: 8px; max-height: 340px; overflow: auto; font: 13px/1.45 var(--font); }
-:deep(.mp-head) { font-weight: 700; }
-:deep(.mp-row) { display: grid; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
-:deep(.mp-text) { display: grid; }
+/* 매물을 카드로 묶어 한 건이 조금 길어져서, 3건까지는 스크롤 없이 보이게 높이를 잡는다. */
+:deep(.mp) { display: grid; gap: 10px; max-height: 400px; overflow: auto; font: 13px/1.45 var(--font); }
+/* 건수 머리글: 아래에 구분선을 긋고, 창 안을 스크롤해도 맨 위에 남는다(흰 바탕으로 밑의 내용을 가림). */
+:deep(.mp-head) { position: sticky; top: 0; z-index: 1; padding-bottom: 8px; border-bottom: 1px solid var(--line); background: #fff; font-weight: 700; }
+/* 매물 하나: 가격 줄, 그 아래 정보 줄과 메모와 단추를 묶은 카드 */
+:deep(.mp-row) { display: grid; gap: 5px; }
+:deep(.mp-card) { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
 :deep(.mp-top) { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 :deep(.mp-facts) { display: flex; flex-wrap: wrap; gap: 0 10px; color: var(--muted); }
 :deep(.mp-key) { color: var(--ink); font-weight: 700; }
@@ -1397,14 +1402,15 @@ onBeforeUnmount(() => {
 :deep(.mp-tag.star) { background: var(--star-soft); color: var(--star); }
 :deep(.mp-tag.danger) { background: #c92a2a; color: #fff; cursor: help; }
 :deep(.mp-tag.warn) { background: #fff4d6; color: #8a5a00; cursor: help; }
-:deep(.mp-actions) { display: flex; flex-wrap: wrap; gap: 6px; }
+/* 단추 줄은 줄바꿈하지 않는다(Leaflet이 이 줄 폭에 맞춰 창 폭을 정한다. 단추는 많아야 넷). */
+:deep(.mp-actions) { display: flex; flex-wrap: nowrap; gap: 6px; }
 :deep(.mp-actions button), :deep(.mp-actions a) {
   display: inline-flex; align-items: center;
   min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font: 600 13px var(--font); cursor: pointer;
 }
 :deep(.mp-more) { color: var(--muted); }
-/* 메모: 창의 메모 줄, 올리면 보이는 글의 메모(메모는 매물 카드에서 남긴다) */
-:deep(.mp-memo) { padding: 2px 8px; border-left: 3px solid var(--star); border-radius: 4px; background: var(--star-soft); color: var(--ink-2); font-size: 12.5px; overflow-wrap: anywhere; }
+/* 메모: 창의 메모 줄, 올리면 보이는 글의 메모(메모는 매물 카드에서 남긴다). 긴 메모는 창을 넓히지 않고 줄을 바꾼다. */
+:deep(.mp-memo) { padding: 2px 8px; border-left: 3px solid var(--star); border-radius: 4px; background: var(--star-soft); color: var(--ink-2); font-size: 12.5px; overflow-wrap: anywhere; white-space: normal; }
 :deep(.tip-note) { color: var(--star); }
 /* 문의함: 창의 딱지, 지도 표시 왼쪽 위 📞(가격을 쓴 표시는 가격 앞에 붙인다) */
 :deep(.mp-tag.contact) { background: var(--contact-soft); color: var(--contact); }
