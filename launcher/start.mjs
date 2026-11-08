@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { disableQuickEdit } from './quick-edit.mjs';
 import { openSiteWindow } from './site-window.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -116,6 +117,8 @@ if (await alreadyRunning()) {
   }
   setTimeout(() => process.exit(0), 1500);
 } else {
+  // 이 창은 대시보드가 꺼질 때까지 남으니, 안을 잘못 눌러도 서버가 멈추지 않게 빠른 편집을 끈다(윈도우만, 기다리지 않음).
+  void disableQuickEdit();
   if (!installedHere()) {
     console.log('처음이라(또는 다른 컴퓨터에서 옮겨 온 폴더라) 필요한 패키지를 까는 중입니다. 몇 분 걸릴 수 있습니다…');
     if (!npm(['ci']) && !npm(['install'])) fail('패키지를 깔지 못했습니다. 인터넷 연결을 확인한 뒤 다시 눌러 주세요.');
