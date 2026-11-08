@@ -21,8 +21,10 @@ import InfoModal from './InfoModal.vue';
 
 // 매물 탭 오른쪽 지도와 경매 탭, 고시원과 쉐어 탭의 지도가 같이 쓴다.
 // - 매물(같은 자리는 숫자 동그라미로 묶음)을 누르면 정보 창이 뜨고, 거기서 '목록에서 보기'나 '원본 열기'를 누른다.
-//   확대해 보면(PRICE_ZOOM) 동그라미 대신 가격('보증금/월세', 전세 '전 1.5억')을 쓴 표시로 그리고, 같은 자리 여러 건은 가장 싼 것과 건수를 쓴다.
-//   옆에 목록이 있으면 누를 때 그 자리 매물들을 reveal 이벤트로 알려 목록도 그 매물로 옮기게 한다.
+//   확대해 보면(PRICE_ZOOM) 동그라미 대신 가격('보증금/월세', 전세 '전 1.5억')을 쓴 표시로 그린다. 가격 표시끼리 글자가 가려질 만큼
+//   겹치면 지금 확대에서 한 표시로 묶어(더 확대하면 풀림) 별로가 아닌 매물 중 가장 싼 가격과 건수를 쓰고, 뒤에 카드가 깔린 모양으로 그린다.
+//   옆에 목록이 있으면 누를 때 그 묶음 매물들을 reveal 이벤트로 알려 목록도 그 매물로 옮기게 한다.
+// - 매물 표시는 화면 근처에 있는 것만 그리고, 지도를 옮기거나 확대하면 바뀐 묶음만 갈아 끼운다(수천 건을 한꺼번에 다시 만들면 느려서).
 // - 역(흰 동그라미, 켜진 지역은 검은 동그라미)을 누르면 그 역 지역을 켜고 끈다(station 이벤트, 확대 12 이상에서 보임).
 // - 휠 한 칸에 약 1.2배씩 확대하거나 축소한다.
 // - 정비사업 구역(서울플랜+ 파일을 넣었으면)을 매물과 역 아래 층에 칠한다. 마우스를 올리면 구역 이름, 사업 종류, 추진 단계가 보인다.
@@ -86,24 +88,65 @@ const areaSample = computed(() => {
 });
 /** 마지막으로 그린 가격 표시 단계(0 동그라미만, 1 펼친 목록만 가격, 2 모두 가격) */
 let drawnPriceLevel = -1;
-/** 그린 표시와 그 묶음. base는 동그라미 표시의 원래 모양(고른 표시를 풀 때 되돌린다). */
+/** 그린 표시와 그 묶음. base는 동그라미 표시의 원래 모양, z는 글자 표시의 원래 쌓는 순서(고른 표시를 풀 때 되돌린다). */
 interface Drawn {
   marker: L.Layer;
   group: Group;
   base?: { radius: number; color: string; weight: number };
+  z?: number;
 }
-/** 매물 번호 → 그 매물이 든 표시(같은 자리 매물은 한 표시로 묶는다) */
-const markerOf = new Map<string, Drawn>();
+/** 지금 확대에서 나눈 묶음 전체(화면 밖이라 안 그린 것 포함)와 그때의 확대, 가격 표시 단계 */
+let shown: { zoom: number; level: number; groups: Group[] } | null = null;
+/** 매물 번호 → 그 매물이 든 묶음 */
+const groupOf = new Map<string, Group>();
+/** 그려 둔 표시: 묶음 열쇠 → 표시 */
+const drawn = new Map<string, Drawn>();
 let selected: Drawn | null = null;
 let resize: ResizeObserver | null = null;
 let fitPending = false;
 let panPending = false;
 
-interface Group {
+/** 같은 자리(소수 5자리, 약 1m)의 매물. 펼친 목록의 매물(strong)은 따로 묶는다. */
+interface Spot {
+  /** 묶음 열쇠에 쓰는 번호(spotCache 안의 순서) */
+  idx: number;
   lat: number;
   lng: number;
+  /** showOrder로 늘어선 매물 */
   items: ListingView[];
   strong: boolean;
+  /** 확대 0의 화면 좌표. 확대 z에서는 2^z배가 된다. */
+  x0: number;
+  y0: number;
+  sum: Summary;
+}
+
+/** 지도에 표시 하나로 그리는 묶음 */
+interface Group {
+  /** 다시 그릴 때 같은 표시인지 알아보는 열쇠(가격 표시 단계, 진한지, 가격 표시인지, 든 자리 번호) */
+  key: string;
+  lat: number;
+  lng: number;
+  strong: boolean;
+  /** 가격을 쓴 표시면 그 가격, 동그라미면 null */
+  price: PriceOption | null;
+  /** 든 자리 수: 1이면 같은 자리 매물만, 2 이상이면 화면에서 겹쳐 묶은 근처 매물 */
+  spots: number;
+  sum: Summary;
+  /** 든 자리마다 매물(각각 showOrder 순) */
+  parts: ListingView[][];
+  /** 별로가 아닌 매물을 가격이 낮은 순으로, 별로는 맨 뒤. 정보 창이나 올리면 보이는 글을 처음 열 때 늘어놓는다. */
+  readonly items: ListingView[];
+}
+
+function makeGroup(key: string, lat: number, lng: number, strong: boolean, price: PriceOption | null, sum: Summary, parts: ListingView[][]): Group {
+  let sorted: ListingView[] | null = parts.length === 1 ? parts[0] : null;
+  return {
+    key, lat, lng, strong, price, spots: parts.length, sum, parts,
+    get items() {
+      return (sorted ??= parts.flat().sort(showOrder));
+    },
+  };
 }
 
 const round6 = (v: number) => Math.round(v * 1e6) / 1e6;
@@ -121,52 +164,49 @@ function setBoundaryCredit(on: boolean) {
 const MEH = '#aab2bd';
 const color = (l: ListingView) => (l.verdict === 'star' ? '#c48a0a' : l.verdict === 'meh' ? MEH : l.isNew ? '#e5484d' : l.priceChange ? '#12825e' : '#1f5fbf');
 /** 묶음 색은 가장 눈여겨볼 매물을 따른다(신규 → 가격 변동 → 관심 → 나머지, 모두 별로면 회색). 별로인 매물은 색을 정할 때 뺀다. */
-const groupColor = (all: ListingView[]) => {
-  const items = all.filter((l) => l.verdict !== 'meh');
-  if (!items.length) return MEH;
-  return items.some((l) => l.isNew) ? '#e5484d' : items.some((l) => l.priceChange) ? '#12825e' : items.some((l) => l.verdict === 'star') ? '#c48a0a' : '#1f5fbf';
-};
+const groupColor = (s: Summary) => (!s.nonMeh ? MEH : s.fresh ? '#e5484d' : s.changed ? '#12825e' : s.star ? '#c48a0a' : '#1f5fbf');
 const MUTED = '#8f99a6';
 /** 회색 매물의 가격 글자 바탕(흰 글자가 읽히게 회색 점보다 조금 진하게) */
 const MUTED_PRICE = '#6f7a89';
 /** 묶음에 별로가 아닌 신규 매물이 있으면 표시 오른쪽 위에 NEW 딱지를 붙인다. */
-const hasNew = (items: ListingView[]) => items.some((l) => l.isNew && l.verdict !== 'meh');
+const hasNew = (s: Summary) => s.fresh;
 const NEW_BADGE = '<em class="nw">NEW</em>';
 /** 묶음을 '본 매물' 모양으로 그릴지: 별로를 뺀 매물을 모두 대시보드에서 봤고, 그 뒤로 새 소식이 없고 관심으로 고르지도 않았을 때 */
-const groupSeen = (all: ListingView[]) => {
-  const items = all.filter((l) => l.verdict !== 'meh');
-  return items.length > 0 && items.every(looksSeen);
-};
-/** 글자 상자 색: 안 본 매물은 색으로 칠하고, 본 매물은 흰 바탕에 그 색 테두리와 글자 */
-const boxStyle = (c: string, seen: boolean) => (seen ? `background:#fff;color:${c};border-color:${c}` : `background:${c}`);
+const groupSeen = (s: Summary) => s.nonMeh > 0 && s.nonMehSeen === s.nonMeh;
+/** 글자 상자 색: 안 본 매물은 색으로 칠하고, 본 매물은 흰 바탕에 그 색 테두리와 글자. --c는 묶음 표시 뒤 카드 색에 쓴다. */
+const boxStyle = (c: string, seen: boolean) => (seen ? `--c:${c};background:#fff;color:${c};border-color:${c}` : `--c:${c};background:${c}`);
 const SEEN_MARK = '<i class="ck">✓</i>';
 const MEH_MARK = '<i class="ck">✕</i>';
 /** 묶음에 별로가 아닌 '📞 문의함' 매물이 있는지. 가격 앞(멀리서 보면 왼쪽 위)에 📞를 붙인다. */
-const hasContacted = (items: ListingView[]) => items.some((l) => !!l.contactedAt && l.verdict !== 'meh');
+const hasContacted = (s: Summary) => s.called;
 const PHONE_MARK = '<i class="ck">📞</i>';
 const PHONE_BADGE = '<em class="ph">📞</em>';
 
 const positions = computed(() => new Set(props.background.filter((l) => l.lat != null).map((l) => `${l.lat!.toFixed(5)},${l.lng!.toFixed(5)}`)).size);
 
 /** 같은 자리(소수 5자리, 약 1m)의 매물을 묶는다. 펼친 목록의 매물은 진한 묶음으로 따로 둔다. */
-function groups(): Group[] {
+function spots(): Spot[] {
   const strongIds = new Set(props.listings.map((l) => l.id));
-  const all = new Map<string, Group>();
+  const all = new Map<string, { lat: number; lng: number; items: ListingView[]; strong: boolean }>();
   const add = (l: ListingView, strong: boolean) => {
     if (l.lat == null || l.lng == null) return;
     const key = `${strong ? 's' : 'b'}${l.lat.toFixed(5)},${l.lng.toFixed(5)}`;
-    const g = all.get(key);
-    if (g) g.items.push(l);
+    const s = all.get(key);
+    if (s) s.items.push(l);
     else all.set(key, { lat: l.lat, lng: l.lng, items: [l], strong });
   };
   for (const l of props.background) if (!strongIds.has(l.id)) add(l, false);
   for (const l of props.listings) add(l, true);
-  // 진한 묶음이 위에 오게 나중에 그린다.
-  return [...all.values()].sort((a, b) => Number(a.strong) - Number(b.strong));
+  return [...all.values()].map((s, idx) => {
+    const items = s.items.sort(showOrder);
+    const p = L.CRS.EPSG3857.latLngToPoint(L.latLng(s.lat, s.lng), 0);
+    return { idx, lat: s.lat, lng: s.lng, items, strong: s.strong, x0: p.x, y0: p.y, sum: summarize(items, s.strong) };
+  });
 }
 
 /** 올리면 보이는 글: 매물마다 가격, 제목 앞부분, 끝에 괄호로 사이트와 내 표시(별로, 문의함, 봤음) */
-function tooltip(items: ListingView[]) {
+function tooltip(g: Group) {
+  const items = g.items;
   const lines = items.slice(0, 6).map((l) => {
     const mark = l.verdict === 'meh' ? ', 별로' : l.contactedAt ? ', 문의함' : looksSeen(l) ? ', 봤음' : '';
     const site = `${SOURCE_LABEL[l.source]}${mark}`;
@@ -174,7 +214,7 @@ function tooltip(items: ListingView[]) {
     return `${esc(pricesText(l))}${l.title ? `, ${esc(l.title.slice(0, 24))}` : ''} <span class="tip-site">(${esc(site)})</span>${memo}`;
   });
   if (items.length > 6) lines.push(`외 ${items.length - 6}건`);
-  return (items.length > 1 ? `<strong>이 자리 ${items.length}건</strong><br>` : '') + lines.join('<br>');
+  return (items.length > 1 ? `<strong>${g.spots > 1 ? '이 근처' : '이 자리'} ${items.length}건</strong><br>` : '') + lines.join('<br>');
 }
 
 /** 지도 표시에 쓸 짧은 금액(만원): 1억이 넘으면 '1.5억', 아니면 '9,000' */
@@ -192,14 +232,198 @@ function mapPrice(p: PriceOption): string {
 
 const DEAL_ORDER: Record<DealType, number> = { monthly: 0, short: 1, jeonse: 2, sale: 3, auction: 4 };
 
-/** 같은 자리 매물마다 첫 가격(카드 가격 줄의 첫 값) 중 표시에 쓸 것: 월세와 단기 먼저 월세가 낮은 것, 그다음 보증금, 매매가가 낮은 것 */
-function cheapestPrice(items: ListingView[]): PriceOption | null {
-  const ps = items.map((l) => l.prices[0]).filter((p): p is PriceOption => !!p);
-  ps.sort(
-    (a, b) =>
-      DEAL_ORDER[a.deal] - DEAL_ORDER[b.deal] || (a.monthly ?? 0) - (b.monthly ?? 0) || (a.deposit ?? 0) - (b.deposit ?? 0) || (a.price ?? 0) - (b.price ?? 0),
-  );
-  return ps[0] ?? null;
+/** 첫 가격(카드 가격 줄의 첫 값) 비교: 월세와 단기 먼저 월세가 낮은 것, 그다음 보증금, 매매가가 낮은 것. 가격이 없으면 뒤로 */
+function comparePrice(a: PriceOption | undefined, b: PriceOption | undefined) {
+  if (!a || !b) return Number(!a) - Number(!b);
+  return DEAL_ORDER[a.deal] - DEAL_ORDER[b.deal] || (a.monthly ?? 0) - (b.monthly ?? 0) || (a.deposit ?? 0) - (b.deposit ?? 0) || (a.price ?? 0) - (b.price ?? 0);
+}
+
+/** 묶음 안 순서(정보 창, 올리면 보이는 글, 목록에 알리는 순서): 별로가 아닌 매물을 가격이 낮은 순으로, 별로는 맨 뒤 */
+const showOrder = (a: ListingView, b: ListingView) => Number(a.verdict === 'meh') - Number(b.verdict === 'meh') || comparePrice(a.prices[0], b.prices[0]);
+
+/**
+ * 묶음 요약. 확대할 때마다 다시 묶으므로 매물을 다시 훑지 않고 이 값만 더해 가며, 표시 모양도 이것으로 정한다.
+ * best는 가격 표시에 쓸 매물(별로가 아닌 매물 중 첫 가격이 가장 싼 것, 모두 별로면 별로 중에서, 가격이 없으면 null), text는 그 가격 글자,
+ * textW는 그 글자 폭(그 묶음이 그려질 글자 크기), n은 든 매물 수. 나머지 수와 표시는 별로가 아닌 매물만 센다. 표시 앞 글자(📞, ✓, ✕)는
+ * called와 '별로가 아닌 매물을 다 봤는지'(nonMehSeen === nonMeh, 모두 별로여도 같음)로 정해진다.
+ */
+interface Summary {
+  best: ListingView | null;
+  text: string;
+  textW: number;
+  n: number;
+  nonMeh: number;
+  nonMehSeen: number;
+  called: boolean;
+  fresh: boolean;
+  changed: boolean;
+  star: boolean;
+}
+
+/** items는 showOrder로 늘어선 것이라 가격이 있는 첫 매물이 best다. */
+function summarize(items: ListingView[], strong: boolean): Summary {
+  const best = items.find((l) => l.prices[0]) ?? null;
+  const text = best ? mapPrice(best.prices[0]) : '';
+  const s: Summary = { best, text, textW: textWidth(text || '?', strong ? 12 : 11), n: items.length, nonMeh: 0, nonMehSeen: 0, called: false, fresh: false, changed: false, star: false };
+  for (const l of items) {
+    if (l.verdict === 'meh') continue;
+    s.nonMeh++;
+    if (looksSeen(l)) s.nonMehSeen++;
+    if (l.contactedAt) s.called = true;
+    if (l.isNew) s.fresh = true;
+    if (l.priceChange) s.changed = true;
+    if (l.verdict === 'star') s.star = true;
+  }
+  return s;
+}
+
+function combine(a: Summary, b: Summary): Summary {
+  const p = b.best && (!a.best || showOrder(b.best, a.best) < 0) ? b : a;
+  return {
+    best: p.best,
+    text: p.text,
+    textW: p.textW,
+    n: a.n + b.n,
+    nonMeh: a.nonMeh + b.nonMeh,
+    nonMehSeen: a.nonMehSeen + b.nonMehSeen,
+    called: a.called || b.called,
+    fresh: a.fresh || b.fresh,
+    changed: a.changed || b.changed,
+    star: a.star || b.star,
+  };
+}
+
+/** 글자 폭을 재는 캔버스와 잰 값(글꼴은 화면과 같은 --font) */
+let measure: CanvasRenderingContext2D | null = null;
+let measureFont = '';
+const widths = new Map<string, number>();
+function textWidth(text: string, px: number) {
+  const key = `${px}|${text}`;
+  const known = widths.get(key);
+  if (known != null) return known;
+  if (!measureFont) {
+    measure = document.createElement('canvas').getContext('2d');
+    measureFont = getComputedStyle(document.documentElement).getPropertyValue('--font').trim() || 'sans-serif';
+  }
+  let w = text.length * px * 0.6;
+  if (measure) {
+    measure.font = `700 ${px}px ${measureFont}`;
+    w = measure.measureText(text).width;
+  }
+  widths.set(key, w);
+  return w;
+}
+
+/**
+ * 가격 표시 상자의 대략 폭(px). 겹치는지 따질 때만 쓰며 아래 CSS의 .price span에 맞춘다.
+ * 안쪽 여백과 테두리, 📞나 ✓나 ✕(글자 한 칸으로 침), 건수 동그라미(.price span b)를 더한다. 높이는 LABEL_H.
+ */
+function labelWidth(s: Summary, strong: boolean) {
+  const fs = strong ? 12 : 11;
+  let w = (strong ? 16 : 13) + s.textW;
+  if (s.called || s.nonMehSeen === s.nonMeh) w += 3 + fs;
+  if (s.n > 1) w += countWidth(s.n);
+  return w;
+}
+/** 건수 동그라미 폭과 그 앞 틈(px) */
+const countWidths = new Map<number, number>();
+function countWidth(n: number) {
+  let w = countWidths.get(n);
+  if (w == null) countWidths.set(n, (w = 3 + 6 + Math.max(14, textWidth(String(n), 10))));
+  return w;
+}
+const LABEL_H = { normal: 20.5, strong: 25 };
+
+/** 가격 표시끼리 이만큼은 겹쳐도 글자가 가려지지 않는다(px, 상자의 안쪽 여백과 테두리 몫). */
+const OVERLAP_OK = { x: 6, y: 3 };
+
+/** 화면에서 겹친 자리 묶음. x, y는 지금 확대의 화면 좌표, w는 가격 표시 폭 */
+interface Pile {
+  x: number;
+  y: number;
+  w: number;
+  lat: number;
+  lng: number;
+  sum: Summary;
+  spots: Spot[];
+  gone: boolean;
+}
+
+/**
+ * 지금 확대(zoom)에서 가격 표시가 글자를 가릴 만큼 겹치는 자리끼리 묶는다. 매물이 많은 자리부터 이웃을 끌어오고,
+ * 묶은 표시는 든 매물 수로 가중한 가운데에 놓는다. 묶어서 자리가 옮겨지면 다시 겹칠 수 있어 더 묶을 게 없을 때까지 되풀이한다.
+ */
+function mergeOverlaps(list: Spot[], strong: boolean, zoom: number): Pile[] {
+  const scale = 2 ** zoom;
+  const h = strong ? LABEL_H.strong : LABEL_H.normal;
+  let piles: Pile[] = list.map((s) => ({ x: s.x0 * scale, y: s.y0 * scale, w: labelWidth(s.sum, strong), lat: s.lat, lng: s.lng, sum: s.sum, spots: [s], gone: false }));
+  piles.sort((a, b) => b.sum.n - a.sum.n);
+  for (let pass = 0; pass < 8; pass++) {
+    // 칸을 가장 넓은 표시 폭과 표시 높이로 잡으면 겹칠 수 있는 이웃은 둘레 아홉 칸 안에만 있다.
+    let cw = 1;
+    for (const p of piles) cw = Math.max(cw, p.w);
+    const cell = (gx: number, gy: number) => gx * 67108864 + gy;
+    const grid = new Map<number, Pile[]>();
+    for (const p of piles) {
+      const k = cell(Math.floor(p.x / cw), Math.floor(p.y / h));
+      const bucket = grid.get(k);
+      if (bucket) bucket.push(p);
+      else grid.set(k, [p]);
+    }
+    let merged = false;
+    for (const a of piles) {
+      if (a.gone) continue;
+      const gx = Math.floor(a.x / cw);
+      const gy = Math.floor(a.y / h);
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          for (const b of grid.get(cell(gx + dx, gy + dy)) ?? []) {
+            if (b === a || b.gone) continue;
+            if (Math.abs(a.x - b.x) >= (a.w + b.w) / 2 - OVERLAP_OK.x || Math.abs(a.y - b.y) >= h - OVERLAP_OK.y) continue;
+            const wa = a.sum.n / (a.sum.n + b.sum.n);
+            const wb = 1 - wa;
+            a.x = a.x * wa + b.x * wb;
+            a.y = a.y * wa + b.y * wb;
+            a.lat = a.lat * wa + b.lat * wb;
+            a.lng = a.lng * wa + b.lng * wb;
+            a.sum = combine(a.sum, b.sum);
+            for (const s of b.spots) a.spots.push(s);
+            a.w = labelWidth(a.sum, strong);
+            b.gone = true;
+            merged = true;
+          }
+        }
+      }
+    }
+    piles = piles.filter((p) => !p.gone);
+    if (!merged) break;
+  }
+  return piles;
+}
+
+/** 같은 자리 묶음. 매물이 바뀌면(render의 full) 비우고 다시 만든다. */
+let spotCache: Spot[] | null = null;
+
+/**
+ * 지금 확대와 가격 표시 단계(level)에서 그릴 묶음 전체. 동그라미는 같은 자리끼리만 묶고, 가격 표시는 화면에서 겹치는 것끼리 더 묶는다.
+ * 펼친 목록의 매물(진한 표시)과 나머지는 섞지 않고, 진한 묶음이 위에 오게 뒤에 둔다.
+ */
+function computeGroups(level: number, zoom: number): Group[] {
+  spotCache ??= spots();
+  const out: Group[] = [];
+  const labels: Record<'b' | 's', Spot[]> = { b: [], s: [] };
+  const head = (strong: boolean, priced: boolean) => `${level}${strong ? 's' : 'b'}${priced ? 'p' : 'd'}|`;
+  for (const s of spotCache) {
+    if ((s.strong ? level >= 1 : level >= 2) && s.sum.best) labels[s.strong ? 's' : 'b'].push(s);
+    else out.push(makeGroup(head(s.strong, false) + s.idx, s.lat, s.lng, s.strong, null, s.sum, [s.items]));
+  }
+  for (const strong of [false, true]) {
+    for (const p of mergeOverlaps(labels[strong ? 's' : 'b'], strong, zoom)) {
+      const ids = p.spots.length === 1 ? String(p.spots[0].idx) : p.spots.map((s) => s.idx).sort((a, b) => a - b).join(',');
+      out.push(makeGroup(head(strong, true) + ids, p.lat, p.lng, strong, p.sum.best?.prices[0] ?? null, p.sum, p.spots.map((s) => s.items)));
+    }
+  }
+  return out.sort((a, b) => Number(a.strong) - Number(b.strong));
 }
 
 /** 지금 확대에서 가격 표시 단계(PRICE_ZOOM) */
@@ -221,12 +445,25 @@ const line = (className: string, text: string) => {
   return el;
 };
 
-/** 누르면 보이는 창: 그 자리 매물마다 가격, 평, 평당, 층, 유형, 방, 사이트, 제목과 '목록에서 보기', '원본 열기'. */
+/** 정보 창에 보이는 매물 수. 더 있으면 '외 N건'으로 줄인다. */
+const POPUP_MAX = 12;
+
+/** 고른 매물이 묶음에 들어 있으면 맨 앞으로 옮긴다(나머지는 묶음 순서 그대로). */
+function withSelectedFirst(items: ListingView[]) {
+  const i = props.selectedId ? items.findIndex((l) => l.id === props.selectedId) : -1;
+  return i > 0 ? [items[i], ...items.slice(0, i), ...items.slice(i + 1)] : items;
+}
+
+/**
+ * 누르면 보이는 창: 묶음 매물마다 가격, 평, 평당, 층, 유형, 방, 사이트, 제목과 '목록에서 보기', '원본 열기'.
+ * 고른 매물이 맨 위, 나머지는 가격이 낮은 순, 별로는 맨 아래.
+ */
 function popup(g: Group) {
+  const items = withSelectedFirst(g.items);
   const box = document.createElement('div');
   box.className = 'mp';
-  if (g.items.length > 1) box.appendChild(line('mp-head', `이 자리 매물 ${g.items.length}건`));
-  for (const l of g.items.slice(0, 12)) {
+  if (items.length > 1) box.appendChild(line('mp-head', `${g.spots > 1 ? '이 근처' : '이 자리'} 매물 ${items.length}건`));
+  for (const l of items.slice(0, POPUP_MAX)) {
     const row = document.createElement('div');
     row.className = 'mp-row';
     const text = document.createElement('div');
@@ -348,10 +585,10 @@ function popup(g: Group) {
     row.append(text, actions);
     box.appendChild(row);
   }
-  if (g.items.length > 12) {
+  if (items.length > POPUP_MAX) {
     const more = document.createElement('div');
     more.className = 'mp-more';
-    more.textContent = `외 ${g.items.length - 12}건`;
+    more.textContent = `외 ${items.length - POPUP_MAX}건`;
     box.appendChild(more);
   }
   L.popup({ maxWidth: 340, className: 'mp-popup' }).setLatLng([g.lat, g.lng]).setContent(box).openOn(map!);
@@ -551,104 +788,151 @@ function fitTo(points: L.LatLng[]) {
   if (bounds.isValid()) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
 }
 
-/** fit: 매물에 맞춰 지도를 다시 맞춘다(처음, fitKey가 바뀔 때). */
-function drawDots(fit: boolean) {
-  if (!dots) return;
-  dots.clearLayers();
-  markerOf.clear();
-  selected = null;
+/** 묶음 하나를 지도에 그리고, 누르면 정보 창을 띄우게 한다. */
+function drawGroup(layer: L.LayerGroup, g: Group): Drawn {
   const dim = props.listings.length > 0;
-  drawnPriceLevel = priceLevel();
-  for (const g of groups()) {
-    const muted = dim && !g.strong;
-    const c = muted ? MUTED : groupColor(g.items);
-    // 대시보드에서 다 본 자리는 흰 바탕에 색 테두리로 그려, 아직 안 본 자리(색을 칠한 표시)와 구분한다.
-    const seen = groupSeen(g.items);
-    // 모두 별로인 자리는 가격(멀리서 보면 동그라미) 앞에 ✕를 붙이고 다른 표시 밑에 그린다.
-    const meh = g.items.every((l) => l.verdict === 'meh');
-    // '📞 문의함' 매물이 있는 자리는 가격 앞(멀리서 보면 왼쪽 위)에 📞를 붙이고 다른 표시 위에 그린다.
-    const called = hasContacted(g.items);
-    // 펼친 가격대 밖 매물(회색)도 필터를 통과한 매물이라, 확대하면 가격을 같이 쓴다(PRICE_ZOOM.normal부터, 펼친 매물은 strong부터).
-    const price = (g.strong ? drawnPriceLevel >= 1 : drawnPriceLevel >= 2) ? cheapestPrice(g.items) : null;
-    // 신규가 든 표시는 빨갛게 칠하고 다른 표시 위에 그린다. NEW 딱지는 겹쳐서 지도를 가리지 않게 가격을 쓴 표시와
-    // PRICE_ZOOM.normal부터의 동그라미에만 붙이고, 연하게 칠한 매물(펼친 목록 밖)에는 붙이지 않는다.
-    const fresh = (g.strong || !dim) && hasNew(g.items);
-    const badge = fresh && (price || drawnPriceLevel >= 2) ? NEW_BADGE : '';
-    const zIndexOffset = (g.strong ? 500 : 0) + (fresh ? 300 : 0) + (called ? 200 : 0) - (meh ? 200 : 0);
-    let marker: L.Layer;
-    let base: Drawn['base'];
-    if (price) {
-      // 확대해 보면 가격을 쓴 표시(같은 자리 여러 건이면 가장 싼 것과 건수)
-      marker = L.marker([g.lat, g.lng], {
-        icon: L.divIcon({
-          className: `price${g.strong ? ' strong' : ''}${muted ? ' dim' : ''}${seen ? ' seen' : ''}${meh ? ' meh' : ''}${called ? ' called' : ''}`,
-          html:
-            `<span style="${boxStyle(muted ? MUTED_PRICE : c, seen)}">${called ? PHONE_MARK : seen ? SEEN_MARK : meh ? MEH_MARK : ''}` +
-            `${esc(mapPrice(price))}` +
-            `${g.items.length > 1 ? `<b>${g.items.length}</b>` : ''}${badge}</span>`,
-          iconSize: [0, 0],
-          iconAnchor: [0, 0],
-          tooltipAnchor: [0, -10],
-        }),
-        keyboard: false,
-        zIndexOffset,
-      });
-    } else if (g.items.length === 1 && (badge || called)) {
-      // 신규나 문의함 한 건: 딱지를 붙이려고 동그라미를 글자 없는 묶음 표시로 그린다(크기는 아래 동그라미와 같음).
-      const size = g.strong ? 14 : 10;
-      marker = L.marker([g.lat, g.lng], {
-        icon: L.divIcon({
-          className: `stack one${g.strong ? ' strong' : ''}${seen ? ' seen' : ''}`,
-          html: `<span style="${boxStyle(c, seen)}">${badge}${called ? PHONE_BADGE : ''}</span>`,
-          iconSize: [size, size],
-          iconAnchor: [size / 2, size / 2],
-        }),
-        keyboard: false,
-        zIndexOffset,
-      });
-    } else if (g.items.length === 1 && meh) {
-      // 별로 한 건: 동그라미 대신 회색 바탕에 ✕
-      const size = g.strong ? 14 : 12;
-      marker = L.marker([g.lat, g.lng], {
-        icon: L.divIcon({
-          className: `stack one meh${g.strong ? ' strong' : ''}`,
-          html: `<span style="background:${c}">✕</span>`,
-          iconSize: [size, size],
-          iconAnchor: [size / 2, size / 2],
-        }),
-        keyboard: false,
-        zIndexOffset,
-      });
-    } else if (g.items.length === 1) {
-      // 펼친 가격대 밖 매물(회색)도 그 일대 시세를 볼 때 쓰므로, 색만 회색으로 두고 크기는 보통 점과 같게 그린다.
-      // 본 매물은 속이 흰 동그라미(색 테두리)로 그린다.
-      base = { radius: g.strong ? 7 : 5, color: seen ? c : '#fff', weight: seen || g.strong ? 2 : dim ? 1.5 : 1 };
-      marker = L.circleMarker([g.lat, g.lng], { ...base, fillColor: seen ? '#fff' : c, fillOpacity: seen ? 1 : g.strong ? 0.95 : 0.8 });
-    } else {
-      // 같은 자리 여러 건: 숫자 동그라미
-      const size = g.strong ? 26 : dim ? 18 : 20;
-      marker = L.marker([g.lat, g.lng], {
-        icon: L.divIcon({
-          className: `stack${g.strong ? ' strong' : ''}${dim && !g.strong ? ' dim' : ''}${seen ? ' seen' : ''}${meh ? ' meh' : ''}`,
-          html: `<span style="${boxStyle(c, seen)}">${meh ? '✕' : g.items.length}${badge}${called ? PHONE_BADGE : ''}</span>`,
-          iconSize: [size, size],
-          iconAnchor: [size / 2, size / 2],
-        }),
-        keyboard: false,
-        zIndexOffset,
-      });
-    }
-    (marker as L.Marker).bindTooltip(tooltip(g.items), { direction: 'top' });
-    // 누르면 바로 넘어가지 않고 정보 창을 먼저 띄우고, 창에 보인 매물(12건까지)을 '봤음'으로 남긴다.
-    marker.on('click', () => {
-      popup(g);
-      markSeen(g.items.slice(0, 12));
-      if (props.listMode) emit('reveal', g.items);
+  const muted = dim && !g.strong;
+  const n = g.sum.n;
+  const c = muted ? MUTED : groupColor(g.sum);
+  // 대시보드에서 다 본 자리는 흰 바탕에 색 테두리로 그려, 아직 안 본 자리(색을 칠한 표시)와 구분한다.
+  const seen = groupSeen(g.sum);
+  // 모두 별로인 자리는 가격(멀리서 보면 동그라미) 앞에 ✕를 붙이고 다른 표시 밑에 그린다.
+  const meh = g.sum.nonMeh === 0;
+  // '📞 문의함' 매물이 있는 자리는 가격 앞(멀리서 보면 왼쪽 위)에 📞를 붙이고 다른 표시 위에 그린다.
+  const called = hasContacted(g.sum);
+  // 펼친 가격대 밖 매물(회색)도 필터를 통과한 매물이라, 확대하면 가격을 같이 쓴다(PRICE_ZOOM.normal부터, 펼친 매물은 strong부터).
+  const price = g.price;
+  // 신규가 든 표시는 빨갛게 칠하고 다른 표시 위에 그린다. NEW 딱지는 겹쳐서 지도를 가리지 않게 가격을 쓴 표시와
+  // PRICE_ZOOM.normal부터의 동그라미에만 붙이고, 연하게 칠한 매물(펼친 목록 밖)에는 붙이지 않는다.
+  const fresh = (g.strong || !dim) && hasNew(g.sum);
+  const badge = fresh && (price || drawnPriceLevel >= 2) ? NEW_BADGE : '';
+  const zIndexOffset = (g.strong ? 500 : 0) + (fresh ? 300 : 0) + (called ? 200 : 0) - (meh ? 200 : 0);
+  let marker: L.Layer;
+  let base: Drawn['base'];
+  let z: number | undefined = zIndexOffset;
+  if (price) {
+    // 확대해 보면 가격을 쓴 표시(여러 건을 묶었으면 가장 싼 것과 건수, 뒤에 카드가 깔린 모양). 가격 글자는 요약에 만들어 둔 것(sum.text)
+    marker = L.marker([g.lat, g.lng], {
+      icon: L.divIcon({
+        className: `price${g.strong ? ' strong' : ''}${muted ? ' dim' : ''}${seen ? ' seen' : ''}${meh ? ' meh' : ''}${called ? ' called' : ''}${n > 1 ? ' multi' : ''}`,
+        html:
+          `<span style="${boxStyle(muted ? MUTED_PRICE : c, seen)}">${called ? PHONE_MARK : seen ? SEEN_MARK : meh ? MEH_MARK : ''}` +
+          `${esc(g.sum.text)}` +
+          `${n > 1 ? `<b>${n}</b>` : ''}${badge}</span>`,
+        iconSize: [0, 0],
+        iconAnchor: [0, 0],
+        tooltipAnchor: [0, -10],
+      }),
+      keyboard: false,
+      zIndexOffset,
     });
-    marker.addTo(dots);
-    for (const l of g.items) markerOf.set(l.id, { marker, group: g, base });
+  } else if (n === 1 && (badge || called)) {
+    // 신규나 문의함 한 건: 딱지를 붙이려고 동그라미를 글자 없는 묶음 표시로 그린다(크기는 아래 동그라미와 같음).
+    const size = g.strong ? 14 : 10;
+    marker = L.marker([g.lat, g.lng], {
+      icon: L.divIcon({
+        className: `stack one${g.strong ? ' strong' : ''}${seen ? ' seen' : ''}`,
+        html: `<span style="${boxStyle(c, seen)}">${badge}${called ? PHONE_BADGE : ''}</span>`,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
+      }),
+      keyboard: false,
+      zIndexOffset,
+    });
+  } else if (n === 1 && meh) {
+    // 별로 한 건: 동그라미 대신 회색 바탕에 ✕
+    const size = g.strong ? 14 : 12;
+    marker = L.marker([g.lat, g.lng], {
+      icon: L.divIcon({
+        className: `stack one meh${g.strong ? ' strong' : ''}`,
+        html: `<span style="background:${c}">✕</span>`,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
+      }),
+      keyboard: false,
+      zIndexOffset,
+    });
+  } else if (n === 1) {
+    // 펼친 가격대 밖 매물(회색)도 그 일대 시세를 볼 때 쓰므로, 색만 회색으로 두고 크기는 보통 점과 같게 그린다.
+    // 본 매물은 속이 흰 동그라미(색 테두리)로 그린다.
+    base = { radius: g.strong ? 7 : 5, color: seen ? c : '#fff', weight: seen || g.strong ? 2 : dim ? 1.5 : 1 };
+    marker = L.circleMarker([g.lat, g.lng], { ...base, fillColor: seen ? '#fff' : c, fillOpacity: seen ? 1 : g.strong ? 0.95 : 0.8 });
+    z = undefined;
+  } else {
+    // 같은 자리 여러 건: 숫자 동그라미
+    const size = g.strong ? 26 : dim ? 18 : 20;
+    marker = L.marker([g.lat, g.lng], {
+      icon: L.divIcon({
+        className: `stack${g.strong ? ' strong' : ''}${dim && !g.strong ? ' dim' : ''}${seen ? ' seen' : ''}${meh ? ' meh' : ''}`,
+        html: `<span style="${boxStyle(c, seen)}">${meh ? '✕' : n}${badge}${called ? PHONE_BADGE : ''}</span>`,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
+      }),
+      keyboard: false,
+      zIndexOffset,
+    });
+  }
+  // 올리면 보이는 글은 올릴 때 만든다(표시를 수백 개씩 새로 그릴 때 글까지 미리 만들면 느려서).
+  (marker as L.Marker).bindTooltip(() => tooltip(g), { direction: 'top' });
+  // 누르면 바로 넘어가지 않고 정보 창을 먼저 띄우고, 창에 보인 매물(POPUP_MAX건까지)을 '봤음'으로 남긴다.
+  marker.on('click', () => {
+    const items = withSelectedFirst(g.items);
+    popup(g);
+    markSeen(items.slice(0, POPUP_MAX));
+    if (props.listMode) emit('reveal', items);
+  });
+  marker.addTo(layer);
+  return { marker, group: g, base, z };
+}
+
+/**
+ * 매물 표시를 그린다. 화면 근처(사방으로 화면 크기의 30%)에 있는 묶음만 그리고, 이미 그린 같은 묶음은 그대로 둔다.
+ * full이면 매물이 바뀐 것이라 처음부터 다시 그린다. 확대가 바뀌면 가격 표시를 다시 묶는다.
+ */
+function render(full: boolean) {
+  if (!map || !dots) return;
+  const level = priceLevel();
+  const zoom = map.getZoom();
+  const fresh = full || level !== drawnPriceLevel;
+  if (full) spotCache = null;
+  if (fresh) {
+    dots.clearLayers();
+    drawn.clear();
+    selected = null;
+  }
+  drawnPriceLevel = level;
+  // 동그라미만 그리는 단계는 같은 자리끼리만 묶어 확대와 상관없으므로 다시 나누지 않는다.
+  if (full || !shown || shown.level !== level || (level > 0 && shown.zoom !== zoom)) {
+    shown = { zoom, level, groups: computeGroups(level, zoom) };
+    groupOf.clear();
+    for (const g of shown.groups) for (const part of g.parts) for (const l of part) groupOf.set(l.id, g);
+  }
+  const view = map.getBounds().pad(0.3);
+  const keep = new Set<string>();
+  for (const g of shown.groups) {
+    if (!view.contains([g.lat, g.lng])) continue;
+    keep.add(g.key);
+    if (drawn.has(g.key)) continue;
+    const d = drawGroup(dots, g);
+    drawn.set(g.key, d);
+    // 옮기다 새로 그린 동그라미가 진한 동그라미를 덮지 않게 한다(처음부터 그릴 때는 그리는 순서가 맞음).
+    if (!fresh && d.marker instanceof L.CircleMarker) {
+      if (g.strong) d.marker.bringToFront();
+      else d.marker.bringToBack();
+    }
+  }
+  for (const [key, d] of drawn) {
+    if (keep.has(key)) continue;
+    if (selected === d) selected = null;
+    dots.removeLayer(d.marker);
+    drawn.delete(key);
   }
   highlight(false);
+}
+
+/** 매물이 바뀌면 처음부터 다시 그린다. fit: 매물에 맞춰 지도를 다시 맞춘다(처음, fitKey가 바뀔 때). */
+function drawDots(fit: boolean) {
+  render(true);
   if (fit) fitTo(focusPoints());
 }
 
@@ -658,13 +942,18 @@ function focusPoints() {
   return list.filter((l) => l.lat != null && l.lng != null).map((l) => L.latLng(l.lat!, l.lng!));
 }
 
-/** 고른 매물이 든 표시를 강조하고, 지도 밖이면 그쪽으로 옮긴다. */
+/** 고른 매물이 든 표시를 강조하고, 지도 밖이면 그쪽으로 옮긴다(옮기면 그 근처를 그리면서 다시 강조한다). */
 function highlight(pan: boolean) {
   if (selected) setSelected(selected, false);
-  selected = props.selectedId ? (markerOf.get(props.selectedId) ?? null) : null;
-  if (!selected || !map) return;
-  setSelected(selected, true);
-  const at = L.latLng(selected.group.lat, selected.group.lng);
+  selected = null;
+  const g = props.selectedId ? groupOf.get(props.selectedId) : undefined;
+  if (!g || !map) return;
+  const d = drawn.get(g.key);
+  if (d) {
+    selected = d;
+    setSelected(d, true);
+  }
+  const at = L.latLng(g.lat, g.lng);
   if (pan && !props.visible) {
     panPending = true;
     return;
@@ -692,13 +981,13 @@ function setSelected(s: Drawn, on: boolean) {
     if (on) s.marker.bringToFront();
   } else {
     (s.marker as L.Marker).getElement()?.classList.toggle('sel', on);
-    (s.marker as L.Marker).setZIndexOffset(on ? 1000 : s.group.strong ? 500 : 0);
+    (s.marker as L.Marker).setZIndexOffset(on ? 1000 : (s.z ?? 0));
   }
 }
 
-/** 확대를 바꿔 가격 표시 단계가 바뀌면 매물 표시를 다시 그린다(보던 확대와 위치는 그대로). */
-function onZoom() {
-  if (priceLevel() !== drawnPriceLevel) drawDots(false);
+/** 지도를 옮기거나 확대를 바꾸면 화면 근처 표시만 다시 맞춘다(보던 확대와 위치는 그대로). */
+function onView() {
+  render(false);
 }
 
 function onKey(e: KeyboardEvent) {
@@ -728,7 +1017,7 @@ onMounted(() => {
   dots = L.layerGroup().addTo(map);
   pinLayer = L.layerGroup().addTo(map);
   map.on('moveend', drawStations);
-  map.on('zoomend', onZoom);
+  map.on('moveend', onView);
   void loadCatalog()
     .then((list) => {
       stations.value = list;
@@ -814,6 +1103,11 @@ onBeforeUnmount(() => {
   // 늦게 끝난 역 목록 받기 등이 지운 지도에 그리지 않게 한다.
   map = null;
   base = dots = stationLayer = zoneLayer = pinLayer = null;
+  shown = null;
+  spotCache = null;
+  drawn.clear();
+  groupOf.clear();
+  selected = null;
 });
 </script>
 
@@ -856,11 +1150,16 @@ onBeforeUnmount(() => {
             <dt><i class="key-dot" style="background:#8f99a6"></i></dt>
             <dd><b>회색</b>: 매물 탭에서 가격대를 펼치면 펼친 가격대 매물만 색으로 보이고, 필터를 통과한 나머지 매물은 회색으로 보입니다. 확대하면 회색 매물도 가격이 나와 일대 시세를 같이 볼 수 있습니다.</dd>
             <dt><b class="stack-sample">3</b></dt>
-            <dd><b>숫자</b>: 같은 건물에 있는 매물 수입니다.</dd>
+            <dd><b>숫자</b>: 같은 자리(같은 건물)에 있는 매물 수입니다.</dd>
             <dt><b class="price-sample">500/40</b></dt>
             <dd>
               <b>가격</b>: 확대 {{ PRICE_ZOOM.normal }}부터(가격대를 펼쳤으면 그 매물은 {{ PRICE_ZOOM.strong }}부터) 동그라미 대신 가격을 씁니다.
-              월세는 보증금/월세(만원), 전세는 '전 1.5억'처럼 쓰고, 같은 자리에 여러 건이면 가장 싼 것과 건수를 씁니다.
+              월세는 보증금/월세(만원), 전세는 '전 1.5억'처럼 씁니다.
+            </dd>
+            <dt><b class="price-sample multi-sample">500/40<i class="cnt">4</i></b></dt>
+            <dd>
+              <b>묶음</b>: 가격 표시끼리 글자가 가려질 만큼 겹치면 한 표시로 묶고, 별로가 아닌 매물 중 가장 싼 가격과 건수를 씁니다.
+              뒤에 카드가 깔린 모양이면 묶음이고, 더 확대하면 풀립니다. 누르면 고른 매물이 맨 위, 나머지는 가격이 낮은 순, 별로는 맨 아래로 뜹니다.
             </dd>
             <dt><b class="price-sample seen-sample">✓ 500/40</b></dt>
             <dd>
@@ -1072,6 +1371,14 @@ onBeforeUnmount(() => {
 :deep(.price.strong span) { padding: 2px 6px; font-size: 12px; border-width: 2px; }
 :deep(.price.sel span) { outline: 3px solid #16202e; outline-offset: 1px; }
 .price-sample { margin-right: 4px; background: #1f5fbf; box-shadow: 0 0 0 1px #1f5fbf; }
+/* 여러 건을 묶은 가격 표시: 오른쪽 위에 카드가 한 장 더 깔린 모양(색은 표시마다 --c로 준다). 본 묶음은 뒤 카드도 흰 바탕에 색 테두리 */
+:deep(.price.multi span) { box-shadow: 3px -3px 0 -1.5px var(--c), 3px -3px 0 0 #fff, 0 1px 3px rgba(0, 0, 0, .35); }
+:deep(.price.multi.seen span) { box-shadow: 3px -3px 0 -1.5px #fff, 3px -3px 0 0 var(--c), 0 1px 2px rgba(0, 0, 0, .25); }
+.price-sample.multi-sample { margin-top: 3px; box-shadow: 0 0 0 1px #1f5fbf, 3px -3px 0 -1.5px #1f5fbf, 3px -3px 0 0 #fff, 3px -3px 0 1px #1f5fbf; }
+.price-sample .cnt {
+  display: inline-grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px;
+  background: #fff; color: #16202e; font: normal 700 10px/1 var(--font);
+}
 /* 대시보드에서 본 매물: 흰 바탕에 색 테두리와 글자(색은 표시마다 style로 준다), 가격 앞에 ✓ */
 :deep(.price.seen span), :deep(.stack.seen span) { box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
 :deep(.price.seen span b) { background: #e9edf2; }
