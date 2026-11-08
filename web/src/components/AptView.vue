@@ -386,7 +386,7 @@ const none: ListingView[] = [];
       <SplitHandle />
       <aside class="map">
         <OverviewMap
-          :listings="none" :background="shown" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="fitKey"
+          :listings="none" :background="shown" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="fitKey" view-key="apt"
           @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)"
           @area="(a) => emit('area', a)" @station="(s) => emit('station', s)"
         />

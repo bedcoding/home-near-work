@@ -205,7 +205,7 @@ const runNote = computed(
         <SplitHandle />
         <aside class="map-side">
           <OverviewMap
-            :listings="picked?.listings ?? []" :background="allLine" :areas="stationAreas" :selected-id="selectedId" :list-mode="false"
+            :listings="picked?.listings ?? []" :background="allLine" :areas="stationAreas" :selected-id="selectedId" :list-mode="false" view-key="line"
             :fit-key="`${line}|${radius}|${stationName ?? ''}`"
             @select="(l) => (selectedId = l.id)" @open="(l) => emit('open', l)" @station="(s) => stations.some((x) => x.name === s.name) && pickStation(s.name)"
           />

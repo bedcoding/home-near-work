@@ -7,7 +7,7 @@ import { loadCatalog, type CatalogStation } from '../areaActions';
 import { auctionSiteLinks } from '../auction';
 import { kindOf } from '../kinds';
 import { roomRange } from '../rooms';
-import { naverCenter } from '../siteLinks';
+import { naverLink } from '../naverPlaces';
 import { looksSeen, markSeen } from '../marks';
 import { rentRate } from '../rentRate';
 import { distanceText, priceAmount, priceText, pyeong } from '../format';
@@ -55,6 +55,11 @@ const props = withDefaults(
      * (버림으로 목록에서 빠져 다음 매물이 골라진 때는 false라서 보던 자리를 그대로 둔다). 강조 표시는 어느 쪽이든 한다.
      */
     panToSelected?: boolean;
+    /**
+     * 지도 위치와 배율을 기억할 이름(탭마다 따로). 주면 마지막으로 본 자리를 브라우저에 두었다가 다시 열 때 그대로 보여 주고,
+     * 기억한 자리가 없을 때만 매물에 맞춘다. 저장은 지도를 다 옮기거나 확대를 마칠 때(moveend) 한 번씩 한다(한 번에 수 마이크로초).
+     */
+    viewKey?: string;
   }>(),
   { listMode: true, fitKey: '', visible: true, panToSelected: true },
 );
@@ -553,13 +558,15 @@ function popup(g: Group) {
     open.addEventListener('click', () => emit('open', l));
     actions.appendChild(open);
     // '📞 문의함'과 '📝 메모' 단추는 매물 카드에만 둔다.
-    if (l.lat != null && l.lng != null) {
+    // 네이버 단추는 단지 화면(단지 매물이거나 같은 자리 단지를 찾으면)이나 그 자리 지도를 연다(naverLink).
+    const link = naverLink(l);
+    if (link) {
       const naver = document.createElement('a');
-      naver.textContent = '네이버 지도 ↗';
-      naver.href = `https://fin.land.naver.com/map?center=${naverCenter(l.lat, l.lng)}&zoom=16`;
+      naver.textContent = link.label;
+      naver.href = link.url;
       naver.target = '_blank';
       naver.rel = 'noopener';
-      naver.title = '이 자리를 네이버 부동산 지도로 엽니다(단지와 실거래가 확인)';
+      naver.title = link.title;
       actions.appendChild(naver);
     }
     for (const s of auctionSiteLinks(l)) {
@@ -792,6 +799,23 @@ function drawBase() {
   setBoundaryCredit(drawn.size > 0);
 }
 
+/**
+ * 매물이 많으면 위도와 경도 각각 양 끝 1%를 빼고 가운데 98%의 범위만 쓴다. 멀리 떨어진 몇 건(크롬 확장이 다른 동네에서 받은 매물 등)
+ * 때문에 지도가 두세 배 넓어지지 않게 한다(실제 매물로 재 보니 전부는 동서 22km, 가운데 98%는 8km).
+ */
+function coreBounds(points: L.LatLng[]) {
+  if (points.length < 50) return L.latLngBounds(points);
+  const lats = points.map((p) => p.lat).sort((a, b) => a - b);
+  const lngs = points.map((p) => p.lng).sort((a, b) => a - b);
+  const lo = Math.floor(points.length * 0.01);
+  const hi = Math.ceil(points.length * 0.99) - 1;
+  return L.latLngBounds([lats[lo], lngs[lo]], [lats[hi], lngs[hi]]);
+}
+
+/**
+ * 지도를 매물에 맞춘다. 매물의 가운데 98%(coreBounds)와 켜 둔 구 경계를 넣는다. 알림 반경은 매물이 있으면 넣지 않는다
+ * (알림 반경 두 배까지 넣으면 구 경계보다 훨씬 넓어져서, 처음 열 때 지도가 매물에서 비켜나 있었다). 매물이 없으면 지역에 맞춘다.
+ */
 function fitTo(points: L.LatLng[]) {
   if (!map) return;
   if (!props.visible || !el.value?.clientWidth || !el.value.clientHeight) {
@@ -799,14 +823,56 @@ function fitTo(points: L.LatLng[]) {
     return;
   }
   fitPending = false;
-  const bounds = L.latLngBounds(points);
-  for (const a of props.areas) if (a.purpose === 'alert') bounds.extend(L.latLng(a.lat, a.lng).toBounds(a.radiusM * 2));
+  const bounds = coreBounds(points);
   for (const a of props.areas) if (a.region) {
     const b = regionBounds(a.region.code);
     if (b) bounds.extend([[b[1], b[0]], [b[3], b[2]]]);
   }
   if (!points.length) for (const a of props.areas) bounds.extend(L.latLng(a.lat, a.lng).toBounds(a.radiusM * 2));
   if (bounds.isValid()) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
+}
+
+/** '매물에 맞추기' 단추: 펼친 목록(없으면 보이는 매물 전체)과 켜 둔 구에 다시 맞춘다. */
+function fitToListings() {
+  firstFitPending = false;
+  fitTo(focusPoints());
+}
+
+// ---------- 지도 위치 기억(viewKey) ----------
+const VIEW_KEY_PREFIX = 'hnw-map-view-';
+interface SavedView {
+  lat: number;
+  lng: number;
+  zoom: number;
+}
+/** 이 탭에서 마지막으로 본 지도 자리. 기억이 없거나 값이 이상하면 null(그때는 매물에 맞춘다). */
+function readView(): SavedView | null {
+  if (!props.viewKey) return null;
+  try {
+    const v = JSON.parse(localStorage.getItem(VIEW_KEY_PREFIX + props.viewKey) ?? 'null') as Partial<SavedView> | null;
+    if (!v || typeof v.lat !== 'number' || typeof v.lng !== 'number' || typeof v.zoom !== 'number') return null;
+    if (!Number.isFinite(v.lat) || !Number.isFinite(v.lng) || !Number.isFinite(v.zoom) || Math.abs(v.lat) > 90 || Math.abs(v.lng) > 180) return null;
+    return { lat: v.lat, lng: v.lng, zoom: Math.min(19, Math.max(5, v.zoom)) };
+  } catch {
+    return null;
+  }
+}
+/**
+ * 처음 열 때 매물이 아직 오지 않았으면(대시보드를 막 켠 때) 우선 지역에 맞춰 두고, 매물이 처음 들어올 때 한 번 더 매물에 맞춘다.
+ * 그 사이에 사용자가 지도를 끌면 다시 맞추지 않는다. 이 맞추기가 끝나기 전에는 자리를 기억하지 않는다(지역에 맞춘 넓은 자리를 기억하지 않게).
+ */
+let firstFitPending = false;
+/** 칸 크기 변화로 지도가 움직이는 동안(invalidateSize)은 자리를 기억하지 않는다. */
+let quietMove = false;
+/** 지도를 다 옮기거나 확대를 마칠 때 지금 자리를 기억한다. */
+function saveView() {
+  if (!map || !props.viewKey || firstFitPending || quietMove || !props.visible) return;
+  const c = map.getCenter();
+  try {
+    localStorage.setItem(VIEW_KEY_PREFIX + props.viewKey, JSON.stringify({ lat: round6(c.lat), lng: round6(c.lng), zoom: map.getZoom() }));
+  } catch {
+    /* 저장이 막혀도 지도는 동작한다 */
+  }
 }
 
 /** 캔버스 숫자 동그라미(CountMarker)의 모양: 가운데 글자(건수나 ✕), 신규 딱지, 📞, 그림자, 고른 표시 테두리 */
@@ -1140,7 +1206,12 @@ function highlight(pan: boolean) {
 function syncVisibleSize() {
   if (!map || !props.visible || !el.value?.clientWidth || !el.value.clientHeight) return;
   const size = map.getSize();
-  if (size.x !== el.value.clientWidth || size.y !== el.value.clientHeight) map.invalidateSize();
+  if (size.x !== el.value.clientWidth || size.y !== el.value.clientHeight) {
+    // 칸 크기만 바뀐 것이라(처음 열 때 높이가 정해지는 등) 그 때문에 생긴 이동은 기억하지 않는다(열 때마다 1px씩 밀려 쌓이지 않게).
+    quietMove = true;
+    map.invalidateSize();
+    quietMove = false;
+  }
   if (fitPending) fitTo(focusPoints());
   if (panPending) {
     panPending = false;
@@ -1182,7 +1253,10 @@ function onKey(e: KeyboardEvent) {
 onMounted(() => {
   if (!el.value) return;
   // 휠 한 칸 = 확대 0.25단계(약 1.2배). 버튼은 0.5단계. 처음 위치(서울시청)는 매물도 지역도 없을 때만 보인다.
-  map = L.map(el.value, { zoomSnap: 0.25, zoomDelta: 0.5, wheelPxPerZoomLevel: 180 }).setView([37.5665, 126.978], 12);
+  // 이 탭에서 마지막으로 본 자리를 기억해 두었으면 그 자리로 연다(viewKey).
+  const savedView = readView();
+  map = L.map(el.value, { zoomSnap: 0.25, zoomDelta: 0.5, wheelPxPerZoomLevel: 180 })
+    .setView(savedView ? [savedView.lat, savedView.lng] : [37.5665, 126.978], savedView ? savedView.zoom : 12);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
   // 역은 매물 아래 층에 그린다(겹쳐도 매물이 눌리게).
   // 그리는 층을 먼저 지도에 붙여 둔다. 그래야 지도를 옮길 때 그 층이 새 화면 범위를 먼저 잡고, 그다음 역을 다시 그린다
@@ -1230,12 +1304,25 @@ onMounted(() => {
   if (zonesOn.value) void loadZones();
   drawZones();
   fittedKey = props.fitKey;
-  drawDots(true);
+  if (savedView) drawDots(false);
+  else {
+    // 기억한 자리가 없으면 매물에 맞춘다. 대시보드를 막 켜서 매물이 아직 없으면 우선 지역에 맞추고, 매물이 들어올 때 한 번 더 맞춘다.
+    firstFitPending = focusPoints().length === 0;
+    drawDots(true);
+  }
+  // 사용자가 지도를 누르거나 휠을 굴리면 매물이 들어올 때 다시 맞추지 않는다(보던 자리를 그대로 둔다).
+  el.value.addEventListener('mousedown', cancelFirstFit, { passive: true });
+  el.value.addEventListener('wheel', cancelFirstFit, { passive: true });
+  map.on('moveend', saveView);
   // 칸 크기가 바뀌면(창 크기, 크게 보기) 지도를 다시 맞춘다.
   resize = new ResizeObserver(syncVisibleSize);
   resize.observe(el.value);
   window.addEventListener('keydown', onKey);
 });
+
+function cancelFirstFit() {
+  firstFitPending = false;
+}
 
 // 매물이 바뀌면 다시 그린다. fitKey가 바뀌었을 때만 매물에 맞추고, 아니면 보던 확대와 위치를 그대로 둔다. 고른 매물이 바뀌면 그 표시를 강조한다.
 /** 마지막으로 지도를 맞춘 fitKey */
@@ -1243,8 +1330,13 @@ let fittedKey: string | null = null;
 watch(
   () => [props.listings, props.background, props.fitKey] as const,
   () => {
-    const fit = props.fitKey !== fittedKey;
+    let fit = props.fitKey !== fittedKey;
     fittedKey = props.fitKey;
+    // 열 때 매물이 없어 지역에 맞춰 둔 지도는 매물이 처음 들어올 때 한 번 매물에 맞춘다.
+    if (firstFitPending && focusPoints().length) {
+      firstFitPending = false;
+      fit = true;
+    }
     drawDots(fit);
   },
 );
@@ -1293,6 +1385,8 @@ onBeforeUnmount(() => {
   el.value?.removeEventListener('mouseleave', onMapLeave);
   el.value?.removeEventListener('mousemove', onDistrictHover);
   el.value?.removeEventListener('mouseleave', clearDistrictHover);
+  el.value?.removeEventListener('mousedown', cancelFirstFit);
+  el.value?.removeEventListener('wheel', cancelFirstFit);
   resize?.disconnect();
   if (map) {
     // 확대 애니메이션 중에 지우면 Leaflet이 250ms 뒤 이미 지운 칸을 읽다가 오류를 내서, 애니메이션 표시를 끄고 지운다.
@@ -1319,11 +1413,14 @@ onBeforeUnmount(() => {
   <div class="ovmap" :class="{ picking: pinning, big }">
     <div class="map-wrap">
       <div ref="el" class="map" role="region" aria-label="매물 위치 지도"></div>
-      <button
-        class="btn btn-sm big-btn" :aria-pressed="big"
-        :title="`${background.length}건, 위치 ${positions}곳${listings.length ? `, 펼친 목록 ${listings.length}건 진하게` : ''}`"
-        @click="big = !big"
-      >{{ big ? '작게 보기 (Esc)' : '크게 보기' }}</button>
+      <div class="map-tools">
+        <button class="btn btn-sm" title="펼친 목록(없으면 보이는 매물 전체)과 켜 둔 구에 지도를 다시 맞춥니다" @click="fitToListings">매물에 맞추기</button>
+        <button
+          class="btn btn-sm big-btn" :aria-pressed="big"
+          :title="`${background.length}건, 위치 ${positions}곳${listings.length ? `, 펼친 목록 ${listings.length}건 진하게` : ''}`"
+          @click="big = !big"
+        >{{ big ? '작게 보기 (Esc)' : '크게 보기' }}</button>
+      </div>
       <p v-if="pinning" class="pick-note">{{ pinning === 'mark' ? '표시 핀' : '거리 핀' }}을 꽂을 곳을 누르세요 (Esc 취소)</p>
     </div>
     <!-- 지도 아래: 점 색 네 가지와 '봤음'만 늘 보이고, 나머지 설명(숫자, 가격, 구역, 역, 핀, 정비구역)은 '지도 보는 법' 모달의 탭에 둔다. -->
@@ -1493,7 +1590,9 @@ onBeforeUnmount(() => {
 /* isolation: 지도 안의 z-index(지도 칸 400, 컨트롤 1000)가 위쪽 머리말 메뉴(조회하기 ▾ 등)를 덮지 않게 지도 안에 가둔다. */
 .map-wrap { position: relative; display: grid; min-height: 280px; isolation: isolate; }
 .map { min-height: 280px; border: 1px solid var(--line-strong); border-radius: 12px; }
-.big-btn { position: absolute; top: 10px; right: 10px; z-index: 1001; box-shadow: 0 1px 4px rgba(22, 32, 46, .18); }
+/* 지도 오른쪽 위 단추 줄: 매물에 맞추기, 크게 보기 */
+.map-tools { position: absolute; top: 10px; right: 10px; z-index: 1001; display: flex; gap: 6px; }
+.map-tools .btn { box-shadow: 0 1px 4px rgba(22, 32, 46, .18); }
 .pick-note {
   position: absolute; top: 10px; left: 50%; z-index: 1001; transform: translateX(-50%); margin: 0; padding: 6px 12px; pointer-events: none;
   border-radius: 8px; background: var(--ink); color: #fff; font-size: 13px; font-weight: 600; white-space: nowrap;

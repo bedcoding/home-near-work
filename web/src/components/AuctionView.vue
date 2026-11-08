@@ -330,7 +330,7 @@ const days = computed(() => {
       <SplitHandle />
       <aside class="map">
         <OverviewMap
-          :listings="none" :background="all" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="kind"
+          :listings="none" :background="all" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="kind" :view-key="title === '집터' ? 'plot' : 'auction'"
           @select="(l) => emit('select', l)" @reveal="(ls) => emit('select', ls[0])" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />

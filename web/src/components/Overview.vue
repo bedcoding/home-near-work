@@ -13,11 +13,14 @@ import ListingCard from './ListingCard.vue';
 import OverviewMap from './OverviewMap.vue';
 import SplitHandle from './SplitHandle.vue';
 import { mapShareStyle } from '../mapWidth';
+import { rememberNaverPlaces } from '../naverPlaces';
 import { walkPins, walkTimes } from '../walk';
 
 const props = defineProps<{ listings: ListingView[]; filters: Filters; areas: Area[]; selectedId: string | null; panToSelected?: boolean }>();
 /** 필터의 평범한 복사본. 매물 수만 건을 도는 계산은 props.filters(반응형) 대신 이것을 반복 밖에서 한 번 읽는다. */
 const filtersNow = computed(() => plainFilters(props.filters));
+// 카드와 지도의 '네이버' 단추가 같은 자리 네이버 단지를 찾을 수 있게, 매물 탭이 받은 매물(거래 유형 상관없이 전부)을 알려 둔다.
+watch(() => props.listings, (list) => rememberNaverPlaces(list), { immediate: true });
 const overviewEl = ref<HTMLElement | null>(null);
 const mapPanel = ref<HTMLElement | null>(null);
 const mapPanelHeight = ref<number>();
@@ -638,7 +641,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
       <SplitHandle />
       <aside ref="mapPanel" class="ov-map" :style="mapPanelHeight ? { '--map-panel-height': `${mapPanelHeight}px` } : undefined">
         <OverviewMap
-          :listings="mapStrong" :background="mapBackground" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="mapFitKey"
+          :listings="mapStrong" :background="mapBackground" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="mapFitKey" view-key="overview"
           @select="(l) => reveal([l])" @reveal="reveal" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />
