@@ -9,10 +9,10 @@ import { KIND_LABEL, kindOf } from '../kinds';
 import { ledgerChips } from '../ledger';
 import { isRoomStay, roomRange, roomTypesText } from '../rooms';
 import { naverCenter } from '../siteLinks';
-import { looksSeen, markSeen, NOTE_MAX, saveNote, setContacted } from '../marks';
+import { looksSeen, markSeen } from '../marks';
 import { rentRate } from '../rentRate';
 import { distanceText, manwon, perPyeong, priceText, pyeong } from '../format';
-import { addWalkPin, ensureWalk, markDistances, moveWalkPin, pinCount, pinMax, removeWalkPin, renameWalkPin, setPinKind, walkPins, walkState, walkTimes } from '../walk';
+import { addWalkPin, ensureWalk, markDistances, moveWalkPin, pinCount, pinMax, removeWalkPin, renameWalkPin, setPinKind, walkPins, walkState } from '../walk';
 import { WALK_NAME_MAX, type PinKind } from '../../../shared/walk';
 import {
   checkZonesNow, loadZones, uploadZones, ZONE_COLOR, ZONE_GROUPS, ZONE_SOURCE_URL, zones, zonesBusy, zonesChecking, zonesError, zonesMessage, zonesOn,
@@ -24,13 +24,13 @@ import InfoModal from './InfoModal.vue';
 // - 매물(같은 자리는 숫자 동그라미로 묶음)을 누르면 정보 창이 뜨고, 거기서 '목록에서 보기'나 '원본 열기'를 누른다.
 //   확대해 보면(PRICE_ZOOM) 동그라미 대신 가격('보증금/월세', 전세 '전 1.5억')을 쓴 표시로 그린다. 가격 표시끼리 글자가 가려질 만큼
 //   겹치면 지금 확대에서 한 표시로 묶어(더 확대하면 풀림) 별로가 아닌 매물 중 가장 싼 매물(월세와 전세는 매물 카드의 환산 월세로 견줌)의
-//   가격과 건수를 쓰고, 뒤에 카드가 깔린 모양으로 그린다.
+//   가격과 건수(가격 옆 숫자 동그라미)를 쓴다.
 //   옆에 목록이 있으면 누를 때 그 묶음 매물들을 reveal 이벤트로 알려 목록도 그 매물로 옮기게 한다.
 // - 매물 표시는 화면 근처에 있는 것만 그리고, 지도를 옮기거나 확대하면 바뀐 묶음만 갈아 끼운다(수천 건을 한꺼번에 다시 만들면 느려서).
 // - 역(흰 동그라미, 켜진 지역은 검은 동그라미)을 누르면 그 역 지역을 켜고 끈다(station 이벤트, 확대 12 이상에서 보임).
 // - 휠 한 칸에 약 1.2배씩 확대하거나 축소한다.
 // - 정비사업 구역(서울플랜+ 파일을 넣었으면)을 매물과 역 아래 층에 칠한다. 마우스를 올리면 구역 이름, 사업 종류, 추진 단계가 보인다.
-// - '거리 핀'으로 자주 가는 곳에 핀(MAX_WALK_PINS개까지, 모든 지도가 같이 씀)을 꽂으면 정보 창과 매물 카드에 핀까지 걸어서 몇 분인지 보인다.
+// - '거리 핀'으로 자주 가는 곳에 핀(MAX_WALK_PINS개까지, 모든 지도가 같이 씀)을 꽂으면 매물 카드에 핀까지 걸어서 몇 분인지 보인다.
 //   '표시 핀'은 지도에 이름만 보이고(MAX_MARK_PINS개까지), 마우스를 올리면 거리 핀까지 걸어서 몇 분인지 보인다. 핀은 끌어서 옮기고, 누르면 이름이나 종류를 바꾸거나 뺀다.
 
 
@@ -175,8 +175,8 @@ const hasNew = (s: Summary) => s.fresh;
 const NEW_BADGE = '<em class="nw">NEW</em>';
 /** 묶음을 '본 매물' 모양으로 그릴지: 별로를 뺀 매물을 모두 대시보드에서 봤고, 그 뒤로 새 소식이 없고 관심으로 고르지도 않았을 때 */
 const groupSeen = (s: Summary) => s.nonMeh > 0 && s.nonMehSeen === s.nonMeh;
-/** 글자 상자 색: 안 본 매물은 색으로 칠하고, 본 매물은 흰 바탕에 그 색 테두리와 글자. --c는 묶음 표시 뒤 카드 색에 쓴다. */
-const boxStyle = (c: string, seen: boolean) => (seen ? `--c:${c};background:#fff;color:${c};border-color:${c}` : `--c:${c};background:${c}`);
+/** 글자 상자 색: 안 본 매물은 색으로 칠하고, 본 매물은 흰 바탕에 그 색 테두리와 글자 */
+const boxStyle = (c: string, seen: boolean) => (seen ? `background:#fff;color:${c};border-color:${c}` : `background:${c}`);
 const SEEN_MARK = '<i class="ck">✓</i>';
 const MEH_MARK = '<i class="ck">✕</i>';
 /** 묶음에 별로가 아닌 '📞 문의함' 매물이 있는지. 가격 앞(멀리서 보면 왼쪽 위)에 📞를 붙인다. */
@@ -476,6 +476,8 @@ const line = (className: string, text: string) => {
 
 /** 정보 창에 보이는 매물 수. 더 있으면 '외 N건'으로 줄인다. */
 const POPUP_MAX = 12;
+/** 정보 창 내용 폭(px). 지도가 좁으면 창이 지도 안에 들어가게 줄이되(창 여백 몫 90px) min 아래로는 줄이지 않는다. */
+const POPUP_WIDTH = { max: 420, min: 300 };
 
 /** 고른 매물이 묶음에 들어 있으면 맨 앞으로 옮긴다(나머지는 묶음 순서 그대로). */
 function withSelectedFirst(items: ListingView[]) {
@@ -484,9 +486,9 @@ function withSelectedFirst(items: ListingView[]) {
 }
 
 /**
- * 누르면 보이는 창: 묶음 매물마다 가격, 평, 평당, 층, 유형, 방, 사이트, 제목과 '목록에서 보기', '원본 열기'.
- * 고른 매물이 맨 위, 나머지는 싼 순(월세와 전세는 환산 월세), 별로는 맨 아래. 폭은 Leaflet이 가장 긴 줄에 맞추되
- * 300px보다 좁히지 않는다(내용이 짧은 창에서 단추가 한 줄에 하나씩 쌓이지 않게).
+ * 누르면 보이는 창: 묶음 매물마다 가격, 평, 평당, 층, 유형, 방, 사이트, 메모와 '목록에서 보기', '원본 열기', '네이버 지도'.
+ * 고른 매물이 맨 위, 나머지는 싼 순(월세와 전세는 환산 월세), 별로는 맨 아래. 폭은 내용과 상관없이 POPUP_WIDTH.max로 정해
+ * 단추가 한 줄에 놓이게 한다(Leaflet은 가장 긴 줄에 맞춰서, 짧은 창은 단추가 한 줄에 하나씩 쌓였다).
  */
 function popup(g: Group) {
   const items = withSelectedFirst(g.items);
@@ -527,9 +529,7 @@ function popup(g: Group) {
       if (f) facts.appendChild(line('', f));
     }
     text.append(top, facts);
-    // 꽂은 핀마다 걸어서 몇 분
-    for (const w of walkTimes(l.id)) text.appendChild(line('mp-walk', `${w.pin.name}까지 걸어서 ${w.minutes}분(${distanceText(w.meters)})`));
-    if (l.title) text.appendChild(line('mp-sub', l.title.slice(0, 40)));
+    // 핀까지 걷는 시간과 제목은 매물 카드에 있어서 창에는 쓰지 않는다(제목은 올리면 보이는 글에도 있다).
     if (l.note) text.appendChild(line('mp-memo', `📝 ${l.note}`));
     const actions = document.createElement('div');
     actions.className = 'mp-actions';
@@ -547,53 +547,7 @@ function popup(g: Group) {
     open.textContent = '원본 열기';
     open.addEventListener('click', () => emit('open', l));
     actions.appendChild(open);
-    // 사이트에서 중개사에게 문의했으면 누른다. 창은 다시 그리지 않으니 단추 글자만 바로 바꾼다.
-    const call = document.createElement('button');
-    const paintCall = () => {
-      call.textContent = l.contactedAt ? '문의함 해제' : '📞 문의함';
-      call.classList.toggle('on', !!l.contactedAt);
-    };
-    paintCall();
-    call.title = '사이트에서 중개사에게 문의했으면 누르세요. 다시 누르면 풉니다.';
-    call.addEventListener('click', () => {
-      setContacted(l, !l.contactedAt);
-      paintCall();
-    });
-    actions.appendChild(call);
-    // 메모: 누르면 창 안에 입력 칸이 열린다. 저장하면 창을 다시 그려 메모 줄을 바꾼다.
-    const memo = document.createElement('button');
-    memo.textContent = '📝 메모';
-    memo.title = '이 매물에 짧은 메모를 남깁니다(비우고 저장하면 지웁니다)';
-    memo.addEventListener('click', () => {
-      const form = document.createElement('form');
-      form.className = 'mp-memo-edit';
-      const input = document.createElement('input');
-      input.value = l.note ?? '';
-      input.maxLength = NOTE_MAX;
-      input.placeholder = '예: 집주인 직접, 토요일 방문 예약';
-      input.setAttribute('aria-label', '매물 메모');
-      const save = document.createElement('button');
-      save.type = 'submit';
-      save.textContent = '저장';
-      form.append(input, save);
-      form.addEventListener('submit', (e) => {
-        e.preventDefault();
-        saveNote(l, input.value);
-        popup(g);
-      });
-      // 지도 키(화살표로 옮기기, +와 -로 확대)가 글자 입력을 가로채지 않게 막는다. Esc는 입력만 닫는다.
-      input.addEventListener('keydown', (e) => {
-        e.stopPropagation();
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          form.remove();
-        }
-      });
-      row.querySelector('.mp-memo-edit')?.remove();
-      row.appendChild(form);
-      input.focus();
-    });
-    actions.appendChild(memo);
+    // '📞 문의함'과 '📝 메모' 단추는 매물 카드에만 둔다(창에는 문의함 딱지와 메모 줄만 보인다).
     if (l.lat != null && l.lng != null) {
       const naver = document.createElement('a');
       naver.textContent = '네이버 지도 ↗';
@@ -621,7 +575,8 @@ function popup(g: Group) {
     more.textContent = `외 ${items.length - POPUP_MAX}건`;
     box.appendChild(more);
   }
-  L.popup({ maxWidth: 340, minWidth: 300, className: 'mp-popup' }).setLatLng([g.lat, g.lng]).setContent(box).openOn(map!);
+  const width = Math.max(POPUP_WIDTH.min, Math.min(POPUP_WIDTH.max, map!.getSize().x - 90));
+  L.popup({ minWidth: width, maxWidth: width, className: 'mp-popup' }).setLatLng([g.lat, g.lng]).setContent(box).openOn(map!);
 }
 
 /** 역: 켜진 지역이면 검은 동그라미, 아니면 흰 동그라미. 누르면 station 이벤트로 켜고 끈다. */
@@ -841,10 +796,10 @@ function drawGroup(layer: L.LayerGroup, g: Group): Drawn {
   let base: Drawn['base'];
   let z: number | undefined = zIndexOffset;
   if (price) {
-    // 확대해 보면 가격을 쓴 표시(여러 건을 묶었으면 가장 싼 것과 건수, 뒤에 카드가 깔린 모양). 가격 글자는 요약에 만들어 둔 것(sum.text)
+    // 확대해 보면 가격을 쓴 표시(여러 건을 묶었으면 가장 싼 것과 건수 동그라미). 가격 글자는 요약에 만들어 둔 것(sum.text)
     marker = L.marker([g.lat, g.lng], {
       icon: L.divIcon({
-        className: `price${g.strong ? ' strong' : ''}${muted ? ' dim' : ''}${seen ? ' seen' : ''}${meh ? ' meh' : ''}${called ? ' called' : ''}${n > 1 ? ' multi' : ''}`,
+        className: `price${g.strong ? ' strong' : ''}${muted ? ' dim' : ''}${seen ? ' seen' : ''}${meh ? ' meh' : ''}${called ? ' called' : ''}`,
         html:
           `<span style="${boxStyle(muted ? MUTED_PRICE : c, seen)}">${called ? PHONE_MARK : seen ? SEEN_MARK : meh ? MEH_MARK : ''}` +
           `${esc(g.sum.text)}` +
@@ -1188,10 +1143,10 @@ onBeforeUnmount(() => {
               <b>가격</b>: 확대 {{ PRICE_ZOOM.normal }}부터(가격대를 펼쳤으면 그 매물은 {{ PRICE_ZOOM.strong }}부터) 동그라미 대신 가격을 씁니다.
               월세는 보증금/월세(만원), 전세는 '전 1.5억'처럼 씁니다.
             </dd>
-            <dt><b class="price-sample multi-sample">500/40<i class="cnt">4</i></b></dt>
+            <dt><b class="price-sample">500/40<i class="cnt">4</i></b></dt>
             <dd>
               <b>묶음</b>: 가격 표시끼리 글자가 가려질 만큼 겹치면 한 표시로 묶고, 별로가 아닌 매물 중 가장 싼 매물의 가격과 건수를 씁니다.
-              월세와 전세는 매물 카드의 환산 월세(월세 + 보증금 × 전환율 ÷ 12)로 견줍니다. 뒤에 카드가 깔린 모양이면 묶음이고, 더 확대하면 풀립니다.
+              월세와 전세는 매물 카드의 환산 월세(월세 + 보증금 × 전환율 ÷ 12)로 견줍니다. 가격 옆 숫자가 묶인 매물 수이고, 더 확대하면 풀립니다.
               누르면 고른 매물이 맨 위, 나머지는 싼 순, 별로는 맨 아래로 뜹니다.
             </dd>
             <dt><b class="price-sample seen-sample">✓ 500/40</b></dt>
@@ -1202,7 +1157,7 @@ onBeforeUnmount(() => {
             </dd>
             <dt><b class="price-sample">📞 500/40</b></dt>
             <dd>
-              <b>문의함</b>: 카드나 지도 창에서 '📞 문의함'을 누른 매물은 가격 앞(멀리서 보면 왼쪽 위)에 📞가 붙고 다른 표시 위에 그려집니다.
+              <b>문의함</b>: 매물 카드에서 '📞 문의함'을 누른 매물은 가격 앞(멀리서 보면 왼쪽 위)에 📞가 붙고 다른 표시 위에 그려집니다.
               다시 누르면 풉니다. 문의한 매물은 사이트에서 내려가도 지우지 않고 남깁니다.
             </dd>
           </dl>
@@ -1226,7 +1181,7 @@ onBeforeUnmount(() => {
             <dt><b class="pin-sample">핀</b></dt>
             <dd>
               <b>거리 핀</b>: 지도 아래 '거리 핀'을 누른 뒤 회사처럼 자주 가는 곳을 누르면 꽂힙니다.
-              매물 카드와 정보 창에 그 핀까지 걸어서 몇 분인지 보입니다({{ pinMax('walk') }}개까지).
+              매물 카드에 그 핀까지 걸어서 몇 분인지 보입니다({{ pinMax('walk') }}개까지).
             </dd>
             <dt><b class="pin-sample mark">핀</b></dt>
             <dd><b>표시 핀</b>: 이름만 붙여 두는 핀입니다. 걷는 시간은 재지 않습니다({{ pinMax('mark') }}개까지).</dd>
@@ -1267,7 +1222,7 @@ onBeforeUnmount(() => {
         class="btn btn-sm" :class="{ on: pinning === 'walk' }" :disabled="pinning !== 'walk' && pinCount('walk') >= pinMax('walk')"
         :title="pinCount('walk') >= pinMax('walk')
           ? `거리 핀은 ${pinMax('walk')}개까지 꽂습니다. 핀을 누르면 빼거나 표시 핀으로 바꿀 수 있습니다`
-          : '누른 뒤 지도에서 회사처럼 자주 가는 곳을 누르면 핀이 꽂히고, 매물 카드와 정보 창에 핀까지 걸어서 몇 분인지 보입니다'"
+          : '누른 뒤 지도에서 회사처럼 자주 가는 곳을 누르면 핀이 꽂히고, 매물 카드에 핀까지 걸어서 몇 분인지 보입니다'"
         @click="pinning = pinning === 'walk' ? null : 'walk'"
       >
         {{ pinning === 'walk' ? '취소' : '거리 핀' }}
@@ -1378,7 +1333,6 @@ onBeforeUnmount(() => {
 :deep(.walk-pin.mark span), .pin-sample.mark { background: #d9480f; }
 :deep(.walk-pin.mark span)::after { border-top-color: #d9480f; }
 .pin-sample { margin-right: 4px; padding: 0 6px; border-width: 1.5px; font-size: 11px; }
-:deep(.mp-walk) { color: #5235b5; font-weight: 700; }
 :deep(.pin-pop) { flex-wrap: nowrap; }
 :deep(.pin-pop input) {
   width: 9em; min-height: 32px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; font: 600 13px var(--font);
@@ -1404,10 +1358,7 @@ onBeforeUnmount(() => {
 :deep(.price.strong span) { padding: 2px 6px; font-size: 12px; border-width: 2px; }
 :deep(.price.sel span) { outline: 3px solid #16202e; outline-offset: 1px; }
 .price-sample { margin-right: 4px; background: #1f5fbf; box-shadow: 0 0 0 1px #1f5fbf; }
-/* 여러 건을 묶은 가격 표시: 오른쪽 위에 카드가 한 장 더 깔린 모양(색은 표시마다 --c로 준다). 본 묶음은 뒤 카드도 흰 바탕에 색 테두리 */
-:deep(.price.multi span) { box-shadow: 3px -3px 0 -1.5px var(--c), 3px -3px 0 0 #fff, 0 1px 3px rgba(0, 0, 0, .35); }
-:deep(.price.multi.seen span) { box-shadow: 3px -3px 0 -1.5px #fff, 3px -3px 0 0 var(--c), 0 1px 2px rgba(0, 0, 0, .25); }
-.price-sample.multi-sample { margin-top: 3px; box-shadow: 0 0 0 1px #1f5fbf, 3px -3px 0 -1.5px #1f5fbf, 3px -3px 0 0 #fff, 3px -3px 0 1px #1f5fbf; }
+/* '지도 보는 법'의 묶음 견본: 가격 옆 건수 동그라미(.price span b와 같은 모양) */
 .price-sample .cnt {
   display: inline-grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px;
   background: #fff; color: #16202e; font: normal 700 10px/1 var(--font);
@@ -1438,7 +1389,6 @@ onBeforeUnmount(() => {
 :deep(.mp-row) { display: grid; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 :deep(.mp-text) { display: grid; }
 :deep(.mp-top) { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-:deep(.mp-sub) { color: var(--muted); }
 :deep(.mp-facts) { display: flex; flex-wrap: wrap; gap: 0 10px; color: var(--muted); }
 :deep(.mp-key) { color: var(--ink); font-weight: 700; }
 :deep(.mp-tag) { padding: 0 6px; border-radius: 6px; font-size: 12px; font-weight: 700; }
@@ -1453,15 +1403,11 @@ onBeforeUnmount(() => {
   min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font: 600 13px var(--font); cursor: pointer;
 }
 :deep(.mp-more) { color: var(--muted); }
-/* 메모: 창의 메모 줄과 입력 칸, 올리면 보이는 글의 메모 */
+/* 메모: 창의 메모 줄, 올리면 보이는 글의 메모(메모는 매물 카드에서 남긴다) */
 :deep(.mp-memo) { padding: 2px 8px; border-left: 3px solid var(--star); border-radius: 4px; background: var(--star-soft); color: var(--ink-2); font-size: 12.5px; overflow-wrap: anywhere; }
-:deep(.mp-memo-edit) { display: flex; gap: 6px; }
-:deep(.mp-memo-edit input) { flex: 1; min-width: 0; min-height: 32px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; font: 13px var(--font); }
-:deep(.mp-memo-edit button) { min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font: 600 13px var(--font); cursor: pointer; }
 :deep(.tip-note) { color: var(--star); }
-/* 문의함: 창의 딱지와 눌린 단추, 지도 표시 왼쪽 위 📞(가격을 쓴 표시는 가격 앞에 붙인다) */
+/* 문의함: 창의 딱지, 지도 표시 왼쪽 위 📞(가격을 쓴 표시는 가격 앞에 붙인다) */
 :deep(.mp-tag.contact) { background: var(--contact-soft); color: var(--contact); }
-:deep(.mp-actions button.on) { background: var(--contact-soft); border-color: var(--contact); }
 :deep(.ph) {
   position: absolute; top: -11px; left: -13px; font-style: normal; font-size: 12px; line-height: 1;
   pointer-events: none; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .35));
