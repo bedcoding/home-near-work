@@ -42,6 +42,8 @@ export interface Collector {
   emptyOk?: boolean;
   /** Keep unreturned rows until the normal stale timeout when the source's count is not a reliable deletion signal. */
   retainMissing?: boolean;
+  /** 화면을 열지 않고 서버가 사이트 자료를 바로 받는다. 조회 창에 이 사이트용 탭을 따로 열지 않고 기본 탭을 같이 쓴다(열면 끝날 때까지 빈 탭으로 남는다). */
+  noTab?: boolean;
   collect(ctx: CollectContext): Promise<CollectedItem[]>;
 }
 

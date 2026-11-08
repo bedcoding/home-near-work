@@ -30,7 +30,7 @@ interface StationJob { area: Area; station: ZigbangStationPlace }
  */
 export function createZigbangCollector(deps: ZigbangCollectDeps): Collector {
   return {
-    id: 'zigbang', label: '직방', emptyOk: true, retainMissing: true,
+    id: 'zigbang', label: '직방', emptyOk: true, retainMissing: true, noTab: true,
     async collect(ctx: CollectContext) {
       const items = new Map<string, CollectedItem>();
       let requested = false;

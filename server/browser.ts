@@ -49,6 +49,13 @@ const INIT_SCRIPT = `
 })();
 `;
 
+// 조회 창의 기본 탭(크롬을 띄울 때부터 있는 탭). 사이트는 사이트마다 탭을 열어 돌고 이 탭은 사이트를 다 돈 뒤
+// 공고와 매각 결과를 받을 때 쓰므로, 그전까지 빈 탭으로 보이지 않게 이름과 짧은 설명을 띄운다.
+const BASE_TAB_HTML = `<!doctype html><meta charset="utf-8"><title>조회 창</title>
+<body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#f6f8fb;color:#3b4656;font:15px/1.7 system-ui,'Malgun Gothic',sans-serif">
+<p style="margin:0;padding:24px;text-align:center"><b style="color:#16202e">회사근처 내집마련 조회 창</b><br>
+사이트마다 탭을 열어 돌고, 다 돈 사이트의 탭은 닫습니다.<br>화면 없이 자료를 받는 직방은 진행 상황만 이 탭에 뜹니다.<br>사이트를 다 돌면 이 탭에서 공고를 받습니다.</p>`;
+
 /** 조회할 때 역, 지역, 구 사이에 쉬는 시간(초, 설정 rest_seconds, 처음 3초) */
 export function restSeconds(): number {
   const v = Number(getSetting('rest_seconds') ?? REST_DEFAULT);
@@ -86,6 +93,8 @@ export class BrowserSession {
     }
     await context.addInitScript({ content: INIT_SCRIPT });
     const page = context.pages()[0] ?? (await context.newPage());
+    // 글을 바꾸면 문서가 새로 써져서 커서 표시가 지워지므로, 글을 먼저 띄우고 커서를 깐다.
+    await page.setContent(BASE_TAB_HTML).catch(() => {});
     await page.evaluate(INIT_SCRIPT).catch(() => {});
     return new BrowserSession(context, page, visible, runId);
   }

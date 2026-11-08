@@ -327,6 +327,12 @@ const chosenAreas = computed(() => props.areas.filter((a) => selectedAreas.value
 const chosenSites = computed(() => sites.value.filter((site) => selectedSites.value.includes(site.id)));
 // 확장의 순회 계획과 같은 기준이다. 네이버는 구나 동 전체를, 다른 사이트는 역 지역을 맡는다.
 const covers = (area: Area, site: string) => area.region ? site === 'naver' && area.purpose !== 'alert' : site !== 'naver';
+/** 고른 사이트가 하나도 안 보는 지역이면 그 까닭(지역 칸을 흐리게 하고 작은 글씨로 보인다). 사이트를 안 골랐으면 흐리게 하지 않는다. */
+const unusedReason = (area: Area): string | null => {
+  if (!chosenSites.value.length || chosenSites.value.some((site) => covers(area, site.id))) return null;
+  if (!area.region) return '네이버는 역을 안 봄';
+  return area.purpose === 'alert' ? '알림용이라 안 봄' : '네이버만 봄';
+};
 const plannedJobs = computed(() => chosenAreas.value.flatMap((area) => chosenSites.value.filter((site) => covers(area, site.id)).flatMap((site) => {
   if (site.id === 'naver') return [{ key: `${area.id}:naver`, areaId: area.id, site: site.id, areaName: area.name, siteName: site.name,
     label: area.region?.kind === 'gu' ? '구 전체' : '동 전체', detail: '고른 네이버 탭의 필터로 전체 목록을 마지막 페이지까지 확인', scoped: false }];
@@ -632,9 +638,9 @@ onBeforeUnmount(() => {
               <button type="button" @click="selectedAreas = []">선택 해제</button>
             </div>
             <div class="check-list area-list">
-              <label v-for="a in areas" :key="a.id" :class="{ selected: selectedAreas.includes(a.id) }">
+              <label v-for="a in areas" :key="a.id" :class="{ selected: selectedAreas.includes(a.id), unused: !!unusedReason(a) }">
                 <input v-model="selectedAreas" type="checkbox" :value="a.id">
-                <span>{{ a.name }}<small>{{ a.region ? (a.region.kind === 'gu' ? '구 전체' : '법정동 전체') : selectedSites.includes('dabang') && areaScopes[a.id]?.length ? '동별 범위' : `반경 ${radiusText(a.radiusM)}` }}</small></span>
+                <span>{{ a.name }}<small>{{ unusedReason(a) ?? (a.region ? (a.region.kind === 'gu' ? '구 전체' : '법정동 전체') : selectedSites.includes('dabang') && areaScopes[a.id]?.length ? '동별 범위' : `반경 ${radiusText(a.radiusM)}`) }}</small></span>
               </label>
             </div>
           </template>
@@ -821,6 +827,8 @@ legend .muted { margin-left: 6px; font-weight: 400; font-size: 13px; }
 .check-list label { display: flex; align-items: center; gap: 9px; min-height: 58px; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; font-size: 15px; }
 .check-list label:hover { background: var(--surface-2); }
 .check-list label.selected { background: var(--accent-soft); border-color: #b7ccec; }
+/* 고른 사이트가 안 보는 지역: 흐리게 두고 작은 글씨로 까닭을 보인다(골라 둔 것은 그대로 두어 사이트를 바꾸면 다시 쓰인다). */
+.check-list label.unused { opacity: .5; }
 .check-list input { width: 17px; height: 17px; flex: none; margin: 0; accent-color: var(--accent); }
 .check-list small { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .icon-site { display: flex; align-items: center; gap: 9px; min-height: 58px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; font-size: 15px; }

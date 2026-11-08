@@ -430,7 +430,10 @@ async function execute(
         : `매물 사이트 ${sites.length}곳 중 ${ended}곳 끝`;
     };
 
-    /** 사이트 하나를 돈다. 사이트마다 조회용 브라우저 탭을 따로 열어 쓰고, 끝나면 닫는다. */
+    /**
+     * 사이트 하나를 돈다. 화면을 여는 사이트는 조회용 브라우저 탭을 따로 열어 쓰고, 끝나면 닫는다.
+     * 화면을 안 여는 사이트(noTab, 직방)는 탭을 열지 않고 기본 탭을 같이 쓴다(쉬는 시간과 진행 띠만 쓴다).
+     */
     const runOne = async (collector: Collector, progress: RunSiteProgress): Promise<RunSourceSummary> => {
       const missed: string[] = [];
       const coverage = new Map<string, { row: CollectionCoverage; ids: string[] }>();
@@ -439,12 +442,13 @@ async function execute(
       let error: string | undefined;
       let tab: BrowserSession | null = null;
       progress.status = 'running';
-      progress.message = '조회용 탭을 여는 중';
+      progress.message = collector.noTab ? '시작하는 중' : '조회용 탭을 여는 중';
       updateMessage();
       log(`${collector.label}: 시작`);
       try {
-        tab = await rootSession.fork();
-        items = await collector.collect(makeCtx(tab, { progress, missed, coverage }));
+        // 기본 탭은 닫으면 안 되므로 tab에는 따로 연 탭만 둔다(아래 finally가 tab만 닫는다).
+        tab = collector.noTab ? null : await rootSession.fork();
+        items = await collector.collect(makeCtx(tab ?? rootSession, { progress, missed, coverage }));
         if (areas.some((area) => area.region) && ['ziptoss', 'peterpanz'].includes(collector.id)) {
           missed.push('역과 지도 범위에서 받은 매물은 저장했으나 선택한 구나 동 전체를 다 봤는지는 보장하지 않습니다');
         }
