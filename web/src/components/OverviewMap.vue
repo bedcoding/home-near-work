@@ -4,14 +4,13 @@ import { boundaryOf, regionBounds, regionColor, regionBoundaries } from '../../.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { SOURCE_LABEL, type Area, type DealType, type ListingView, type PriceOption } from '../../../shared/types';
 import { loadCatalog, type CatalogStation } from '../areaActions';
-import { auctionSiteLinks, isAuction } from '../auction';
-import { KIND_LABEL, kindOf } from '../kinds';
-import { ledgerChips } from '../ledger';
-import { isRoomStay, roomRange, roomTypesText } from '../rooms';
+import { auctionSiteLinks } from '../auction';
+import { kindOf } from '../kinds';
+import { roomRange } from '../rooms';
 import { naverCenter } from '../siteLinks';
 import { looksSeen, markSeen } from '../marks';
 import { rentRate } from '../rentRate';
-import { distanceText, manwon, perPyeong, priceText, pyeong } from '../format';
+import { distanceText, priceText, pyeong } from '../format';
 import { addWalkPin, ensureWalk, markDistances, moveWalkPin, pinCount, pinMax, removeWalkPin, renameWalkPin, setPinKind, walkPins, walkState } from '../walk';
 import { WALK_NAME_MAX, type PinKind } from '../../../shared/walk';
 import {
@@ -486,10 +485,12 @@ function withSelectedFirst(items: ListingView[]) {
 }
 
 /**
- * 누르면 보이는 창: 맨 위에 건수 머리글(창 안을 스크롤해도 남음), 그 아래 매물마다 가격 줄과 카드 하나.
- * 카드에는 평, 평당, 층, 유형, 방, 사이트 줄과 메모, '목록에서 보기', '원본 열기', '네이버 지도' 단추를 둔다.
+ * 누르면 보이는 창: 맨 위에 건수 머리글(창 안을 스크롤해도 남음), 그 아래 매물마다 카드 하나.
+ * 카드에는 가격(크게)과 전용 평수(땅은 토지), 그 아래 '원본 열기', '네이버 지도' 단추만 둔다. 옆에 목록이 있으면 카드를 누를 때
+ * 목록에서 그 매물을 고른다(예전 '목록에서 보기' 단추). 층, 유형, 사이트, 내 표시(봤음, 문의함 등), 메모는 매물 카드와
+ * 올리면 보이는 글에 있어서 창에는 쓰지 않는다(가격을 먼저 보게).
  * 고른 매물이 맨 위, 나머지는 싼 순(월세와 전세는 환산 월세), 별로는 맨 아래.
- * 폭은 Leaflet이 줄바꿈 없이 잰 내용 폭에 맞추므로, 단추 줄(.mp-actions)은 줄바꿈하지 않게 해서 창이 단추 줄에 딱 맞게 한다.
+ * 폭은 Leaflet이 줄바꿈 없이 잰 내용 폭에 맞추므로, 가격 줄과 단추 줄은 줄바꿈하지 않게 해서 창이 그 둘 중 긴 쪽에 딱 맞게 한다.
  */
 function popup(g: Group) {
   const items = withSelectedFirst(g.items);
@@ -497,59 +498,39 @@ function popup(g: Group) {
   box.className = 'mp';
   if (items.length > 1) box.appendChild(line('mp-head', `${g.spots > 1 ? '이 근처' : '이 자리'} 매물 ${items.length}건`));
   for (const l of items.slice(0, POPUP_MAX)) {
-    const row = document.createElement('div');
-    row.className = 'mp-row';
+    const card = document.createElement('div');
+    card.className = 'mp-card';
     const top = document.createElement('div');
     top.className = 'mp-top';
     const price = document.createElement('strong');
     price.textContent = pricesText(l) || '가격 정보 없음';
     top.appendChild(price);
-    if (l.isNew) top.appendChild(line('mp-tag new', '신규'));
-    if (l.priceChange) top.appendChild(line('mp-tag down', '가격 변동'));
-    if (l.verdict === 'star') top.appendChild(line('mp-tag star', '관심'));
-    if (l.verdict === 'meh') top.appendChild(line('mp-tag', '별로'));
-    if (l.contactedAt) top.appendChild(line('mp-tag contact', '📞 문의함'));
-    else if (looksSeen(l)) top.appendChild(line('mp-tag seen', '봤음'));
-    for (const c of ledgerChips(l)) {
-      const tag = line(`mp-tag ${c.tone}`, c.label);
-      tag.title = c.tip;
-      top.appendChild(tag);
+    if (l.areaM2 != null) {
+      // 매물 카드처럼 전용면적(땅은 토지 면적)이라고 이름을 붙인다.
+      const area = document.createElement('span');
+      area.className = 'mp-area';
+      area.append(line('mp-label', kindOf(l) === 'land' ? '토지' : '전용'), ` ${pyeong(l.areaM2)}평`);
+      top.appendChild(area);
     }
-    const per = perPyeong(l);
-    const facts = document.createElement('div');
-    facts.className = 'mp-facts';
-    if (l.areaM2 != null) facts.appendChild(line('mp-key', `${pyeong(l.areaM2)}평`));
-    if (per != null) facts.appendChild(line('mp-key', `평당 ${manwon(per)}`));
-    const room = isRoomStay(l);
-    const kindText = room ? null : KIND_LABEL[kindOf(l)];
-    const roomText = room ? roomTypesText(l) : isAuction(l) ? null : l.roomLabel;
-    const floorText = l.basement ? '반지하' : l.rooftop ? '옥탑' : l.floor != null ? `${l.floor}층` : null;
-    for (const f of [floorText, kindText, roomText, SOURCE_LABEL[l.source]]) {
-      if (f) facts.appendChild(line('', f));
-    }
-    // 가격 줄 아래 정보 줄, 메모, 단추를 카드 하나로 묶는다.
-    const card = document.createElement('div');
-    card.className = 'mp-card';
-    card.appendChild(facts);
-    // 핀까지 걷는 시간과 제목은 매물 카드에 있어서 창에는 쓰지 않는다(제목은 올리면 보이는 글에도 있다).
-    if (l.note) card.appendChild(line('mp-memo', `📝 ${l.note}`));
-    const actions = document.createElement('div');
-    actions.className = 'mp-actions';
+    card.appendChild(top);
     if (props.listMode) {
-      const see = document.createElement('button');
-      see.textContent = '목록에서 보기';
-      see.addEventListener('click', () => {
+      card.classList.add('go');
+      card.title = '누르면 목록에서 이 매물을 봅니다';
+      card.addEventListener('click', () => {
         map?.closePopup();
         big.value = false;
         emit('select', l);
       });
-      actions.appendChild(see);
     }
+    const actions = document.createElement('div');
+    actions.className = 'mp-actions';
+    // 단추와 링크를 누를 때는 카드 누름(목록에서 보기)으로 번지지 않게 한다.
+    actions.addEventListener('click', (e) => e.stopPropagation());
     const open = document.createElement('button');
     open.textContent = '원본 열기';
     open.addEventListener('click', () => emit('open', l));
     actions.appendChild(open);
-    // '📞 문의함'과 '📝 메모' 단추는 매물 카드에만 둔다(창에는 문의함 딱지와 메모 줄만 보인다).
+    // '📞 문의함'과 '📝 메모' 단추는 매물 카드에만 둔다.
     if (l.lat != null && l.lng != null) {
       const naver = document.createElement('a');
       naver.textContent = '네이버 지도 ↗';
@@ -569,8 +550,7 @@ function popup(g: Group) {
       actions.appendChild(site);
     }
     card.appendChild(actions);
-    row.append(top, card);
-    box.appendChild(row);
+    box.appendChild(card);
   }
   if (items.length > POPUP_MAX) {
     const more = document.createElement('div');
@@ -1375,7 +1355,6 @@ onBeforeUnmount(() => {
 :deep(.stack.meh span) { font-size: 10px; }
 :deep(.stack.one.meh span) { font-size: 8px; }
 .key-dot.meh-dot { display: inline-grid; place-items: center; color: #fff; font: normal 700 9px/1 var(--font); }
-:deep(.mp-tag.seen) { background: var(--surface); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
 :deep(.tip-site) { color: var(--muted); }
 /* 신규 딱지: 표시 오른쪽 위 모서리에 걸친다. 누르면 아래 표시가 눌리게 한다. */
 :deep(.nw), .nw-sample {
@@ -1386,22 +1365,20 @@ onBeforeUnmount(() => {
 :deep(.stack.one .nw) { top: -11px; right: -20px; }
 .nw-sample { display: inline-block; margin-left: 4px; vertical-align: 1px; }
 :deep(.st-tip) { color: var(--muted); font-size: 12px; }
-/* 매물을 카드로 묶어 한 건이 조금 길어져서, 3건까지는 스크롤 없이 보이게 높이를 잡는다. */
-:deep(.mp) { display: grid; gap: 10px; max-height: 400px; overflow: auto; font: 13px/1.45 var(--font); }
+/* 여러 건이면 창 안을 스크롤한다(높이 400px까지). */
+:deep(.mp) { display: grid; gap: 8px; max-height: 400px; overflow: auto; font: 13px/1.45 var(--font); }
 /* 건수 머리글: 아래에 구분선을 긋고, 창 안을 스크롤해도 맨 위에 남는다(흰 바탕으로 밑의 내용을 가림). */
 :deep(.mp-head) { position: sticky; top: 0; z-index: 1; padding-bottom: 8px; border-bottom: 1px solid var(--line); background: #fff; font-weight: 700; }
-/* 매물 하나: 가격 줄, 그 아래 정보 줄과 메모와 단추를 묶은 카드 */
-:deep(.mp-row) { display: grid; gap: 5px; }
-:deep(.mp-card) { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
-:deep(.mp-top) { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-:deep(.mp-facts) { display: flex; flex-wrap: wrap; gap: 0 10px; color: var(--muted); }
-:deep(.mp-key) { color: var(--ink); font-weight: 700; }
-:deep(.mp-tag) { padding: 0 6px; border-radius: 6px; font-size: 12px; font-weight: 700; }
-:deep(.mp-tag.new) { background: var(--new-soft); color: var(--new); }
-:deep(.mp-tag.down) { background: var(--down-soft); color: var(--down); }
-:deep(.mp-tag.star) { background: var(--star-soft); color: var(--star); }
-:deep(.mp-tag.danger) { background: #c92a2a; color: #fff; cursor: help; }
-:deep(.mp-tag.warn) { background: #fff4d6; color: #8a5a00; cursor: help; }
+/* 매물 하나 = 카드 하나: 위에 가격(가장 크게)과 평수, 아래 단추 줄 */
+:deep(.mp-card) { display: grid; gap: 8px; padding: 9px 10px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+/* 옆에 목록이 있으면 카드를 누르면 목록에서 그 매물을 고른다. */
+:deep(.mp-card.go) { cursor: pointer; }
+:deep(.mp-card.go:hover) { border-color: var(--line-strong); background: #e7ebee; }
+/* 가격 줄: 가격과 평수를 한 줄에 둔다(줄바꿈하지 않아 창 폭이 이 줄보다 좁아지지 않는다). */
+:deep(.mp-top) { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 10px; white-space: nowrap; }
+:deep(.mp-top strong) { font-size: 15px; font-weight: 800; color: var(--ink); }
+:deep(.mp-area) { font-weight: 700; color: var(--ink-2); }
+:deep(.mp-label) { margin-right: 1px; font-size: 12px; font-weight: 600; color: var(--muted); }
 /* 단추 줄은 줄바꿈하지 않는다(Leaflet이 이 줄 폭에 맞춰 창 폭을 정한다. 단추는 많아야 넷). */
 :deep(.mp-actions) { display: flex; flex-wrap: nowrap; gap: 6px; }
 :deep(.mp-actions button), :deep(.mp-actions a) {
@@ -1409,11 +1386,9 @@ onBeforeUnmount(() => {
   min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font: 600 13px var(--font); cursor: pointer;
 }
 :deep(.mp-more) { color: var(--muted); }
-/* 메모: 창의 메모 줄, 올리면 보이는 글의 메모(메모는 매물 카드에서 남긴다). 긴 메모는 창을 넓히지 않고 줄을 바꾼다. */
-:deep(.mp-memo) { padding: 2px 8px; border-left: 3px solid var(--star); border-radius: 4px; background: var(--star-soft); color: var(--ink-2); font-size: 12.5px; overflow-wrap: anywhere; white-space: normal; }
+/* 올리면 보이는 글의 메모 */
 :deep(.tip-note) { color: var(--star); }
-/* 문의함: 창의 딱지, 지도 표시 왼쪽 위 📞(가격을 쓴 표시는 가격 앞에 붙인다) */
-:deep(.mp-tag.contact) { background: var(--contact-soft); color: var(--contact); }
+/* 문의함: 지도 표시 왼쪽 위 📞(가격을 쓴 표시는 가격 앞에 붙인다) */
 :deep(.ph) {
   position: absolute; top: -11px; left: -13px; font-style: normal; font-size: 12px; line-height: 1;
   pointer-events: none; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .35));
