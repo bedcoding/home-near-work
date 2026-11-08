@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import L from 'leaflet';
-import { boundaryOf, regionBounds, regionColor, regionBoundaries } from '../../../shared/region-geometry';
+import { boundaryOf, pointInGeometry, regionBounds, regionColor, regionBoundaries } from '../../../shared/region-geometry';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { SOURCE_LABEL, type Area, type DealType, type ListingView, type PriceOption } from '../../../shared/types';
 import { loadCatalog, type CatalogStation } from '../areaActions';
@@ -727,9 +727,39 @@ function pinPopup(id: string) {
 /** 지역이 이보다 많으면(노선 하나를 켠 때 등) 지역 이름을 늘 띄우지 않는다(겹쳐서 지도를 가림). */
 const AREA_LABEL_MAX = 12;
 
+/** 이름을 늘 띄우지 않는 구 경계(지역이 AREA_LABEL_MAX보다 많을 때). 마우스가 그 구 안에 들어가면 이름을 띄운다(onDistrictHover). */
+interface HoverDistrict {
+  layer: L.GeoJSON;
+  bounds: L.LatLngBounds;
+  geometry: Parameters<typeof pointInGeometry>[0];
+}
+let hoverDistricts: HoverDistrict[] = [];
+/** 지금 마우스를 올려 이름을 띄운 구 경계 */
+let hoveredDistrict: L.GeoJSON | null = null;
+
+/**
+ * 구 경계는 마우스를 받지 않아서(칠한 면이 그 아래 역과 정비구역을 가리지 않게) 마우스를 올려도 이름이 저절로 뜨지 않는다.
+ * 그래서 지도 위 마우스 자리가 어느 구 안인지 여기서 따져 그 구의 이름만 띄운다.
+ */
+function onDistrictHover(e: MouseEvent) {
+  if (!map || !hoverDistricts.length) return;
+  const at = map.mouseEventToLatLng(e);
+  const hit = hoverDistricts.find((d) => d.bounds.contains(at) && pointInGeometry(d.geometry, at.lat, at.lng))?.layer ?? null;
+  if (hit === hoveredDistrict) return;
+  hoveredDistrict?.closeTooltip();
+  hit?.openTooltip();
+  hoveredDistrict = hit;
+}
+function clearDistrictHover() {
+  hoveredDistrict?.closeTooltip();
+  hoveredDistrict = null;
+}
+
 /** 지역 원. 역 이름이 아닌 지역(지도에서 찍은 곳)은 가운데에 마름모를 두고, 누르면 area 이벤트로 끈다. */
 function drawBase() {
   if (!base) return;
+  clearDistrictHover();
+  hoverDistricts = [];
   base.clearLayers();
   const stationNames = new Set(stations.value.map((s) => s.name));
   const labels = props.areas.length <= AREA_LABEL_MAX;
@@ -741,9 +771,11 @@ function drawBase() {
       if (feature && !drawn.has(code)) {
         drawn.add(code);
         const color = regionColor(code);
-        const layer = L.geoJSON(feature, { style: { color, fillColor: color, weight: 2.5, fillOpacity: 0.12 } });
-        // 구 이름은 범례 대신 구역 가운데에 붙인다(지역이 많으면 마우스를 올릴 때만).
+        // 구 경계는 마우스를 받지 않는다. 받으면 칠한 면이 그 아래 역(누르면 알림 켜고 끔)과 정비구역(올리면 이름)을 가린다.
+        const layer = L.geoJSON(feature, { style: { color, fillColor: color, weight: 2.5, fillOpacity: 0.12 }, interactive: false });
+        // 구 이름은 범례 대신 구역 가운데에 붙인다(지역이 많으면 마우스가 그 구 안에 있을 때만).
         layer.bindTooltip(`${esc(a.region.sigungu)}${a.region.kind === 'gu' ? '' : ' (참고용 구 경계)'}`, { permanent: labels, direction: 'center', className: 'area-label' }).addTo(base);
+        if (!labels) hoverDistricts.push({ layer, bounds: layer.getBounds(), geometry: feature.geometry });
       }
       continue;
     }
@@ -1060,7 +1092,7 @@ function canvasMarkerAt(p: L.Point) {
   return false;
 }
 /**
- * 캔버스는 지도 전체를 덮어서 그냥 두면 아래의 역(누르면 알림 켜고 끔), 정비구역(올리면 이름), 구 경계가 마우스를 못 받는다.
+ * 캔버스는 지도 전체를 덮어서 그냥 두면 아래의 역(누르면 알림 켜고 끔)과 정비구역(올리면 이름)이 마우스를 못 받는다.
  * 그래서 캔버스 칸은 평소 마우스를 흘려보내고, 마우스가 캔버스 표시 위에 올라가면 그때만 받아 Leaflet이 누름과 글을 처리하게 한다.
  */
 function onMapPointer(e: MouseEvent) {
@@ -1169,6 +1201,8 @@ onMounted(() => {
   dotCanvas = (dotRenderer as unknown as { _container: HTMLCanvasElement })._container;
   el.value.addEventListener('mousemove', onMapPointer, { passive: true });
   el.value.addEventListener('mouseleave', onMapLeave);
+  el.value.addEventListener('mousemove', onDistrictHover, { passive: true });
+  el.value.addEventListener('mouseleave', clearDistrictHover);
   // 핀은 지역 이름표(툴팁 층 650)보다 위, 정보 창(700)보다 아래에 그린다(역 자리에 꽂아도 이름표에 가리지 않게).
   map.createPane('walkpins').style.zIndex = '660';
   stationLayer = L.layerGroup().addTo(map);
@@ -1257,6 +1291,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey);
   el.value?.removeEventListener('mousemove', onMapPointer);
   el.value?.removeEventListener('mouseleave', onMapLeave);
+  el.value?.removeEventListener('mousemove', onDistrictHover);
+  el.value?.removeEventListener('mouseleave', clearDistrictHover);
   resize?.disconnect();
   if (map) {
     // 확대 애니메이션 중에 지우면 Leaflet이 250ms 뒤 이미 지운 칸을 읽다가 오류를 내서, 애니메이션 표시를 끄고 지운다.
@@ -1268,6 +1304,8 @@ onBeforeUnmount(() => {
   base = dots = stationLayer = zoneLayer = pinLayer = null;
   dotRenderer = null;
   dotCanvas = null;
+  hoverDistricts = [];
+  hoveredDistrict = null;
   shown = null;
   spotCache = null;
   drawn.clear();
