@@ -1441,8 +1441,10 @@ h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 .livelog { margin: 0; padding: 12px 24px; background: var(--ink); color: #e8edf3; font-size: 13px; max-height: 240px; overflow: auto; white-space: pre-wrap; }
-.err, .error { color: var(--new); font-weight: 600; }
-.error { margin: 8px 24px 0; }
+/* 오류 문구 줄(p.error)에만 건다. 조회 진행 칩(li.run-site)도 상태가 error면 같은 클래스가 붙어서,
+   예전에는 그 칩에 위와 좌우 여백이 붙어 칩 사이가 벌어지고 같은 줄의 다른 칩이 늘어나 글자가 위로 붙었다. */
+.err, p.error { color: var(--new); font-weight: 600; }
+p.error { margin: 8px 24px 0; }
 .small { font-size: 13px; }
 
 .layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-areas: 'filters content'; gap: 24px; padding: 22px 28px 60px; align-items: start; }
