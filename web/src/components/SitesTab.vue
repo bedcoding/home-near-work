@@ -244,7 +244,7 @@ const scopeCoverage = computed(() => report.value?.scopeCoverage?.[site.value.id
       <summary><h3>사이트별 수집 기준</h3><small class="muted">사이트마다 모으는 범위가 다릅니다. 사이트를 누르면 자세한 기준을 봅니다.</small></summary>
       <dl class="scopes">
         <template v-for="row in scopeRows" :key="row.kind">
-          <dt><span class="kind" :class="row.kind">{{ SCOPE_KIND_LABEL[row.kind] }}</span></dt>
+          <dt><span class="kind" :class="`k-${row.kind}`">{{ SCOPE_KIND_LABEL[row.kind] }}</span></dt>
           <dd>
             <button v-for="x in row.sites" :key="x.site.id" type="button" class="scope-site" :class="{ on: x.site.id === picked }"
               :aria-pressed="x.site.id === picked" :title="`${x.scope.how} 확인하지 않는 것: ${x.scope.limit}`" @click="picked = x.site.id">
@@ -279,7 +279,7 @@ const scopeCoverage = computed(() => report.value?.scopeCoverage?.[site.value.id
       </header>
 
       <div v-if="siteScope" class="block scope-detail">
-        <h3>수집 기준 <span class="kind" :class="siteScope.kind">{{ SCOPE_KIND_LABEL[siteScope.kind] }}</span><small>{{ siteScope.short }}, {{ siteScope.by }}</small></h3>
+        <h3>수집 기준 <span class="kind" :class="`k-${siteScope.kind}`">{{ SCOPE_KIND_LABEL[siteScope.kind] }}</span><small>{{ siteScope.short }}, {{ siteScope.by }}</small></h3>
         <p>{{ siteScope.how }}</p>
         <p class="muted"><b>확인하지 않는 것:</b> {{ siteScope.limit }}</p>
         <ul v-if="scopeCoverage.length" class="coverage">
@@ -439,9 +439,9 @@ h3 small { font-size: 13px; font-weight: 500; color: var(--muted); }
 .scope-site:hover, .scope-site.on { background: var(--surface-2); border-color: var(--line-strong); }
 @media (max-width: 520px) { .scopes { grid-template-columns: 1fr; } .scopes dt { padding-top: 0; } }
 .kind { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
-.kind.region { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--ink); }
-.kind.site { background: color-mix(in srgb, var(--down) 10%, transparent); color: var(--ink); }
-.kind.station, .kind.map { background: color-mix(in srgb, var(--up) 16%, transparent); color: var(--ink); }
+.kind.k-region { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--ink); }
+.kind.k-site { background: color-mix(in srgb, var(--down) 10%, transparent); color: var(--ink); }
+.kind.k-station, .kind.k-map { background: color-mix(in srgb, var(--up) 16%, transparent); color: var(--ink); }
 .scope-detail p { margin: 0; font-size: 14px; line-height: 1.55; }
 .scope-detail h3 small { font-weight: 500; }
 .coverage { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }

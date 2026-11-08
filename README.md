@@ -6,9 +6,9 @@
 
 ![매물 탭: 가격대로 묶은 목록, 펼친 매물 카드, 지도](assets/readme/listings-cards.jpg)
 
-![사이트별 탭: 사이트마다 모으는 범위와 받은 건수](assets/readme/sites.png)
+![지도에서 가격 표시를 눌러 연 말풍선](assets/readme/map-popup.jpg)
 
-> 화면 캡처는 지어낸 매물로 만든 시연용 데이터입니다. 사이트 이름도 가명으로 바꿨습니다(예: 네이불, 나방, 칙방).
+![사이트별 탭: 사이트마다 모으는 범위와 받은 건수](assets/readme/sites.png)
 
 ## 하는 일
 
