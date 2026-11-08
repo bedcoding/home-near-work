@@ -6,7 +6,7 @@ import { floorText, money, priceText, yesNo } from '../../shared/format.js';
 import type { Area, DealType, ExplainRow, NormalizedListing, PriceOption, Station } from '../../shared/types.js';
 
 // 집토스 역 페이지(/map/역이름)는 서버에서 매물 목록을 담아 보내 준다.
-// 페이지를 연 뒤 그 목록을 읽고, 화면의 카드와 아래쪽 표에 표시를 달면서 페이지를 끝까지 내려 보여 준다.
+// 페이지를 연 뒤 그 목록을 읽고, 화면의 카드와 아래쪽 표에 배지(신규, 기존, 버림, 관심)를 달면서 페이지를 끝까지 내려 보여 준다.
 
 /** 화면의 매물 링크에 쓰이는 키. */
 export const ziptossKey = (id: number | string) => (BigInt(id) * 16668430n - 9999n).toString(16);
@@ -159,12 +159,12 @@ export const ziptoss: Collector = {
         area: l.areaM2,
         prices: l.prices.map((p) => ({ amount: p.deposit ?? p.price, monthly: p.monthly })),
       }));
-      const tagged = await page.evaluate((list) => {
+      // 위쪽 카드는 일부 매물만 보여 주므로 세지 않고, 매물이 다 나오는 아래쪽 표에서 몇 건을 찾았는지만 센다.
+      const tableRows = await page.evaluate((list) => {
         const parseMoney = (s: string) => {
           const m = s.replace(/[,\s]/g, '').match(/^(?:(\d+)억)?(\d+)?$/);
           return m ? Number(m[1] ?? 0) * 10000 + Number(m[2] ?? 0) : null;
         };
-        let cards = 0;
         let rows = 0;
         for (const card of Array.from(document.querySelectorAll<HTMLElement>('li'))) {
           if (card.closest('table') || !card.querySelector('[style*="background-image"]')) continue;
@@ -175,10 +175,7 @@ export const ziptoss: Collector = {
           const amount = parseMoney(price[2]);
           const monthly = price[3] ? Number(price[3].replace(/,/g, '')) : null;
           const hit = list.find((it) => it.area != null && Math.abs(it.area - area) < 0.05 && it.prices.some((p) => p.amount === amount && (p.monthly ?? null) === monthly));
-          if (hit) {
-            card.setAttribute('data-hnw-id', hit.id);
-            cards += 1;
-          }
+          if (hit) card.setAttribute('data-hnw-id', hit.id);
         }
         for (const it of list) {
           const cell = document.querySelector(`a[href*="propertyKey=${it.key}"]`)?.closest('tr')?.querySelector('td');
@@ -187,9 +184,8 @@ export const ziptoss: Collector = {
             rows += 1;
           }
         }
-        return { cards, rows };
+        return rows;
       }, summaries);
-      ctx.log(`집토스: ${station.name} 위쪽 카드 ${tagged.cards}개, 아래쪽 표 ${tagged.rows}줄에 표시를 붙였습니다(목록 ${listings.length}건)`);
 
       const tones = ctx.classify(listings);
       await session.badges(listings.map((l) => ({ selector: `[data-hnw-id="${l.sourceId}"]`, tone: tones.get(l.sourceId) ?? 'new' })), 60);
@@ -197,19 +193,24 @@ export const ziptoss: Collector = {
       await session.pause(800);
       const shot = await session.screenshot('ziptoss', station.name);
 
-      // 창으로 볼 때는 페이지를 끝까지 천천히 내려서, 아래쪽 표의 매물까지 전부 표시가 붙은 걸 보여 준다.
+      // 창으로 볼 때는 페이지를 끝까지 천천히 내려서, 아래쪽 표의 매물까지 전부 배지가 붙은 걸 보여 준다.
       if (session.visible) {
         const height = await page.evaluate(() => document.documentElement.scrollHeight);
         const steps = Math.min(Math.ceil(height / 700), 25);
         for (let s = 0; s < steps; s++) {
-          ctx.progress(`집토스, ${station.name}, 읽은 매물 ${listings.length}건 표시 확인 중 (${s + 1}/${steps})`);
+          ctx.progress(`집토스, ${station.name}, ${listings.length}건 읽음, 배지 붙은 화면을 내려 보는 중 (${s + 1}/${steps})`);
           await session.wheel(900, 500, 700);
           await session.pause(450);
         }
       }
 
       for (const { raw, listing } of pairs) items.push({ listing, raw, pageUrl: url, screenshot: shot });
-      ctx.log(`집토스: ${station.name} 페이지에서 ${listings.length}건`);
+      // 표에서 못 찾은 매물도 저장은 되고 화면에 배지만 안 붙는다. 그런 매물이 있을 때만 덧붙인다.
+      const missing = listings.length - tableRows;
+      const note = missing <= 0 ? '' : tableRows === 0
+        ? ', 화면 표에서 하나도 찾지 못해 배지를 못 붙임(화면 구조가 바뀌었을 수 있음)'
+        : `, 그중 ${missing}건은 화면 표에서 찾지 못해 배지를 못 붙임`;
+      ctx.log(`집토스: ${station.name} ${listings.length}건 읽음${note}`);
       await session.pause(PAGE_DELAY_MS);
     }
     return items;
