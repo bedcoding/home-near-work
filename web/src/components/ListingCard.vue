@@ -488,7 +488,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       'meta    more'
       'actions actions';
   }
-  .actions { flex-wrap: wrap; justify-content: flex-start; }
+  .actions { flex-wrap: nowrap; justify-content: flex-start; }
 }
 /* 더 좁으면 사진은 숫자 줄 옆에만 두고, 주소와 버튼은 카드 너비를 다 쓴다. 숫자 칸도 조금 좁힌다. */
 @container (max-width: 780px) {
@@ -503,7 +503,9 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
   .stat.price { min-width: 136px; }
   .stat.floor { min-width: 44px; }
   .stat.dist { width: 72px; }
-  .actions { display: flex; flex-wrap: wrap; justify-content: flex-start; }
+  /* 버튼 여섯 개를 한 줄에 두고, 자리가 모자라면 버튼 안쪽 여백부터 줄인다. */
+  .actions { display: flex; flex-wrap: nowrap; justify-content: flex-start; }
+  .actions .btn { flex: 1 1 auto; min-width: 0; overflow: hidden; }
   .more { justify-content: flex-start; margin-left: -8px; }
 }
 @container (max-width: 480px) {

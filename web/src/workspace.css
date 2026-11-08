@@ -1066,3 +1066,9 @@ html[data-design='workspace'] .toast.err {
     transition: none;
   }
 }
+
+/* 지도 옆 좁은 목록: 카드 버튼을 한 줄에 두려고 버튼 안쪽 여백과 사이를 줄인다(ListingCard의 같은 폭 규칙과 짝). */
+@container (max-width: 780px) {
+  html[data-design='workspace'] .card .actions { gap: 4px; }
+  html[data-design='workspace'] .card .actions .btn { padding-inline: 6px; }
+}
