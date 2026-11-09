@@ -1,6 +1,7 @@
 import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, LineViewSetting, RedevZonesView, RentView, RunDetail, RunInfo, RunScope, SeenRef, SiteReport, SourceId, Station, Verdict } from '../../shared/types';
 import type { Filters } from '../../shared/filters';
 import type { WalkPin, WalkView } from '../../shared/walk';
+import { LISTINGS_TOKEN_HEADER, type ListingsDelta, type ListingsReply } from '../../shared/listings-delta';
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -17,7 +18,16 @@ const enc = encodeURIComponent;
 
 export const api = {
   state: () => request<AppState>('GET', '/api/state'),
-  listings: () => request<ListingView[]>('GET', '/api/listings'),
+  /**
+   * 매물 목록. since(지난번에 받은 목록 버전)를 주면 서버가 그 뒤로 바뀐 매물만 보낸다(모르는 버전이면 전체).
+   * 전체 목록은 예전처럼 배열로 오고 그 목록 버전은 응답 머리로 온다(예전 서버면 없어서 null).
+   */
+  listings: async (since: string | null = null): Promise<ListingsReply<ListingView>> => {
+    const res = await fetch(since ? `/api/listings?since=${enc(since)}` : '/api/listings');
+    const data: unknown = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data as { error?: string }).error ?? `요청이 실패했습니다 (${res.status})`);
+    return Array.isArray(data) ? { token: res.headers.get(LISTINGS_TOKEN_HEADER), listings: data as ListingView[] } : (data as ListingsDelta<ListingView>);
+  },
   /** 사이트별 탭: 소스마다 최근 조회 기록과 크롬 확장 사이트가 받은 화면 데이터 요약 */
   siteReport: () => request<SiteReport>('GET', '/api/site-report'),
   raw: (id: string) => request<{ explain: ExplainRow[]; raw: unknown }>('GET', `/api/listings/${enc(id)}/raw`),

@@ -1,19 +1,21 @@
 import { Worker } from 'node:worker_threads';
+import type { ListingsJson } from './listings-cache.js';
 
 /**
  * 매물 목록 응답(GET /api/listings의 JSON)을 만들어 두고 내준다.
  * 목록은 수만 건(수십 MB)이라 만드는 데 2초쯤 걸리고, 본 스레드에서 만들면 그동안 서버 전체(상태 폴링, 크롬 확장 자료 저장, 버림 저장)가 기다린다.
  * 그래서 워커(listings-worker.ts)에서 만들고, 워커를 못 띄우거나 워커가 죽으면 그때만 예전처럼 본 스레드에서 만든다.
+ * 만든 목록은 매물 id 순서와 매물마다 경계를 같이 둔다(encodeListings). 변화분 응답(listings-cache.ts)이 바뀐 매물만 잘라 보낸다.
  */
 
-/** 워커가 돌려주는 것: 목록 JSON의 UTF-8 바이트(복사 없이 넘어온다), 또는 만들지 못한 까닭. */
-export type ListingsWorkerReply = { ok: true; bytes: Uint8Array } | { ok: false; error: string };
+/** 워커가 돌려주는 것: 목록 JSON의 UTF-8 바이트, 매물 id 순서, 매물마다 경계(바이트와 경계는 복사 없이 넘어온다), 또는 만들지 못한 까닭. */
+export type ListingsWorkerReply = { ok: true; body: Uint8Array; ids: string[]; offsets: Uint32Array } | { ok: false; error: string };
 
 export interface ListingsBodyOptions {
   /** 자료 버전(DB에 무엇이든 쓰면 바뀐다). 같은 버전이면 만들어 둔 것을 다시 쓴다. */
   revision: () => string;
-  /** 본 스레드에서 목록 JSON을 만든다. 워커를 쓰지 못할 때만 부른다. */
-  buildHere: () => string;
+  /** 본 스레드에서 목록 JSON을 만든다(encodeListings). 워커를 쓰지 못할 때만 부른다. */
+  buildHere: () => ListingsJson;
   /** 워커를 띄운다(시험에서 바꿔 끼운다). */
   startWorker?: () => Worker;
   /** 만들어 둔 것을 쓰는 시간. 날짜에 따라 달라지는 표시가 오래 묵지 않게 둔다. */
@@ -49,7 +51,7 @@ export function createListingsBody(options: ListingsBodyOptions) {
   const {
     revision, buildHere, startWorker = startListingsWorker, cacheMs = 10 * 60_000, timeoutMs = 60_000, idleMs = 60_000, log = console.error,
   } = options;
-  type Built = { revision: string; at: number; body: Buffer };
+  type Built = { revision: string; at: number; json: ListingsJson };
   let cache: Built | null = null;
   /** 지금 만드는 것과 만들기 전에 기억한 자료 버전 */
   let running: { revision: string; done: Promise<Built> } | null = null;
@@ -72,12 +74,12 @@ export function createListingsBody(options: ListingsBodyOptions) {
     void w.terminate();
   }
 
-  function buildInWorker(): Promise<Buffer> {
-    return new Promise<Buffer>((resolve, reject) => {
+  function buildInWorker(): Promise<ListingsJson> {
+    return new Promise<ListingsJson>((resolve, reject) => {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = null;
       const w = (worker ??= spawn());
-      const finish = (error: Error | null, body?: Buffer) => {
+      const finish = (error: Error | null, json?: ListingsJson) => {
         clearTimeout(timer);
         w.off('message', onMessage).off('error', onError).off('exit', onExit);
         if (error) {
@@ -89,10 +91,12 @@ export function createListingsBody(options: ListingsBodyOptions) {
         w.unref();
         idleTimer = setTimeout(() => retire(w), idleMs);
         idleTimer.unref();
-        resolve(body!);
+        resolve(json!);
       };
       const onMessage = (reply: ListingsWorkerReply) =>
-        reply.ok ? finish(null, Buffer.from(reply.bytes.buffer, reply.bytes.byteOffset, reply.bytes.byteLength)) : finish(new Error(reply.error));
+        reply.ok
+          ? finish(null, { body: Buffer.from(reply.body.buffer, reply.body.byteOffset, reply.body.byteLength), ids: reply.ids, offsets: reply.offsets })
+          : finish(new Error(reply.error));
       const onError = (e: Error) => finish(e);
       const onExit = (code: number) => finish(new Error(`워커가 끝났습니다(종료 코드 ${code}).`));
       const timer = setTimeout(() => finish(new Error(`${Math.round(timeoutMs / 1000)}초 안에 끝나지 않았습니다.`)), timeoutMs);
@@ -102,44 +106,50 @@ export function createListingsBody(options: ListingsBodyOptions) {
     });
   }
 
-  async function build(): Promise<Buffer> {
+  async function build(): Promise<ListingsJson> {
     if (failures < MAX_WORKER_FAILURES) {
       try {
-        const body = await buildInWorker();
+        const json = await buildInWorker();
         failures = 0;
-        return body;
+        return json;
       } catch (e) {
         failures++;
         log(`매물 목록을 워커에서 만들지 못해 본 스레드에서 만듭니다: ${messageOf(e)}`);
         if (failures === MAX_WORKER_FAILURES) log(`워커가 ${MAX_WORKER_FAILURES}번 연달아 실패해 서버를 다시 켤 때까지 매물 목록은 본 스레드에서 만듭니다.`);
       }
     }
-    return Buffer.from(buildHere());
+    return buildHere();
   }
 
   function start(): Promise<Built> {
     // 자료 버전은 만들기 전에 기억한다. 만드는 중에 쓴 것은 버전이 달라져 다음 요청에서 다시 만든다.
     const at = revision();
-    const done = build().then((body) => (cache = { revision: at, at: Date.now(), body }));
+    const done = build().then((json) => (cache = { revision: at, at: Date.now(), json }));
     const current = { revision: at, done };
     running = current;
     done.then(() => {}, () => {}).then(() => { if (running === current) running = null; });
     return done;
   }
 
-  /** 지금 자료 버전의 목록 JSON(UTF-8). 버전이 같고 cacheMs가 안 지났으면 만들어 둔 것을 그대로 준다. */
-  async function body(): Promise<Buffer> {
+  /**
+   * 지금 자료 버전의 목록 JSON(본문, 매물 id 순서, 매물마다 경계). 버전이 같고 cacheMs가 안 지났으면 만들어 둔 것을 그대로 준다.
+   * 같은 것을 다시 줄 때는 같은 객체다.
+   */
+  async function json(): Promise<ListingsJson> {
     const now = revision();
-    if (cache?.revision === now && Date.now() - cache.at < cacheMs) return cache.body;
-    if (running?.revision === now) return (await running.done).body;
-    if (!running) return (await start()).body;
+    if (cache?.revision === now && Date.now() - cache.at < cacheMs) return cache.json;
+    if (running?.revision === now) return (await running.done).json;
+    if (!running) return (await start()).json;
     // 앞선 버전을 만드는 중이면 끝난 뒤 한 번 더 만든다. 그사이 들어온 요청은 버전이 달라도 그것을 같이 기다린다(그 만들기가 더 나중에 읽으므로 모두 담긴다).
     next ??= running.done.then(() => {}, () => {}).then(() => {
       next = null;
       return start();
     });
-    return (await next).body;
+    return (await next).json;
   }
+
+  /** 지금 자료 버전의 목록 JSON(UTF-8) */
+  const body = async (): Promise<Buffer> => (await json()).body;
 
   /** 워커를 끈다(시험이 끝날 때). */
   async function close() {
@@ -150,5 +160,5 @@ export function createListingsBody(options: ListingsBodyOptions) {
     if (w) await w.terminate();
   }
 
-  return { body, close };
+  return { body, json, close };
 }

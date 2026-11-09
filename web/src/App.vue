@@ -8,6 +8,7 @@ import {
 } from '../../shared/types';
 import { api } from './api';
 import { createRevisionRefresh } from './refresh';
+import { createListingsSync } from './listingsSync';
 import { isPick, NOTE_MAX, onMarks, picksOnly, touchMarks } from './marks';
 import { reloadZones, zonesNeedReload } from './redevZones';
 import { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, loadFilters, passes, plainFilters, saveFilters, type Filters } from './filters';
@@ -64,6 +65,7 @@ const tab = ref<Tab>(urlTab && TABS.includes(urlTab) ? urlTab : savedTab && TABS
 if (urlParam) history.replaceState(null, '', location.pathname);
 const state = ref<AppState | null>(null);
 // 매물은 수만 건이라 깊은 감시(ref)를 걸면 받을 때마다 화면이 몇 초씩 멈춘다. 목록을 통째로 바꿀 때만 다시 그린다(직접 고치면 triggerRef).
+// 새로 받을 때는 바뀐 매물만 새 객체로 바꾼 배열이 오고(listingsSync), 바뀐 매물이 없으면 배열도 그대로다.
 const listings = shallowRef<ListingView[]>([]);
 const filters = ref(loadFilters());
 /** 필터의 평범한 복사본. 매물을 도는 계산은 filters 대신 이것을 반복 밖에서 한 번 읽는다(plainFilters 설명). */
@@ -566,10 +568,12 @@ async function refreshState() {
 /** 매물 목록을 받는 중인 요청 수와, 한 번이라도 다 받았는지(처음에는 0건이 아니라 불러오는 중으로 보인다) */
 const listingsLoading = ref(0);
 const listingsLoaded = ref(false);
+/** 지난번에 받은 목록 버전부터 바뀐 매물만 받아 가진 목록에 합친다(서버가 그 버전을 모르면 전체를 받는다). */
+const listingsSync = createListingsSync((since) => api.listings(since));
 async function refreshListings() {
   listingsLoading.value += 1;
   try {
-    listings.value = await api.listings();
+    listings.value = await listingsSync(() => listings.value);
     listingsLoaded.value = true;
   } finally {
     listingsLoading.value -= 1;
@@ -581,7 +585,10 @@ const baseRateKey = computed(() => {
   const b = state.value?.baseRate;
   return b ? `${b.value}|${b.date}` : '';
 });
-/** 마지막으로 전환율을 낸 매물 목록과 기준금리. '봤음'이나 버림처럼 같은 목록의 표시만 바꾼 때(triggerRef)는 가격이 그대로라 다시 내지 않는다. */
+/**
+ * 마지막으로 전환율을 낸 매물 목록과 기준금리. '봤음'이나 버림처럼 같은 목록의 표시만 바꾼 때(triggerRef)는 가격이 그대로라 다시 내지 않는다.
+ * 새로 받은 목록에 바뀐 매물이 하나라도 있으면 새 배열이라 다시 낸다(바뀐 매물의 가격이 중간값을 바꿀 수 있다).
+ */
 let rateFor: { list: ListingView[]; key: string } | null = null;
 watch([listings, baseRateKey], () => {
   if (rateFor && rateFor.list === listings.value && rateFor.key === baseRateKey.value) return;
@@ -748,7 +755,8 @@ async function saveSeen(items: ListingView[]) {
     const r = await api.seen(todo.map((l) => l.id));
     refreshData.advance(r.before, r.after);
   } catch {
-    // 저장하지 못했으면 다음 새로고침 때 서버에 남은 상태로 돌아간다.
+    // 저장하지 못했으면 다음 새로고침 때 서버에 남은 상태로 돌아간다. 서버에서는 이 매물이 그대로라 변화분에 오지 않으므로 그때는 전체를 받는다.
+    listingsSync.forget();
   }
 }
 

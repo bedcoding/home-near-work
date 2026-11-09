@@ -7,12 +7,15 @@ import test from 'node:test';
 import Database from 'better-sqlite3';
 import { createListingsBody } from '../server/listings-body.ts';
 
+/** 워커 답과 같은 모양. 이 시험들은 캐시와 워커 다루기만 보므로 매물 경계는 비우고 본문만 담는다. */
+const bodyOnly = (text) => ({ body: Buffer.from(text), ids: [], offsets: Uint32Array.of(1) });
+
 /** 시험이 직접 답하는 가짜 워커. 만들기를 부탁받을 때마다 requests가 는다. */
 class FakeWorker extends EventEmitter {
   requests = 0;
   terminated = false;
   postMessage() { this.requests++; }
-  reply(text) { this.emit('message', { ok: true, bytes: new TextEncoder().encode(text) }); }
+  reply(text) { this.emit('message', { ok: true, ...bodyOnly(text) }); }
   fail(error) { this.emit('message', { ok: false, error }); }
   crash() { this.emit('error', new Error('synthetic crash')); }
   ref() {}
@@ -104,7 +107,7 @@ test('워커를 못 띄우거나 워커가 죽거나 늦으면 본 스레드에�
   const logs = [];
   const listings = createListingsBody({
     revision: () => String(revision),
-    buildHere: () => `["here ${revision}"]`,
+    buildHere: () => bodyOnly(`["here ${revision}"]`),
     startWorker: () => {
       starts++;
       if (starts === 1) throw new Error('synthetic start failure');
@@ -210,7 +213,13 @@ test('실제 워커는 임시 DB에서 본 스레드와 바이트까지 같은 �
   const body = await listings.body();
   assert.deepEqual(logs, []);
   assert.equal(store.dataRevision(), before, '워커는 DB에 쓰지 않는다(자료 버전 그대로)');
-  assert.ok(body.equals(Buffer.from(JSON.stringify(buildListingViews()))), '본 스레드에서 만든 것과 바이트까지 같다');
+  const views = buildListingViews();
+  assert.ok(body.equals(Buffer.from(JSON.stringify(views))), '본 스레드에서 만든 것과 바이트까지 같다');
+  // 변화분 응답이 쓰는 매물 id 순서와 매물마다 경계도 같이 넘어온다.
+  const json = await listings.json();
+  assert.equal(json.body, body);
+  assert.deepEqual(json.ids, views.map((l) => l.id));
+  views.forEach((l, i) => assert.equal(json.body.subarray(json.offsets[i], json.offsets[i + 1] - 1).toString('utf8'), JSON.stringify(l)));
   const list = JSON.parse(body.toString('utf8'));
   assert.deepEqual(list.map((l) => l.id).sort(), ['dabang:1', 'naver:1', 'peterpanz:1', 'ziptoss:1']);
   assert.equal(list.find((l) => l.id === 'dabang:1').verdict, 'discard');

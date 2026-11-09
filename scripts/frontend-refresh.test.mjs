@@ -7,6 +7,7 @@ import { compileScript, parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import * as vue from 'vue';
 import * as sharedFilters from '../shared/filters.ts';
+import { createListingsCache, encodeListings } from '../server/listings-cache.ts';
 
 // 실제 App setup과 폴링을 실행하되 API, 브라우저, 타이머는 모두 메모리 안의 가짜 객체를 쓴다.
 // 서버 모듈, 로컬 설정, 데이터베이스와 외부 네트워크는 읽거나 실행하지 않는다.
@@ -25,12 +26,35 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 function appHarness(t) {
   storage.clear();
   const state = { dataRevision: 'session-a:1', running: null, naverCapture: { total: 0 }, newNotices: 0, gus: [], areas: [], autoCheck: { visible: true } };
-  const data = { listings: [], market: { fixture: 'market' }, failNotices: false, failMarket: false, failVerdict: false };
-  const calls = { listings: 0, notices: 0, market: 0, zones: 0, verdict: 0 };
+  const data = { listings: [], market: { fixture: 'market' }, failNotices: false, failMarket: false, failVerdict: false, failSeen: false };
+  const calls = { listings: 0, since: [], deltas: 0, notices: 0, market: 0, zones: 0, verdict: 0 };
   const mounted = [];
+  // 서버처럼 지난번에 보낸 목록 버전(since)을 알면 바뀐 매물만, 모르면 전체를 보낸다. 매물은 JSON으로 오가 새 객체로 온다.
+  let cache = createListingsCache();
+  let remembered = null;
+  const server = { restart() { cache = createListingsCache(); remembered = null; } };
   const api = {
     state: async () => ({ ...state }),
-    listings: async () => { calls.listings += 1; return data.listings; },
+    listings: async (since = null) => {
+      calls.listings += 1;
+      calls.since.push(since);
+      if (remembered !== data.listings) {
+        cache.remember(encodeListings(data.listings));
+        remembered = data.listings;
+      }
+      const delta = since ? cache.since(since) : null;
+      if (delta) {
+        calls.deltas += 1;
+        return JSON.parse(delta.toString());
+      }
+      return { token: cache.token(), listings: JSON.parse(cache.full().toString()) };
+    },
+    seen: async () => {
+      if (data.failSeen) throw new Error('fixture unavailable');
+      const before = state.dataRevision;
+      state.dataRevision = `${before}+seen`;
+      return { before, after: state.dataRevision };
+    },
     notices: async () => { calls.notices += 1; if (data.failNotices) throw new Error('fixture unavailable'); return { notices: [], sources: {} }; },
     auctionResults: async () => ({ results: [], stats: [], compare: [] }),
     houseTrades: async () => ({ fetchedAt: null }),
@@ -68,7 +92,7 @@ function appHarness(t) {
     document: { addEventListener() {}, querySelector() { return null; } },
   }, { filename: 'App.synthetic-test.cjs' });
   const app = scope.run(() => exports.default.setup({}, { expose() {} }));
-  return { app, state, data, calls, mount: async () => { for (const fn of mounted) await fn(); await settle(); } };
+  return { app, state, data, calls, server, mount: async () => { for (const fn of mounted) await fn(); await settle(); } };
 }
 
 test('확장 응답 저장 뒤 지연 파싱이 끝나면 같은 네이버 건수에서도 목록을 갱신한다', async (t) => {
@@ -216,6 +240,67 @@ test('버림으로 고른 매물이 빠져 다음 매물이 골라지면 지도�
   h.app.onKey(key('k'));
   assert.equal(h.app.selectedId.value, 'a');
   assert.equal(h.app.panToSelected.value, true, '키로 직접 옮기면 지도도 따라간다');
+});
+
+test('매물 몇 건이 바뀌면 그 매물만 받아 합치고, 바뀌지 않은 매물은 같은 객체로 둔다', async (t) => {
+  const h = appHarness(t);
+  h.data.listings = [listing('a'), listing('b', { lat: 37.6 }), listing('c', { lat: 37.7 })];
+  await h.mount();
+  const before = h.app.listings.value;
+  const [a, b, c] = before;
+  h.data.listings = [listing('a'), listing('b', { lat: 37.6, prices: [{ deal: 'monthly', deposit: 2000, monthly: 40, price: null }] }), listing('c', { lat: 37.7 }), listing('d', { lat: 37.8 })];
+  h.state.dataRevision = 'session-a:2';
+  await h.app.poll();
+  assert.ok(h.calls.since.at(-1), '지난번 목록 버전을 알려 바뀐 것만 달라고 한다');
+  assert.equal(h.calls.deltas, 1);
+  const after = h.app.listings.value;
+  assert.notEqual(after, before, '바뀐 매물이 있으면 새 배열');
+  assert.deepEqual(after.map((l) => l.id), ['a', 'b', 'c', 'd'], '서버 목록 순서를 지킨다');
+  assert.equal(after[0], a);
+  assert.equal(after[2], c);
+  assert.notEqual(after[1], b);
+  assert.equal(after[1].prices[0].deposit, 2000);
+
+  h.state.dataRevision = 'session-a:3'; // 매물과 상관없는 쓰기
+  await h.app.poll();
+  assert.equal(h.calls.deltas, 2);
+  assert.equal(h.app.listings.value, after, '바뀐 매물이 없으면 배열도 그대로 둔다(목록 계산과 카드가 다시 돌지 않게)');
+});
+
+test('봤음을 저장하지 못하면 다음 새로고침은 전체를 받아 서버 상태로 되돌린다', async (t) => {
+  const h = appHarness(t);
+  h.data.listings = [listing('a'), listing('b', { lat: 37.6 })];
+  await h.mount();
+  const a = h.app.listings.value[0];
+  h.data.failSeen = true;
+  await h.app.saveSeen([a]);
+  assert.ok(a.seenAt, '화면에는 먼저 남긴다');
+  h.state.dataRevision = 'session-a:2';
+  await h.app.poll();
+  assert.equal(h.calls.since.at(-1), null, '서버에서는 이 매물이 그대로라 변화분으로는 되돌릴 수 없어 전체를 받는다');
+  assert.equal(h.app.listings.value[0].seenAt, null);
+  assert.equal(h.app.listings.value[0].isNew, true);
+  h.state.dataRevision = 'session-a:3';
+  await h.app.poll();
+  assert.ok(h.calls.since.at(-1), '그다음부터는 다시 변화분을 받는다');
+});
+
+test('서버를 다시 켜 지난 목록 버전을 모르면 전체를 받는다', async (t) => {
+  const h = appHarness(t);
+  h.data.listings = [listing('a')];
+  await h.mount();
+  h.server.restart();
+  h.data.listings = [listing('a'), listing('b', { lat: 37.6 })];
+  h.state.dataRevision = 'session-b:1';
+  await h.app.poll();
+  assert.ok(h.calls.since.at(-1));
+  assert.equal(h.calls.deltas, 0);
+  assert.deepEqual(h.app.listings.value.map((l) => l.id), ['a', 'b']);
+  h.data.listings = [listing('b', { lat: 37.6 })];
+  h.state.dataRevision = 'session-b:2';
+  await h.app.poll();
+  assert.equal(h.calls.deltas, 1, '새 서버가 준 버전으로 다시 변화분을 받는다');
+  assert.deepEqual(h.app.listings.value.map((l) => l.id), ['b']);
 });
 
 test('지도는 첫 실패를 재시도하고 캐시와 진행 중인 이전 요청 뒤에도 새 파일을 읽는다', async (t) => {
