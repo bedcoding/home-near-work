@@ -4,6 +4,29 @@ import type { Filters } from './filters.js';
 
 export type SourceId = 'naver' | 'dabang' | 'zigbang' | 'daangn' | 'ziptoss' | 'peterpanz' | 'gobang' | 'courtauction' | 'onbid' | 'betterliving' | 'mangrove' | 'celib';
 
+/** 사이트 목록을 요청할 때 쓰는 상한. null은 제한 없음이며 금액은 만원 단위다. */
+export interface CollectionPriceLimits {
+  saleMax: number | null;
+  jeonseMax: number | null;
+  monthlyDepositMax: number | null;
+  monthlyMax: number | null;
+  excludeSale: boolean;
+}
+
+export type CollectionPriceOverrides = Partial<Record<SourceId, CollectionPriceLimits | null>>;
+
+export interface CollectionPriceLimitsState {
+  limits: Partial<Record<SourceId, CollectionPriceLimits>>;
+  upstreamSites: readonly SourceId[];
+}
+
+export interface RunPreview {
+  sites: { source: SourceId; limits: CollectionPriceLimits | null; supportsPriceLimits: boolean }[];
+  noticeCount: number;
+  rentalOnly: boolean;
+  priceLimitsToken: string;
+}
+
 /**
  * 받은 범위가 사이트 화면이나 역 근처로 정해지는 사이트. 안 보였다고 바로 '사라짐'으로 두지 않고 오래 못 보면 정리한다(STALE_SOURCES).
  * 네이버는 크롬 확장으로만, 다방과 직방은 조회와 확장 둘 다, 당근은 조회로만 받는다.
@@ -127,7 +150,7 @@ export const RUN_ALL_SOURCES: SourceId[] = ['dabang', 'zigbang', 'ziptoss', 'pet
 export const RUN_PARALLEL_SITES = 3;
 
 /** 탭 하나만 조회하는 범위(조회하기 옆 ▾ 메뉴, 경매 탭의 '경매 조회하기')와 빠른 조회(전월세만) */
-export type RunScope = 'home' | 'rentOnly' | 'dabang' | 'naver' | 'auction' | 'room' | 'rent' | 'subscription';
+export type RunScope = 'home' | 'rentOnly' | 'dabang' | 'zigbang' | 'naver' | 'auction' | 'room' | 'rent' | 'subscription';
 
 /**
  * 범위마다 도는 매물 사이트(sources)와 공고 탭(sections, 그 탭에 공고가 보일 수 있는 곳을 모두 돈다). tabs는 그 범위가 채우는 탭.
@@ -137,7 +160,8 @@ export type RunScope = 'home' | 'rentOnly' | 'dabang' | 'naver' | 'auction' | 'r
 export const RUN_SCOPES: { id: RunScope; label: string; tabs: string[]; sources: SourceId[]; sections: NoticeSection[]; quick?: boolean }[] = [
   { id: 'home', label: '매물', tabs: ['overview'], sources: ['dabang', 'zigbang', 'ziptoss', 'peterpanz', 'daangn', 'gobang'], sections: [] },
   { id: 'rentOnly', label: '전월세만', tabs: [], sources: ['dabang', 'zigbang', 'ziptoss', 'peterpanz', 'daangn'], sections: [], quick: true },
-  { id: 'dabang', label: '다방 구 전체', tabs: [], sources: ['dabang'], sections: [] },
+  { id: 'dabang', label: '다방', tabs: [], sources: ['dabang'], sections: [] },
+  { id: 'zigbang', label: '직방', tabs: [], sources: ['zigbang'], sections: [] },
   { id: 'auction', label: '경매, 집터, 서울 아파트', tabs: ['auction', 'plot', 'apt'], sources: ['courtauction', 'onbid'], sections: ['trust', 'shop', 'land'] },
   { id: 'room', label: '고시원과 쉐어', tabs: ['rooms'], sources: ['gobang', 'betterliving', 'mangrove', 'celib'], sections: [] },
   { id: 'rent', label: '임대 공고', tabs: ['notices'], sources: [], sections: ['rent'] },
@@ -882,6 +906,7 @@ export interface RunSourceSummary {
   baselineAreas: string[];
   error?: string;
   coverage?: CollectionCoverage[];
+  collectionPriceLimits?: CollectionPriceLimits | null;
 }
 
 /** 끝까지 돌았지만 일부를 못 본 사이트('일부를 보지 못함: …'). 받은 매물은 저장하고 '사라짐' 처리만 건너뛴 것이라 실패와 따로 본다. */
@@ -898,6 +923,8 @@ export interface RunSummary {
   complete?: boolean;
   /** 일시 오류가 있어 같은 예약 회차를 다시 시도할 수 있는지. 설정·지원 범위 제한만 있으면 false. */
   retryable?: boolean;
+  /** 이번 조회에서 팝업의 사이트나 공고 선택을 일부 해제했는지. */
+  selectedSubset?: boolean;
 }
 
 export interface RunInfo {

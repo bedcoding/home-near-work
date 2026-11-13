@@ -95,6 +95,7 @@ function siteRunSince(since: number): boolean {
       (r) =>
         !r.scope &&
         !r.line &&
+        !r.summary?.selectedSubset &&
         (r.summary?.sources ?? []).some((s) => s.source !== 'courtauction' && s.source !== 'onbid' && (s.coverage || !CAPTURE_SOURCES.includes(s.source))),
     );
 }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { isPartialMiss, NOTICE_SOURCE_LABEL, type AppState, type ListingView, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type SiteReport, type SourceId } from '../../../shared/types';
+import { isPartialMiss, NOTICE_SOURCE_LABEL, RUN_SCOPES, type AppState, type ListingView, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type RunScope, type SiteReport, type SourceId } from '../../../shared/types';
 import { priceText } from '../../../shared/format';
 import { api } from '../api';
 import { ago, dateTime, distanceM, pyeong } from '../format';
@@ -8,6 +8,7 @@ import { KIND_LABEL, kindOf } from '../kinds';
 import { NOTICE_HOME } from '../notices';
 import type { SiteLink } from '../siteLinks';
 import CountTooltip from './CountTooltip.vue';
+import SitePriceLimits from './SitePriceLimits.vue';
 import { SCOPE_KIND_LABEL, SITE_SCOPES, type ScopeKind } from '../../../shared/site-scopes';
 
 // 사이트별 탭: 사이트를 하나 고르면 모은 매물 수, 마지막으로 받은 때, 사이트 화면이 센 수와 받은 수, 조회 기록, 받은 매물(또는 공고)을 보인다.
@@ -21,6 +22,7 @@ const props = defineProps<{
   notices: NoticeView[];
   noticeStatus: Partial<Record<NoticeSourceId, NoticeSourceStatus>>;
 }>();
+const emit = defineEmits<{ 'run-site': [scope: RunScope] }>();
 
 type Way = 'browse' | 'auto' | 'notice';
 /** source: 이 사이트 매물의 소스(매물로 읽지 않는 곳과 공고는 null). home: 바로 가기 줄에 없는 곳을 누르면 여는 주소 */
@@ -101,6 +103,11 @@ function readPick(): string {
 }
 const picked = ref(readPick());
 const site = computed(() => ALL.find((s) => s.id === picked.value) ?? ALL[0]);
+const siteRunScope = computed(() => RUN_SCOPES.find(scope =>
+  scope.sources.length === 1 && scope.sources[0] === site.value.source && scope.sections.length === 0)?.id);
+function runSelectedSite() {
+  if (siteRunScope.value) emit('run-site', siteRunScope.value);
+}
 watch(picked, (v) => {
   try {
     localStorage.setItem(PICK_KEY, v);
@@ -277,6 +284,8 @@ const scopeCoverage = computed(() => report.value?.scopeCoverage?.[site.value.id
         <CountTooltip :text="WAY_TIP[site.way]" :max-width="360"><span class="way">{{ WAY_NAME[site.way] }}</span></CountTooltip>
         <a v-if="siteUrl" class="btn btn-sm" :href="siteUrl" target="_blank" rel="noopener">열기 ↗</a>
       </header>
+
+      <SitePriceLimits v-if="site.source" :source="site.source" :can-run="!!siteRunScope" :running="!!state.running" @run="runSelectedSite" />
 
       <div v-if="siteScope" class="block scope-detail">
         <h3>수집 기준 <span class="kind" :class="`k-${siteScope.kind}`">{{ SCOPE_KIND_LABEL[siteScope.kind] }}</span><small>{{ siteScope.short }}, {{ siteScope.by }}</small></h3>

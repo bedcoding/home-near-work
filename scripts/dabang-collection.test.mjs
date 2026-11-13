@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import path from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
-import { DABANG_CATEGORIES, DABANG_HEADERS, dabangBounds, dabangFilters, dabangListUrl, DabangPagination, dabangTargets } from '../server/dabang-client.ts';
+import { DABANG_CATEGORIES, DABANG_HEADERS, dabangBounds, dabangFilters, dabangListUrl, DabangPagination, dabangPriceScopes, dabangPricesMatch, dabangTargets } from '../server/dabang-client.ts';
 import { parseDabangRoomList } from '../server/dabang-parse.ts';
 import { regionBoundaries } from '../shared/region-geometry.ts';
 
@@ -43,6 +43,38 @@ test('all four residential categories use unbounded prices and sizes, without no
     assert.equal(url.searchParams.get('page'), '12');
   }
   assert.equal(Object.keys(DABANG_HEADERS).some(key => /cookie|authorization/i.test(key)), false);
+});
+
+const priceLimits = { saleMax: 65000, jeonseMax: 18000, monthlyDepositMax: 5000, monthlyMax: 65, excludeSale: false };
+
+test('the provider receives separate deposit caps only when required, plus its distinct sale and monthly caps', () => {
+  const scopes = dabangPriceScopes('apt', priceLimits);
+  const query = scope => JSON.parse(new URL(dabangListUrl('apt', bounds, 1, scope)).searchParams.get('filters'));
+  assert.equal(scopes.length, 2);
+  assert.deepEqual(query(scopes[0]).sellingTypeList, ['MONTHLY_RENT', 'SELL']);
+  assert.deepEqual(query(scopes[0]).depositRange, { min: 0, max: 5000 });
+  assert.deepEqual(query(scopes[0]).priceRange, { min: 0, max: 65 });
+  assert.deepEqual(query(scopes[0]).tradeRange, { min: 0, max: 65000 });
+  assert.deepEqual(query(scopes[1]).sellingTypeList, ['LEASE']);
+  assert.deepEqual(query(scopes[1]).depositRange, { min: 0, max: 18000 });
+  const sameDeposit = { ...priceLimits, monthlyDepositMax: 18000, excludeSale: true };
+  const combined = dabangPriceScopes('apt', sameDeposit);
+  assert.equal(combined.length, 1);
+  assert.deepEqual(query(combined[0]).sellingTypeList, ['MONTHLY_RENT', 'LEASE']);
+  assert.deepEqual(query(combined[0]).tradeRange, { min: 0, max: 999999 });
+  assert.equal(dabangPriceScopes('one-two', priceLimits).flatMap(scope => scope.deals).includes('sale'), false);
+});
+
+test('amounts at or beyond the provider sentinel are compared against the exact configured cap after retrieval', () => {
+  const limits = { ...priceLimits, saleMax: 1000000 };
+  const [scope] = dabangPriceScopes('apt', limits);
+  assert.equal(scope.saleMax, null);
+  const sale = price => ({ deal: 'sale', price, deposit: null, monthly: null });
+  assert.equal(dabangPricesMatch([sale(1000000)], limits), true);
+  assert.equal(dabangPricesMatch([sale(1000001)], limits), false);
+  assert.equal(dabangPricesMatch([sale(null)], limits), false);
+  assert.equal(dabangPricesMatch([sale(1000001)], limits, scope), true);
+  assert.equal(dabangPricesMatch([sale(null)], limits, scope), false);
 });
 
 test('pagination verifies every page, excludes advertising from expected regular count and accepts empty lists', () => {
@@ -97,7 +129,7 @@ function collectorFixture(mode = 'ok') {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true },
   }).outputText;
   const exports = {};
-  const client = { DABANG_CATEGORIES, DABANG_HEADERS, dabangListUrl, DabangPagination,
+  const client = { DABANG_CATEGORIES, DABANG_HEADERS, dabangListUrl, DabangPagination, dabangPriceScopes, dabangPricesMatch,
     dabangTargets: areas => ({ targets: areas.filter(area => area.region?.kind === 'gu' || Number.isFinite(area.lat)).map(area => ({ area, bounds })), skipped: [],
       unreadable: areas.filter(area => area.region?.kind !== 'gu' && !Number.isFinite(area.lat)) }) };
   vm.runInNewContext(code, { exports, URLSearchParams, AbortSignal, fetch: async url => {
@@ -106,6 +138,25 @@ function collectorFixture(mode = 'ok') {
     const first = u.pathname.includes('one-two');
     if (mode === 'blocked') return { status: 429, ok: false };
     if (mode === 'partial' && first && page === 2) throw new Error('synthetic network error');
+    if ((mode === 'priced' || mode === 'conflicting-trade') && first) {
+      const filters = JSON.parse(u.searchParams.get('filters'));
+      const leaseId = mode === 'conflicting-trade' ? 101 : 111;
+      const result = filters.sellingTypeList.includes('LEASE')
+        ? body(1, 1, [], { roomList: [{ ...row(leaseId), priceTypeName: '전세', priceTitle: '1억8000' }] })
+        : body(1, 2, [], { roomList: [row(101), { ...row(102), priceTitle: '5500/30' }],
+          premiumList: [{ roomList: [{ ...row(901), dongName: '주변가상동' }, { ...row(902), priceTitle: '500/90' }] }] });
+      return { status: 200, ok: true, text: async () => result };
+    }
+    if (mode === 'priced' || mode === 'conflicting-trade') return { status: 200, ok: true, text: async () => body(1, 0, []) };
+    if (mode === 'high-cap') {
+      const result = u.pathname.includes('apt')
+        ? body(1, 2, [], { roomList: [
+          { ...row(301), priceTypeName: '매매', priceTitle: '99억' },
+          { ...row(302), priceTypeName: '매매', priceTitle: '101억' },
+        ] })
+        : body(1, 0, []);
+      return { status: 200, ok: true, text: async () => result };
+    }
     return { status: 200, ok: true, text: async () => first ? body(page, 3, page === 1 ? [101, 102] : [103],
       { premiumList: [{ roomList: [{ ...row(901), dongName: '주변가상동' }] }] }) : body(1, 0, []) };
   }, require: id => {
@@ -130,6 +181,36 @@ test('collector reads all categories and pages, retains incidental advertising a
   assert.equal(f.coverage.filter(row => row.complete).length, 4);
   assert.equal(f.savedFiles.filter(([name]) => name.endsWith('coverage.json')).length, 4);
   assert.equal(f.collector.retainMissing, true);
+});
+
+test('price-scoped runs retain eligible incidental rows and report unverified regular replies as partial', async () => {
+  const f = collectorFixture('priced');
+  f.ctx.priceLimits = { ...priceLimits, excludeSale: true };
+  const items = await f.collector.collect(f.ctx);
+  assert.deepEqual(new Set(items.map(item => item.listing.sourceId)), new Set(['101', '111', '901']));
+  assert.equal(f.requests.length, 8);
+  assert.equal(f.coverage.findLast(row => row.category === 'one-two-monthly').complete, false);
+  assert.equal(f.coverage.findLast(row => row.category === 'one-two-jeonse').complete, true);
+  assert.equal(f.partial.length, 1);
+  assert.match(f.partial[0][0], /거래 조건과 일치/);
+});
+
+test('expected rows beyond a local-only upper bound do not make the upstream scope partial', async () => {
+  const f = collectorFixture('high-cap');
+  f.ctx.priceLimits = { saleMax: 1000000, jeonseMax: null, monthlyDepositMax: null, monthlyMax: null, excludeSale: false };
+  const items = await f.collector.collect(f.ctx);
+  assert.deepEqual(Array.from(items, item => item.listing.sourceId), ['301']);
+  assert.equal(f.partial.length, 0);
+  assert.equal(f.coverage.findLast(row => row.category === 'apt').complete, true);
+});
+
+test('a conflicting trade for the same ID keeps the earlier verified offer and marks the later scope partial', async () => {
+  const f = collectorFixture('conflicting-trade');
+  f.ctx.priceLimits = { ...priceLimits, excludeSale: true };
+  const items = await f.collector.collect(f.ctx);
+  const listing = items.find(item => item.listing.sourceId === '101').listing;
+  assert.deepEqual(listing.prices.map(offer => offer.deal), ['monthly']);
+  assert.equal(f.coverage.findLast(row => row.category === 'one-two-jeonse').complete, false);
 });
 
 test('a failed page retains prior rows and continues remaining categories; blocking stops further requests', async () => {

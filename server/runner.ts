@@ -4,6 +4,7 @@ import { gusFor, nearNamesFor } from './collectors/gus.js';
 import { COLLECTORS } from './collectors/index.js';
 import { NOTICE_COLLECTORS, type NoticeCollector } from './collectors/notices.js';
 import { BlockedError, type CollectContext, type CollectedItem, type Collector } from './collectors/types.js';
+import { runCollectionPriceLimits } from './collection-price-limits.js';
 import { COLLECT_MARGIN_M } from './config.js';
 import { collectCourtClaims } from './court-claims.js';
 import { collectCourtResults, courtResultsDue } from './court-results.js';
@@ -25,7 +26,7 @@ import { priceText } from '../shared/format.js';
 import { collectionAreas, primaryAreas, selectedArea } from '../shared/regions.js';
 import {
   inGus, listingSection, nearReason, noticeSection, noticeSourcesOf, regionalSection, RUN_PARALLEL_SITES, RUN_SCOPES, SEOUL_GUS, SOURCE_LABEL,
-  type Area, type CollectionCoverage, type NormalizedListing, type RunProgress, type RunScope, type RunSiteProgress, type RunSourceSummary, type RunSummary, type SourceId,
+  type Area, type CollectionCoverage, type CollectionPriceLimits, type CollectionPriceOverrides, type NormalizedListing, type RunProgress, type RunScope, type RunSiteProgress, type RunSourceSummary, type RunSummary, type SourceId,
 } from '../shared/types.js';
 
 let current: (RunProgress & { log: string[]; session: BrowserSession | null }) | null = null;
@@ -36,11 +37,27 @@ export const getProgress = (): RunProgress | null =>
     : null;
 
 /** 조회 범위(scope, 없으면 전부)에서 돌 매물 사이트와 공고 곳. 공고만 확인은 매물 사이트 없이 공고 전부. */
-export function runPlan(scope: RunScope | undefined, noticesOnly: boolean) {
+export function runPlan(
+  scope: RunScope | undefined, noticesOnly: boolean,
+  selection: { selectedSources?: unknown; includeNotices?: unknown } = {},
+) {
   const def = noticesOnly ? undefined : RUN_SCOPES.find((s) => s.id === scope);
-  const collectors = noticesOnly ? [] : def ? COLLECTORS.filter((c) => def.sources.includes(c.id)) : COLLECTORS;
-  const notices = def ? NOTICE_COLLECTORS.filter((nc) => def.sections.some((s) => noticeSourcesOf(s).includes(nc.id))) : NOTICE_COLLECTORS;
-  return { def, collectors, notices };
+  const available = noticesOnly ? [] : def ? COLLECTORS.filter((c) => def.sources.includes(c.id)) : COLLECTORS;
+  const availableNotices = def ? NOTICE_COLLECTORS.filter((nc) => def.sections.some((s) => noticeSourcesOf(s).includes(nc.id))) : NOTICE_COLLECTORS;
+  const { selectedSources, includeNotices } = selection;
+  if (selectedSources !== undefined && (!Array.isArray(selectedSources)
+    || selectedSources.length > available.length || new Set(selectedSources).size !== selectedSources.length
+    || selectedSources.some(source => !available.some(collector => collector.id === source)))) {
+    throw new Error('이번 조회에서 선택할 수 있는 사이트를 확인해 주세요.');
+  }
+  if (includeNotices !== undefined && typeof includeNotices !== 'boolean') throw new Error('공고 조회 선택을 확인해 주세요.');
+  const collectors = selectedSources === undefined ? available : available.filter(collector => selectedSources.includes(collector.id));
+  const notices = includeNotices === false ? [] : availableNotices;
+  const selectedSubset = collectors.length < available.length || notices.length < availableNotices.length;
+  if ((selectedSources !== undefined || includeNotices !== undefined) && collectors.length === 0 && notices.length === 0) {
+    throw new Error('조회할 사이트나 공고를 하나 이상 선택해 주세요.');
+  }
+  return { def, collectors, notices, selectedSubset };
 }
 
 /**
@@ -50,18 +67,27 @@ export function runPlan(scope: RunScope | undefined, noticesOnly: boolean) {
  * noticesOnly: 매물 사이트는 돌지 않고 공고만 모은다(법원경매 매각 결과를 모은 지 오래됐으면 그것도). 켜 둔 지역 바로 근처일
  * 가능성이 높은 새 임대 공고만 바로 알리고, 나머지 새 공고는 미뤄 두었다가 다음 알림(공고만 확인이 아닌 조회)에 넣는다.
  */
-export function startRun(visible: boolean, scope?: RunScope, options: { auto?: boolean; quiet?: boolean; noticesOnly?: boolean } = {}): number {
+export function startRun(
+  visible: boolean, scope?: RunScope,
+  options: {
+    auto?: boolean; quiet?: boolean; noticesOnly?: boolean;
+    priceOverrides?: CollectionPriceOverrides; commonPriceLimits?: CollectionPriceLimits | null;
+    selectedSources?: readonly SourceId[]; includeNotices?: boolean;
+  } = {},
+): number {
   if (current) throw new Error('이미 조회 중입니다.');
   // 구나 동과 지하철역을 둘 다 넘긴다. 사이트마다 쓸 수 있는 쪽을 쓴다(다방은 구 경계나 반경 범위, 직방, 집토스, 피터팬은 역 기준).
   const areas = collectionAreas(store.enabledAreas());
   if (areas.length === 0) throw new Error('켜진 지역이 없습니다. 지역 탭에서 하나 이상 켜 주세요.');
   const noticesOnly = !!options.noticesOnly;
-  const { def, collectors, notices } = runPlan(scope, noticesOnly);
+  const { def, collectors, notices, selectedSubset } = runPlan(scope, noticesOnly, options);
   if (collectors.length === 0 && notices.length === 0) throw new Error('조회할 사이트가 없습니다.');
   const auto = !!options.auto;
   const runId = store.createRun(visible, auto, noticesOnly, def?.id ?? null);
   current = { runId, message: '조회용 브라우저를 여는 중', log: [], stopping: false, session: null, sites: waitingSites(collectors), noticeCount: notices.length };
-  void execute(runId, visible, areas, { collectors, notices, scope: def ?? null }, { auto, quiet: !!options.quiet, noticesOnly });
+  void execute(runId, visible, areas, {
+    collectors, notices, scope: def ?? null, selectedSubset, priceOverrides: options.priceOverrides, commonPriceLimits: options.commonPriceLimits,
+  }, { auto, quiet: !!options.quiet, noticesOnly });
   return runId;
 }
 
@@ -341,7 +367,11 @@ async function execute(
   runId: number,
   visible: boolean,
   areas: Area[],
-  plan: { collectors: Collector[]; notices: NoticeCollector[]; scope: (typeof RUN_SCOPES)[number] | null; line?: string },
+  plan: {
+    collectors: Collector[]; notices: NoticeCollector[]; scope: (typeof RUN_SCOPES)[number] | null; line?: string;
+    priceOverrides?: CollectionPriceOverrides; commonPriceLimits?: CollectionPriceLimits | null;
+    selectedSubset?: boolean;
+  },
   mode: { auto: boolean; quiet: boolean; noticesOnly: boolean },
 ) {
   const { auto, quiet, noticesOnly } = mode;
@@ -368,12 +398,17 @@ async function execute(
       changedCount: summaries.reduce((n, s) => n + s.priceChanged, 0),
       complete: status === 'done' && noticesComplete && summaries.every((s) => s.status === 'ok' && !s.error),
       retryable,
+      ...(plan.selectedSubset ? { selectedSubset: true } : {}),
     };
     store.finishRun(runId, status, summary, errorMessage, state.log);
     return summary;
   };
 
   try {
+    const rentOnly = plan.scope?.id === 'rentOnly';
+    const { limits: priceLimits } = runCollectionPriceLimits(
+      store.getSetting, collectors.map(collector => collector.id), plan.scope?.id, plan.priceOverrides, plan.commonPriceLimits,
+    );
     const only = noticesOnly ? '공고만, ' : plan.scope ? `${plan.scope.label} 탭만(${[...collectors, ...plan.notices].map((c) => c.label).join(', ')}), ` : '';
     const sitesText = collectors.length
       ? `매물 사이트 ${collectors.length}곳(${collectors.map((c) => c.label).join(', ')})을 ${Math.min(RUN_PARALLEL_SITES, collectors.length)}곳씩 동시에, 공고 ${plan.notices.length}곳, `
@@ -396,6 +431,8 @@ async function execute(
       runId,
       areas,
       session: tab,
+      priceLimits: site ? priceLimits[site.progress.source] : undefined,
+      rentalOnly: !!site && rentOnly,
       log,
       classify,
       stopped: () => state.stopping,
@@ -444,13 +481,14 @@ async function execute(
       progress.status = 'running';
       progress.message = collector.noTab ? '시작하는 중' : '조회용 탭을 여는 중';
       updateMessage();
-      log(`${collector.label}: 시작`);
+      const limits = priceLimits[collector.id];
+      log(limits ? `${collector.label}: 이번 조회의 가격 제한으로 시작` : `${collector.label}: 시작`);
       try {
         // 기본 탭은 닫으면 안 되므로 tab에는 따로 연 탭만 둔다(아래 finally가 tab만 닫는다).
         tab = collector.noTab ? null : await rootSession.fork();
         items = await collector.collect(makeCtx(tab ?? rootSession, { progress, missed, coverage }));
         if (areas.some((area) => area.region) && ['ziptoss', 'peterpanz'].includes(collector.id)) {
-          missed.push('역과 지도 범위에서 받은 매물은 저장했으나 선택한 구나 동 전체를 다 봤는지는 보장하지 않습니다');
+          missed.push('역과 지도 범위의 목록을 확인했습니다. 선택한 구나 동 전체는 확인하지 못했습니다');
         }
         if (state.stopping) {
           // 멈추는 사이에 받은 것은 저장하되 다 돈 것으로 보지 않는다('사라짐' 처리를 하지 않는다).
@@ -478,28 +516,44 @@ async function execute(
       } finally {
         await tab?.closePage();
       }
-      const summary = applyResults(runId, collector.id, items, areas, complete && !collector.retainMissing, error, {
+      // Common prices are sent to supported collectors. Only the explicit rental-only run filters other responses.
+      const toSave = rentOnly ? items.filter(({ listing }) => listing.prices.some(price => price.deal === 'monthly' || price.deal === 'jeonse')) : items;
+      const excluded = new Set<string>();
+      if (toSave.length < items.length) {
+        const eligible = new Set(toSave.map(({ listing }) => listing.sourceId));
+        for (const { listing } of items) if (!eligible.has(listing.sourceId)) excluded.add(listing.sourceId);
+        log(`${collector.label}: 전월세 조건에 해당하지 않는 매물 ${excluded.size}건 제외`);
+      }
+      const summary = applyResults(runId, collector.id, toSave, areas, complete && !collector.retainMissing && !rentOnly, error, {
         goneOutsideRadius: !plan.line && collector.wholeDistrict,
         // 노선 조회는 역마다 처음 본 것만이 아니라 모두 기준으로 둔다(회사 근처 신규 알림과 섞이지 않게).
         isBaseline: plan.line ? () => true : undefined,
         news,
         status: complete ? 'ok' : 'error',
       });
+      if (rentOnly) summary.fetched = items.length;
+      if (limits || Object.hasOwn(plan.priceOverrides ?? {}, collector.id)) summary.collectionPriceLimits = limits ?? null;
       if (coverage.size) {
+        let storedScopes = 0;
         summary.coverage = [...coverage.values()].map(({ row, ids }) => {
-          const stored = ids.filter(id => store.getListing(`${collector.id}:${id}`)?.last_seen_run === runId).length;
-          const saved = stored === ids.length;
-          return { ...row, stored, storageChecked: true, complete: row.complete && saved,
-            reason: saved ? row.reason : `${row.reason}, 서버 저장 ${stored}/${ids.length}건 확인` };
+          const expected = excluded.size ? ids.filter(id => !excluded.has(id)) : ids;
+          const removed = ids.length - expected.length;
+          const stored = expected.filter(id => store.getListing(`${collector.id}:${id}`)?.last_seen_run === runId).length;
+          const saved = stored === expected.length;
+          const reasons = [row.reason];
+          if (removed) reasons.push(`전월세 조건으로 ${removed}건 제외`);
+          if (!saved) {
+            reasons.push(`서버 저장 ${stored}/${expected.length}건 확인`);
+            retryable = true;
+          } else if (row.pages > 0) storedScopes++;
+          return { ...row, stored, storageChecked: true, complete: row.complete && saved, reason: reasons.join(', ') };
         });
         for (const row of summary.coverage) runCoverage.set(`${collector.id}:${row.areaId}:${row.category}`, row);
         state.coverage = [...runCoverage.values()];
-        if (summary.coverage.some(row => row.stored !== coverage.get(`${row.areaId}:${row.category}`)!.ids.length)) retryable = true;
         if (summary.coverage.some(row => !row.complete)) {
           summary.status = 'error';
           summary.error ||= '일부 범위의 목록 또는 서버 저장을 확인하지 못했습니다';
         }
-        const storedScopes = summary.coverage.filter(row => row.total != null && row.pages > 0 && row.stored === coverage.get(`${row.areaId}:${row.category}`)!.ids.length).length;
         log(`${collector.label}: 서버 저장 검증 ${storedScopes}/${summary.coverage.length}개, 전체 목록 확인 ${summary.coverage.filter(row => row.complete).length}/${summary.coverage.length}개`);
       }
       const baseline = summary.baselineAreas.length ? `, 기준점 저장: ${summary.baselineAreas.join(', ')}` : '';
@@ -552,8 +606,8 @@ async function execute(
     }
     // 아래 실거래와 KB 통계는 때가 됐으면 받는다. 탭 하나만 도는 조회는 그 탭이 쓰는 것만 받는다(경매 범위는 단독 실거래와
     // 아파트 실거래 최근 1년, 다른 범위는 받지 않음). 국토부 단독/다가구 실거래(서울, 최근 1년)는 받은 지 7일이 지났으면 받는다.
-    const fullData = !plan.scope && !plan.line;
-    const auctionData = fullData || plan.scope?.id === 'auction';
+    const fullData = !plan.scope && !plan.line && !plan.selectedSubset;
+    const auctionData = fullData || (plan.scope?.id === 'auction' && collectors.some(c => c.id === 'courtauction' || c.id === 'onbid'));
     if (!state.stopping && auctionData && houseTradesDue()) {
       try {
         const record = (url: string, status: number | null, note: string) => store.addRequest(runId, HOUSE_TRADES_SOURCE, 'data', url, status, note);

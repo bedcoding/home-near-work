@@ -3,17 +3,19 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, toRaw,
 import {
   COLLECT_MARGIN_M, hasHomeListings, inGus, isPartialMiss, isRunFailure, nearReason, NOTICE_SHORT, noticeSection, noticeSourcesOf, RUN_ALL_SOURCES, RUN_PARALLEL_SITES, RUN_SCOPES, SOURCE_LABEL,
   type RunSiteProgress,
-  type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CourtRegionStat, type DealType, type ExplainRow, type HouseTradeSummary, type ListingView, type MarketView as MarketData,
-  type NoticeSection, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type RunScope, type SeenRef, type SourceId, type Verdict,
+  type AppState, type Area, type AuctionResultSummary, type AuctionResultView, type CollectionPriceLimits, type CourtRegionStat, type DealType, type ExplainRow, type HouseTradeSummary, type ListingView, type MarketView as MarketData,
+  type NoticeSection, type NoticeSourceId, type NoticeSourceStatus, type NoticeView, type RunPreview, type RunScope, type SeenRef, type SourceId, type Verdict,
 } from '../../shared/types';
 import { api } from './api';
+import { commonPricesForRun, loadCommonCollectionPrices, saveCommonCollectionPrices } from './commonCollectionPrices';
 import { createRevisionRefresh } from './refresh';
 import { createListingsSync } from './listingsSync';
 import { isPick, NOTE_MAX, onMarks, picksOnly, touchMarks } from './marks';
 import { reloadZones, zonesNeedReload } from './redevZones';
-import { DEFAULT_FILTERS, dealOptions, FILTER_DEALS, loadFilters, passes, plainFilters, saveFilters, type Filters } from './filters';
+import { DEFAULT_FILTERS, FILTER_DEALS, filterJudge, loadFilters, passes, plainFilters, saveFilters, type Filters } from './filters';
 import { dateTime, radiusText } from './format';
 import { primaryAreas, selectedArea } from '../../shared/regions';
+import { keyedMemo } from '../../shared/memo';
 import { looksSimilar } from '../../shared/similar';
 import AlertsTab from './components/AlertsTab.vue';
 import AptView from './components/AptView.vue';
@@ -29,6 +31,7 @@ import NoticesView from './components/NoticesView.vue';
 import Overview from './components/Overview.vue';
 import RoomsView from './components/RoomsView.vue';
 import RunHistory from './components/RunHistory.vue';
+import RunPreviewDialog from './components/RunPreviewDialog.vue';
 import SitesTab from './components/SitesTab.vue';
 import SubscriptionsView from './components/SubscriptionsView.vue';
 import SupportView from './components/SupportView.vue';
@@ -172,8 +175,18 @@ const insideMargin = (l: ListingView) =>
   !!selectedArea(l, areas.value, COLLECT_MARGIN_M);
 /** 서울 아파트 탭에서만 보는 매물: 서울 아파트 경매와 공매, 매매 중 켜진 지역 반경(+여유) 밖(고른 구라서 모은 것) */
 const farApt = (l: ListingView) => !!l.apt && aptKindOf(l) !== null && !insideMargin(l);
+/** 켜진 지역마다 매물 객체 → 먼 서울 아파트인지. 변화분을 받아도 바뀌지 않은 매물은 다시 따지지 않는다. */
+const farMemo = keyedMemo<boolean>(4);
 /** 회사 근처 탭(매물, 경매, 집터, 고시원과 쉐어)에 보이는 매물: 먼 서울 아파트는 뺀다 */
-const nearCurrent = computed(() => current.value.filter((l) => !farApt(l)));
+const nearCurrent = computed(() => {
+  const far = farMemo(JSON.stringify(areas.value));
+  return current.value.filter((l) => {
+    if (!l.apt) return true;
+    let v = far.get(l);
+    if (v === undefined) far.set(l, (v = farApt(l)));
+    return !v;
+  });
+});
 /** 매물이 보이는 곳: 매매와 전월세(매물 탭), 경매 탭, 고시원과 쉐어 탭. 표시한 매물 탭에는 모두 보인다. */
 type Section = 'home' | 'auction' | 'room';
 const sectionOf = (l: ListingView): Section => (isAuction(l) ? 'auction' : isRoomStay(l) ? 'room' : 'home');
@@ -183,18 +196,16 @@ const lineListings = computed(() => current.value.filter((l) => sectionOf(l) ===
 /** 필터 거래 유형 칸: 단기는 단기 매물이 있을 때(지역 반경 밖 포함, 거래 유형 필터는 빼고)나 골라 둔 때만 보인다. */
 const dealChoices = computed<DealType[]>(() => {
   const f = filtersNow.value;
-  const a = areas.value;
-  const loose = { ...f, deals: [], insideAreas: false };
-  const short = f.deals.includes('short') || homes.value.some((l) => dealOptions(l, 'short', loose, a).length > 0);
+  const loose = filterJudge({ ...f, deals: [], insideAreas: false }, areas.value);
+  const short = f.deals.includes('short') || homes.value.some((l) => loose.dealOptions(l, 'short').length > 0);
   return FILTER_DEALS.filter((d) => d !== 'short' || short);
 });
 const byNewest = (a: ListingView, b: ListingView) => b.firstSeenAt.localeCompare(a.firstSeenAt);
 const hasNews = (l: ListingView) => l.isNew || !!l.priceChange;
 /** 매물 탭 이름 옆 빨간 점: 거래 유형을 빼고 필터를 통과한 매매와 전월세 중 새 소식이 있는 수 */
 const homeNews = computed(() => {
-  const f = { ...filtersNow.value, deals: [] };
-  const a = areas.value;
-  return homes.value.filter((l) => hasNews(l) && passes(l, f, a)).length;
+  const judge = filterJudge({ ...filtersNow.value, deals: [] }, areas.value);
+  return homes.value.filter((l) => hasNews(l) && judge.passes(l)).length;
 });
 /** 표시한 매물 탭의 종류 칸(관심, 별로, 버림). 고른 것은 localStorage 'hnw-marked-kind'. */
 const MARKED_KINDS: { id: Verdict; label: string; empty: string }[] = [
@@ -367,14 +378,13 @@ const plotKind = ref<AuctionKind>(
 watch(plotKind, (k) => localStorage.setItem('hnw-plot-kind', k));
 /** 매매 매물 중 집터 칸에 맞는 것(단독은 거래 유형을 뺀 필터, 토지는 지역 칸과 검색어만). 새 소식 먼저, 그다음 매매가 낮은 순. */
 function plotSalesOf(kind: AuctionKind) {
-  const f = kind === 'land' ? shopFilters.value : auctionFilters.value;
-  const a = areas.value;
+  const judge = filterJudge(kind === 'land' ? shopFilters.value : auctionFilters.value, areas.value);
   const want = kind === 'land' ? 'land' : 'house';
   // 매매가는 한 번만 내 둔다(정렬하면서 견줄 때마다 필터를 다시 돌리지 않게).
   const priced: { l: ListingView; price: number }[] = [];
   for (const l of homes.value) {
     if (kindOf(l) !== want) continue;
-    const options = dealOptions(l, 'sale', f, a);
+    const options = judge.dealOptions(l, 'sale');
     if (options.length) priced.push({ l, price: Math.min(...options.map((p) => p.price ?? Infinity)) });
   }
   return priced.sort((x, y) => Number(hasNews(y.l)) - Number(hasNews(x.l)) || x.price - y.price).map((x) => x.l);
@@ -552,9 +562,8 @@ function selectListing(l: ListingView) {
 /** 필터로 가려진 매물 수. 매물 탭은 매매와 전월세 모든 사이트를, 경매 탭과 집터 탭(경매만)과 고시원과 쉐어 탭은 그 탭 매물을 센다(관심과 숨김함은 필터를 안 씀). */
 const hiddenCount = computed(() => {
   if (tab.value === 'overview') {
-    const f = filtersNow.value;
-    const a = areas.value;
-    return homes.value.filter((l) => !passes(l, f, a)).length;
+    const judge = filterJudge(filtersNow.value, areas.value);
+    return homes.value.filter((l) => !judge.passes(l)).length;
   }
   if (tab.value === 'auction') return auctionsAll.value.filter(ofAuctionKind).length - auctions.value.length;
   if (tab.value === 'plot') return auctionsAll.value.filter((l) => inAuctionKind(l, plotKind.value)).length - plotAuctions.value.length;
@@ -649,16 +658,106 @@ async function startLineRun(line: string, radiusM: number) {
   }
 }
 
-/** scope를 주면 그 탭에 보이는 사이트와 공고만 조회한다(조회하기 옆 ▾ 메뉴, 경매 탭의 '경매 조회하기'). */
-async function startRun(scope?: RunScope) {
+const runPreview = ref<{
+  scope?: RunScope;
+  title: string;
+  data: RunPreview | null;
+  deselectedSources: SourceId[];
+  includeNotices: boolean;
+  commonLimits: CollectionPriceLimits | null;
+  loading: boolean;
+  starting: boolean;
+  error: string | null;
+  opener: HTMLElement | null;
+} | null>(null);
+const selectedRunSources = computed(() => {
+  const dialog = runPreview.value;
+  return dialog?.data?.sites.filter(site => !dialog.deselectedSources.includes(site.source)).map(site => site.source) ?? [];
+});
+const runCommonPriceSites = computed(() => {
+  const selected = selectedRunSources.value;
+  return runPreview.value?.data?.sites.filter(site => site.supportsPriceLimits && selected.includes(site.source)).map(site => site.source) ?? [];
+});
+
+function openRunPreview(scope?: RunScope) {
+  if (runPreview.value || running.value) return;
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  runMenu.value = false;
   error.value = null;
+  const title = RUN_SCOPES.find(item => item.id === scope)?.label ?? '전체 조회';
+  runPreview.value = { scope, title, data: null, deselectedSources: [], includeNotices: true, commonLimits: loadCommonCollectionPrices(), loading: false, starting: false, error: null, opener };
+  void loadRunPreview();
+}
+
+async function loadRunPreview() {
+  const dialog = runPreview.value;
+  if (!dialog || dialog.loading || dialog.starting) return;
+  dialog.loading = true;
+  dialog.error = null;
   try {
-    await api.startRun(visibleMode.value, scope);
-    await refreshState();
-    showLog.value = false;
-    schedule();
+    dialog.data = await api.runPreview(dialog.scope);
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
+    dialog.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    dialog.loading = false;
+  }
+}
+
+function closeRunPreview() {
+  const dialog = runPreview.value;
+  if (!dialog || dialog.starting) return;
+  runPreview.value = null;
+  void nextTick(() => {
+    const target = dialog.opener?.isConnected ? dialog.opener : runMenuEl.value?.querySelector<HTMLButtonElement>('.run-more');
+    target?.focus();
+  });
+}
+
+function toggleRunSource(source: SourceId, selected: boolean) {
+  const dialog = runPreview.value;
+  if (!dialog || dialog.starting) return;
+  if (selected) dialog.deselectedSources = dialog.deselectedSources.filter(id => id !== source);
+  else if (!dialog.deselectedSources.includes(source)) dialog.deselectedSources.push(source);
+}
+
+function toggleRunNotices(selected: boolean) {
+  const dialog = runPreview.value;
+  if (dialog && !dialog.starting) dialog.includeNotices = selected;
+}
+
+function changeRunCommonPrice(limits: CollectionPriceLimits | null) {
+  const dialog = runPreview.value;
+  if (dialog && !dialog.starting) dialog.commonLimits = limits;
+}
+
+async function confirmRunPreview() {
+  const dialog = runPreview.value;
+  if (!dialog?.data || dialog.loading || dialog.starting || dialog.error) return;
+  const selectedSources = selectedRunSources.value;
+  if (!selectedSources.length && !(dialog.includeNotices && dialog.data.noticeCount > 0)) return;
+  const canUseCommon = runCommonPriceSites.value.length > 0;
+  const common = canUseCommon ? commonPricesForRun(dialog.commonLimits, dialog.data.rentalOnly) : null;
+  dialog.starting = true;
+  try {
+    await api.startRun(visibleMode.value, dialog.scope, {
+      priceLimitsToken: dialog.data.priceLimitsToken, common, selectedSources, includeNotices: dialog.includeNotices,
+      commonPriceSites: runCommonPriceSites.value,
+    });
+  } catch (e) {
+    dialog.data = null;
+    dialog.error = e instanceof Error ? e.message : String(e);
+    dialog.starting = false;
+    return;
+  }
+  if (canUseCommon) saveCommonCollectionPrices(dialog.commonLimits);
+  runPreview.value = null;
+  showLog.value = false;
+  try {
+    await refreshState();
+  } catch {
+    connectionError.value = '조회 시작 후 진행 상태를 불러오지 못했습니다.';
+  } finally {
+    schedule();
   }
 }
 
@@ -908,7 +1007,7 @@ function onDocClick(e: MouseEvent) {
 const SECTION_NAME: Record<NoticeSection, string> = { rent: '임대 공고', trust: '신탁 공매 공고', subscription: '청약 공고', shop: 'LH 상가 공고', land: 'LH 토지 공고' };
 /** 탭 하나만 조회 메뉴: 범위마다 도는 곳(what), 마우스 설명(공고를 받는 곳 전부), 지금 보는 탭인지. 시세 통계는 탭의 '지금 받기'와 같다. */
 const runScopes = computed(() => [
-  // 탭이 없는 범위(다방 구 전체)는 '조회하기'에 들어 있어 메뉴에서 뺀다. 지난 조회 기록의 이름에는 그대로 쓴다.
+  // 사이트별 조회 범위는 사이트별 화면에서 시작한다.
   ...RUN_SCOPES.filter((s) => s.tabs.length).map((s) => {
     const noticeNames = [...new Set(s.sections.flatMap((sec) => noticeSourcesOf(sec)).map((id) => NOTICE_SHORT[id]))];
     return {
@@ -941,9 +1040,10 @@ const SITE_STATE: Record<RunSiteProgress['status'], string> = { waiting: '대기
 /** 끝까지 돌았지만 일부를 못 본 사이트는 '실패'가 아니라 '일부 빠짐'(주황)으로 보인다 */
 const sitePartial = (s: RunSiteProgress) => s.status === 'error' && isPartialMiss(s.message);
 function runScope(id: RunScope | 'market') {
-  runMenu.value = false;
-  if (id === 'market') void fetchMarket();
-  else void startRun(id);
+  if (id === 'market') {
+    runMenu.value = false;
+    void fetchMarket();
+  } else openRunPreview(id);
 }
 
 /** 마지막 조회에서 실패한 사이트(사용자가 중단한 것과 일부만 못 본 것은 빼고, 일부 빠짐은 사이트별 탭과 조회 기록에 주황으로 남는다) */
@@ -1156,11 +1256,11 @@ const filterUse = computed<string[] | 'all'>(() => {
       <button v-if="filtersHidden && tab !== 'areas'" class="show-filters" title="필터 칸 열기 (F)" @click="filtersHidden = false">필터 열기</button>
       <button
         v-if="state?.autoCheck.missed && !running" class="btn btn-sm missed"
-        title="마지막 자동 확인 시각에 대시보드가 꺼져 있었고 그 뒤로 조회하지 않았습니다" @click="startRun()"
+        title="마지막 자동 확인 시각에 대시보드가 꺼져 있었고 그 뒤로 조회하지 않았습니다" @click="openRunPreview()"
       >자동 확인 놓침, 지금 확인</button>
       <button class="btn" :aria-expanded="browseOpen" aria-controls="browse-queue" title="선택한 지역과 사이트를 차례로 방문하고 수집 결과를 확인합니다" @click="browseOpen = !browseOpen">지역 순차 조회</button>
       <div ref="runMenuEl" class="runall">
-        <button class="btn btn-primary run run-main" :disabled="!!running" :title="runAllTitle" @click="startRun()">
+        <button class="btn btn-primary run run-main" :disabled="!!running" :title="runAllTitle" aria-haspopup="dialog" @click="openRunPreview()">
           {{ running ? '조회 중…' : '조회하기' }}
         </button>
         <button
@@ -1169,7 +1269,7 @@ const filterUse = computed<string[] | 'all'>(() => {
         >▾</button>
         <div v-if="runMenu" class="open-menu run-menu">
           <span class="menu-label">전부 조회</span>
-          <button class="run-scope" :title="runAllTitle" @click="runMenu = false; startRun()">
+          <button class="run-scope" :title="runAllTitle" @click="openRunPreview()">
             <span class="run-scope-name">조회하기</span>
             <span class="run-scope-what">{{ runAllSites }} ({{ RUN_PARALLEL_SITES }}곳씩 동시에), 공고 {{ runAllNotices.length }}곳</span>
           </button>
@@ -1249,6 +1349,15 @@ const filterUse = computed<string[] | 'all'>(() => {
   </div>
   <pre v-if="running && showLog" class="livelog">{{ running.log.join('\n') }}</pre>
 
+  <RunPreviewDialog v-if="runPreview"
+    :title="runPreview.title" :sites="runPreview.data?.sites ?? []" :notice-count="runPreview.data?.noticeCount ?? 0"
+    :selected-sources="selectedRunSources" :include-notices="runPreview.includeNotices"
+    :common-limits="runPreview.commonLimits" :common-price-sites="runCommonPriceSites"
+    :rental-only="runPreview.data?.rentalOnly ?? false"
+    :loading="runPreview.loading" :starting="runPreview.starting" :error="runPreview.error"
+    @close="closeRunPreview" @retry="loadRunPreview" @start="confirmRunPreview"
+    @toggle-source="toggleRunSource" @toggle-notices="toggleRunNotices" @common-change="changeRunCommonPrice"
+  />
   <p v-if="connectionError" class="error">{{ connectionError }}</p>
   <p v-if="error" class="error">{{ error }}</p>
 
@@ -1327,7 +1436,7 @@ const filterUse = computed<string[] | 'all'>(() => {
           @house-age="(a) => (houseAge = a)" @house-fetch="fetchHouseTrades"
           @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
           @source="showSource" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
-          @ack-notices="ackNotices" @run="startRun('auction')"
+          @ack-notices="ackNotices" @run="openRunPreview('auction')"
         />
       </template>
       <template v-else-if="tab === 'plot'">
@@ -1343,7 +1452,7 @@ const filterUse = computed<string[] | 'all'>(() => {
           @house-age="(a) => (houseAge = a)" @house-fetch="fetchHouseTrades"
           @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
           @source="showSource" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
-          @ack-notices="ackNotices" @run="startRun('auction')" @zone-check="checkZones"
+          @ack-notices="ackNotices" @run="openRunPreview('auction')" @zone-check="checkZones"
         />
       </template>
       <AptView
@@ -1352,7 +1461,7 @@ const filterUse = computed<string[] | 'all'>(() => {
         :fill="state?.householdsFill ?? { key: false, last: null }" :filling="householdsFill.running" :fill-error="householdsFill.error" :zone="zoneCheck"
         @visible="setAptVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
         @source="showSource" @raw="showRaw" @station="toggleStation" @area="turnOffArea"
-        @run="startRun('auction')" @gus="setAptGus" @households="setHouseholds" @fill="fillHouseholds" @zone-check="checkZones"
+        @run="openRunPreview('auction')" @gus="setAptGus" @households="setHouseholds" @fill="fillHouseholds" @zone-check="checkZones"
       />
       <LineView
         v-else-if="tab === 'line' && state" :listings="lineListings" :filters="filters" :line-view="state.lineView" :running="!!running"
@@ -1378,6 +1487,7 @@ const filterUse = computed<string[] | 'all'>(() => {
       <RunHistory v-else-if="tab === 'runs'" :refresh-key="runsKey" />
       <SitesTab
         v-else-if="tab === 'sites' && state" :state="state" :links="links" :ext-ready="!!ext" :listings="listings" :notices="notices" :notice-status="noticeStatus"
+        @run-site="openRunPreview"
       />
       <AreaSettings v-else-if="tab === 'areas' && state" :areas="state.areas" :restore="state.areaRestore" @changed="refreshState" @browse="backToBrowse" @alerts="tab = 'alerts'" />
       <AlertsTab

@@ -1,5 +1,6 @@
 import { manwon } from './format.js';
 import { distanceM } from './geo.js';
+import { keyedMemo } from './memo.js';
 import { hasRegions, primaryAreas, selectedArea } from './regions.js';
 import { KINDS, KIND_LABEL, kindOf, type Kind } from './kinds.js';
 import type { Area, DealType, ListingView, NormalizedListing, PriceOption } from './types.js';
@@ -188,6 +189,38 @@ function passesAs(l: FilterTarget, deal: DealType | null, f: Filters, areas: Are
     if (!hay.includes(f.text.trim().toLowerCase())) return false;
   }
   return true;
+}
+
+/** 필터와 지역마다 매물 객체 → 판정 결과. 한 번 다시 그릴 때 화면이 쓰는 필터 갈래(거래 유형을 뺀 것 등)보다 넉넉하게 남긴다. */
+const passMemo = keyedMemo<boolean>(16);
+const optionMemo = keyedMemo<PriceOption[]>(16);
+
+/**
+ * 필터와 지역 하나로 매물을 가리는 판정(passes, dealOptions와 같은 결과)을 매물 객체마다 기억해 쓴다.
+ * 화면은 크롬 확장이 순회하는 동안 바뀐 매물만 새 객체로 바꾼 목록을 받는데, 그때마다 수만 건을 다시 판정하면
+ * 받을 때마다 화면이 멈췄다. 같은 필터와 지역이면 바뀌지 않은 매물(같은 객체)은 기억한 결과를 쓴다.
+ * 필터가 보는 매물 칸(가격, 유형, 면적, 층, 옵션, 위치, 주소, 제목)은 받은 뒤 고치지 않는다는 전제다
+ * (화면이 직접 고치는 관심, 봤음, 메모 같은 표시는 필터와 상관없다).
+ * 매물 수만 건을 도는 계산의 반복 밖에서 필터마다 한 번 만들어 쓴다(열쇠를 만들려고 필터와 지역을 글자로 바꾼다).
+ */
+export function filterJudge(f: Filters, areas: Area[]) {
+  const key = JSON.stringify([f, areas]);
+  const passed = passMemo(key);
+  const options = new Map<DealType, WeakMap<object, PriceOption[]>>();
+  return {
+    passes(l: FilterTarget): boolean {
+      let v = passed.get(l);
+      if (v === undefined) passed.set(l, (v = passes(l, f, areas)));
+      return v;
+    },
+    dealOptions(l: FilterTarget, deal: DealType): PriceOption[] {
+      let m = options.get(deal);
+      if (!m) options.set(deal, (m = optionMemo(`${deal}|${key}`)));
+      let v = m.get(l);
+      if (v === undefined) m.set(l, (v = dealOptions(l, deal, f, areas)));
+      return v;
+    },
+  };
 }
 
 const M2_PER_PYEONG = 3.3058;

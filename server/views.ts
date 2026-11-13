@@ -4,7 +4,7 @@ import { looksSimilar } from './identity.js';
 import { parseLot, pnuOf } from './lots.js';
 import { zonesLookup } from './redev-zones.js';
 import { tradeComparer, type TradeMatch } from './trade-compare.js';
-import { zigbangItemPage } from './zigbang-parse.js';
+import { zigbangItemPage, zigbangThumb } from './zigbang-parse.js';
 import { manwon } from '../shared/format.js';
 import { RUN_FILES_PURGED_KEY, screenshotPurged } from './run-files.js';
 import { kindOf } from '../shared/kinds.js';
@@ -436,11 +436,17 @@ export function buildListingViews(): ListingView[] {
   const purgedThrough = Number(store.getSetting(RUN_FILES_PURGED_KEY) ?? 0) || 0;
   // 다방은 목록에 주소가 없어 '주소 보기'로 받아 둔 지번 주소를 채운다(사이트가 준 주소가 있으면 그것을 쓴다).
   // 직방은 예전에 목록을 받은 화면 주소를 원본 주소로 저장했다. 다시 받지 않은 매물도 그 방 화면이 열리게 번호로 만든다.
+  // 직방 사진도 예전에는 크기 조건 없는 주소(400 오류)로 저장했다. 다시 받지 않은 매물도 사진이 보이게 조건을 붙인다(zigbangThumb).
   const parsed = rows.map((r) => {
     const data = JSON.parse(r.data) as NormalizedListing;
     const address = !data.address && r.source === 'dabang' ? dabangAddresses.get(r.id) : undefined;
-    const url = r.source === 'zigbang' ? zigbangItemPage(r.source_id) : undefined;
-    return { row: r, data: address || url ? { ...data, ...(address ? { address } : {}), ...(url ? { url } : {}) } : data };
+    const zig = r.source === 'zigbang';
+    const url = zig ? zigbangItemPage(r.source_id) : undefined;
+    const thumbnail = zig && data.thumbnail ? zigbangThumb(data.thumbnail) : undefined;
+    return {
+      row: r,
+      data: address || url ? { ...data, ...(address ? { address } : {}), ...(url ? { url } : {}), ...(thumbnail ? { thumbnail } : {}) } : data,
+    };
   });
   const discarded = parsed.filter(({ row }) => verdicts.get(row.id)?.verdict === 'discard');
 

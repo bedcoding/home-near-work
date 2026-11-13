@@ -1,4 +1,4 @@
-import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, LineViewSetting, RedevZonesView, RentView, RunDetail, RunInfo, RunScope, SeenRef, SiteReport, SourceId, Station, Verdict } from '../../shared/types';
+import type { AlertSettings, AppState, Area, AuctionResultSummary, AuctionResultView, AutoCheckState, CollectionPriceLimits, CollectionPriceLimitsState, CollectionPriceOverrides, CourtRegionStat, ExplainRow, HouseTradeSummary, ListingView, MarketView, NoticeFileView, NoticeSourceId, NoticeSourceStatus, NoticeView, LineViewSetting, RedevZonesView, RentView, RunDetail, RunInfo, RunPreview, RunScope, SeenRef, SiteReport, SourceId, Station, Verdict } from '../../shared/types';
 import type { Filters } from '../../shared/filters';
 import type { WalkPin, WalkView } from '../../shared/walk';
 import { LISTINGS_TOKEN_HEADER, type ListingsDelta, type ListingsReply } from '../../shared/listings-delta';
@@ -30,6 +30,9 @@ export const api = {
   },
   /** 사이트별 탭: 소스마다 최근 조회 기록과 크롬 확장 사이트가 받은 화면 데이터 요약 */
   siteReport: () => request<SiteReport>('GET', '/api/site-report'),
+  collectionPriceLimits: () => request<CollectionPriceLimitsState>('GET', '/api/collection/price-limits'),
+  setCollectionPriceLimits: (source: SourceId, limits: CollectionPriceLimits | null) =>
+    request<CollectionPriceLimitsState>('PUT', '/api/collection/price-limits', { source, limits }),
   raw: (id: string) => request<{ explain: ExplainRow[]; raw: unknown }>('GET', `/api/listings/${enc(id)}/raw`),
   /** '출처 보기': 매물을 모은 조회 번호, 그때 연 페이지, 스크린샷(기록이 없으면 null). 목록에는 스크린샷이 있는지만 온다. */
   source: (id: string) => request<SeenRef | null>('GET', `/api/listings/${enc(id)}/source`),
@@ -43,7 +46,19 @@ export const api = {
   /** 법원경매 물건 상세를 프로그램이 띄운 크롬 창에 연다 */
   openCourt: (id: string) => request('POST', `/api/listings/${enc(id)}/open-court`),
   /** scope를 주면 그 탭에 보이는 사이트와 공고만 조회한다(없으면 전부) */
-  startRun: (visible: boolean, scope?: RunScope) => request<{ runId: number }>('POST', '/api/runs', scope ? { visible, scope } : { visible }),
+  runPreview: (scope?: RunScope) => request<RunPreview>('GET', scope ? `/api/runs/preview?scope=${enc(scope)}` : '/api/runs/preview'),
+  startRun: (visible: boolean, scope: RunScope | undefined, conditions: {
+    priceLimitsToken: string; common: CollectionPriceLimits | null; commonPriceSites: readonly SourceId[];
+    selectedSources: readonly SourceId[]; includeNotices: boolean;
+  }) =>
+    request<{ runId: number }>('POST', '/api/runs', {
+      visible, scope, priceLimitsToken: conditions.priceLimitsToken,
+      // Blank shared prices explicitly clear collection caps for the selected sites on this run.
+      priceOverrides: !conditions.common && conditions.commonPriceSites.length
+        ? Object.fromEntries(conditions.commonPriceSites.map(source => [source, null])) as CollectionPriceOverrides : undefined,
+      commonPriceLimits: conditions.common ?? undefined,
+      selectedSources: conditions.selectedSources, includeNotices: conditions.includeNotices,
+    }),
   /** 자동 확인 시각(null이면 끄기)과 창 표시를 바꾼다. */
   setAutoCheck: (body: { time?: string | null; day?: number | null; visible?: boolean; noticeTime?: string | null }) => request<AutoCheckState>('PUT', '/api/auto-check', body),
   /** 조회가 끝나면 띄울 알림 설정을 바꾼다(준 값만). 바뀐 전체 설정을 돌려준다. */

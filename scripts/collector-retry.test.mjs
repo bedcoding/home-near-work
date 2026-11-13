@@ -211,3 +211,61 @@ test('a trust board reads the observed second page and stops when there is no ne
   assert.equal(items.length, 2);
   assert.equal(ctx.partials.length, 0);
 });
+
+test('a failed district keeps earlier trust notices and permits a later district to finish', async () => {
+  const { mghat } = load('trusts.ts', trustDeps);
+  const visited = [];
+  let currentUrl = '', keyword = '';
+  const ctx = context({
+    goto: async (_source, url) => {
+      currentUrl = url;
+      keyword = new URL(url).searchParams.get('keyword');
+      visited.push(keyword);
+      return { status: () => keyword === 'SyntheticB' ? 500 : 200 };
+    },
+    page: {
+      url: () => currentUrl,
+      waitForSelector: noop,
+      evaluate: async (_fn, arg) => arg ? [{
+        href: `/auction/disposal/${keyword === 'SyntheticA' ? 1 : 3}/show.do`,
+        title: `${keyword}구 공고`, status: '', date: '', kind: '',
+      }] : [],
+    },
+  });
+  const items = await mghat.collect(ctx, ['SyntheticA구', 'SyntheticB구', 'SyntheticC구']);
+  assert.deepEqual(Array.from(items, item => item.sourceId), ['1', '3']);
+  assert.deepEqual(visited, ['SyntheticA', 'SyntheticB', 'SyntheticC']);
+  assert.equal(ctx.partials.length, 1);
+  assert.match(ctx.partials[0], /SyntheticB구.*HTTP 500/);
+});
+
+test('trust board stops after access limiting without dropping notices already read', async () => {
+  let docReads = 0;
+  const { mghat } = load('trusts.ts', { './trust-docs.js': { readTrustDocs: async () => { docReads++; } } });
+  const visited = [], retryable = [];
+  let currentUrl = '';
+  const ctx = context({
+    goto: async (_source, url) => {
+      currentUrl = url;
+      const params = new URL(url).searchParams;
+      visited.push([params.get('keyword'), params.get('page')]);
+      return { status: () => params.get('page') === '2' ? 429 : 200 };
+    },
+    page: {
+      url: () => currentUrl,
+      waitForSelector: noop,
+      evaluate: async (_fn, arg) => {
+        if (arg) return [{ href: '/auction/disposal/1/show.do', title: 'SyntheticA구 공고', status: '', date: '', kind: '' }];
+        const next = new URL(currentUrl); next.searchParams.set('page', '2');
+        return [next.href];
+      },
+    },
+  });
+  ctx.partial = (reason, retry) => { ctx.partials.push(reason); retryable.push(retry); };
+  const items = await mghat.collect(ctx, ['SyntheticA구', 'SyntheticB구']);
+  assert.equal(items.length, 1);
+  assert.deepEqual(visited, [['SyntheticA', '1'], ['SyntheticA', '2']]);
+  assert.equal(docReads, 0);
+  assert.match(ctx.partials[0], /HTTP 429/);
+  assert.deepEqual(retryable, [false]);
+});

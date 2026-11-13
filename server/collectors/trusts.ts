@@ -120,15 +120,17 @@ function boardCollector(spec: BoardSpec): NoticeCollector {
       const page = session.page;
       const cutoff = cutoffDate();
       const out = new Map<string, NoticeInput>();
-      for (const gu of gus) {
+      let readAnyPage = false;
+      const search = async (gu: string) => {
         const keyword = gu.replace(/구$/, '');
         ctx.progress(`${spec.label}: '${keyword}' 검색`);
-        if (spec.searchUrl) {
-          const res = await session.goto(spec.id, spec.searchUrl(keyword));
-          if (blocked(res?.status())) throw new BlockedError(`HTTP ${res?.status()}`);
-        } else if (spec.form) {
-          const res = await session.goto(spec.id, spec.form.url);
-          if (blocked(res?.status())) throw new BlockedError(`HTTP ${res?.status()}`);
+        const url = spec.searchUrl?.(keyword) ?? spec.form?.url;
+        if (!url) throw new Error('공매 검색 주소를 찾지 못했습니다.');
+        const response = await session.goto(spec.id, url);
+        const status = response?.status();
+        if (blocked(status)) throw new BlockedError(`HTTP ${status}`);
+        if (!status || status >= 400) throw new Error(`공매 검색 화면을 열지 못했습니다${status ? ` (HTTP ${status})` : ''}.`);
+        if (!spec.searchUrl && spec.form) {
           const input = page.locator(spec.form.input).first();
           await input.waitFor({ timeout: 20000 });
           await session.click(input);
@@ -136,11 +138,13 @@ function boardCollector(spec: BoardSpec): NoticeCollector {
           await session.type(keyword);
           const searched = page.waitForNavigation({ timeout: 30000, waitUntil: 'domcontentloaded' }).catch(() => null);
           await session.click(page.locator(spec.form.button).first());
-          await searched;
+          const searchStatus = (await searched)?.status();
+          if (blocked(searchStatus)) throw new BlockedError(`HTTP ${searchStatus}`);
+          if (searchStatus && searchStatus >= 400) throw new Error(`공매 검색 결과를 열지 못했습니다 (HTTP ${searchStatus}).`);
           session.record(spec.id, 'action', page.url(), null, `검색어 ${keyword}`);
         }
         const seenRows = new Set<string>();
-        for (let pageNo = 1; pageNo <= BOARD_MAX_PAGES; pageNo++) {
+        for (let pageNo = 1; pageNo <= BOARD_MAX_PAGES && !ctx.stopped?.(); pageNo++) {
           await page.waitForSelector(spec.row, { timeout: 15000 }).catch(() => null);
           const rows = await readBoard(ctx, spec);
           const found = rows
@@ -150,6 +154,7 @@ function boardCollector(spec: BoardSpec): NoticeCollector {
             const body = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
             if (!/없습니다|없어요|(?:총|검색결과|검색\s*결과)\s*0\s*건/.test(body)) throw new Error('공매 목록을 읽지 못했습니다. 사이트 화면 구조가 바뀌었을 수 있습니다.');
           }
+          readAnyPage = true;
           session.record(spec.id, 'data', page.url(), null, `'${keyword}' ${pageNo}쪽 ${found.length}건`);
           if (pageNo > 1 && found.length && found.every((r) => seenRows.has(r.id))) {
             ctx.partial(`${spec.label}: 다음 쪽에서 같은 목록이 반환됨`);
@@ -189,9 +194,27 @@ function boardCollector(spec: BoardSpec): NoticeCollector {
           }
         }
         await session.pause(600);
+      };
+
+      let firstError: unknown = null;
+      let accessLimited = false;
+      for (const gu of gus) {
+        if (ctx.stopped?.()) break;
+        try {
+          await search(gu);
+        } catch (error) {
+          if (ctx.stopped?.()) break;
+          accessLimited = error instanceof BlockedError;
+          if (accessLimited && !readAnyPage) throw error;
+          firstError ??= error;
+          const reason = error instanceof Error ? error.message.split('\n')[0] : String(error);
+          ctx.partial(`${spec.label}: ${gu} 목록 조회 중 ${reason}`, !accessLimited);
+          if (accessLimited) break;
+        }
       }
+      if (!readAnyPage && firstError && !ctx.stopped?.()) throw firstError;
       const items = [...out.values()];
-      if (spec.docs) await readTrustDocs(ctx, spec.id, items);
+      if (spec.docs && !accessLimited && !ctx.stopped?.()) await readTrustDocs(ctx, spec.id, items);
       return items;
     },
   };

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
 import { isPartialMiss, isRunFailure, RUN_SCOPES, SOURCE_LABEL, type RunDetail, type RunInfo, type RunScope, type RunSourceSummary } from '../../../shared/types';
+import { collectionPriceSummary } from '../../../shared/collection-price-limits';
 import { api } from '../api';
 import { dateTime } from '../format';
 
@@ -68,6 +69,9 @@ const kindText: Record<'page' | 'data' | 'action', string> = { page: '페이지'
           <button class="btn btn-sm" @click="detail = null">닫기</button>
         </div>
         <template v-for="source in detail.summary?.sources ?? []" :key="source.source">
+          <p v-if="source.collectionPriceLimits !== undefined" class="muted">
+            {{ SOURCE_LABEL[source.source] }} 수집 조건은 {{ source.collectionPriceLimits ? collectionPriceSummary(source.collectionPriceLimits) : '가격 제한 없음' }}입니다.
+          </p>
           <template v-if="source.coverage?.length">
             <h4>{{ SOURCE_LABEL[source.source] }} 범위별 저장 확인</h4>
             <table class="req"><thead><tr><th>범위·유형</th><th>페이지</th><th>일반 목록 / 표시 총건수</th><th>서버 저장</th><th>상태</th></tr></thead>

@@ -25,6 +25,15 @@ const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : t
 export const zigbangItemPage = (id: string | number) => `https://www.zigbang.com/home/oneroom/items/${id}`;
 
 /**
+ * 직방 사진 주소(images_thumbnail, `https://ic.zigbang.com/ic/items/<번호>/1.jpg`)는 크기 조건 없이 부르면 400(JSON 오류)을 준다.
+ * 직방 화면처럼 w, h, q, a를 붙여 작은 사진(400×300)으로 받는다. 이미 조건이 붙은 주소는 그대로 둔다.
+ */
+export function zigbangThumb(src: string) {
+  if (!src || src.includes('?')) return src;
+  return `${src}?w=400&h=300&q=70&a=1`;
+}
+
+/**
  * `house/property/v1/items/list` 응답(목록에 보이는 방들의 내용) 한 줄 → 공통 형식. 금액은 만원(manage_cost만 원).
  * floor: 숫자면 층, '반지하', '지하'는 지하, '옥탑'은 옥탑. url: 그 방 화면(zigbangItemPage).
  */
@@ -59,7 +68,7 @@ function toListing(x: Record<string, unknown>): NormalizedListing | null {
     sourceId: String(id),
     url: zigbangItemPage(id),
     title: typeof x.title === 'string' ? x.title : '',
-    thumbnail: typeof x.images_thumbnail === 'string' ? x.images_thumbnail : null,
+    thumbnail: typeof x.images_thumbnail === 'string' ? zigbangThumb(x.images_thumbnail) : null,
     lat,
     lng,
     address: typeof x.address1 === 'string' ? x.address1 : typeof x.address === 'string' ? x.address : null,

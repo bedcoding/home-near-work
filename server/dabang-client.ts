@@ -1,5 +1,5 @@
 import { regionBounds } from '../shared/region-geometry.js';
-import type { Area } from '../shared/types.js';
+import type { Area, CollectionPriceLimits, PriceOption } from '../shared/types.js';
 import { parseDabangRoomList } from './dabang-parse.js';
 
 export const DABANG_CATEGORIES = [
@@ -57,26 +57,74 @@ export function dabangTargets<T extends Pick<Area, 'id' | 'name' | 'lat' | 'lng'
   return { targets, skipped, unreadable };
 }
 
-/** Same unbounded defaults as the public map, independently of notification and list filters. */
-export function dabangFilters(category: DabangCategory) {
-  const range = { min: 0, max: 999999 };
+const OPEN_PRICE_MAX = 999999;
+const SELLING_TYPES = { monthly: 'MONTHLY_RENT', jeonse: 'LEASE', sale: 'SELL' } as const;
+type DabangDeal = keyof typeof SELLING_TYPES;
+
+export interface DabangPriceScope {
+  suffix: string;
+  label: string;
+  deals: DabangDeal[];
+  depositMax: number | null;
+  monthlyMax: number | null;
+  saleMax: number | null;
+}
+
+/** 전세금과 월세 보증금은 한 요청에서 같은 필드를 사용하므로 값이 다를 때에만 나눈다. */
+export function dabangPriceScopes(category: DabangCategory, limits?: CollectionPriceLimits): DabangPriceScope[] {
+  const requestMax = (max: number | null | undefined) => max != null && max < OPEN_PRICE_MAX ? max : null;
+  const sale = category !== 'one-two' && !limits?.excludeSale;
+  const monthlyDeposit = requestMax(limits?.monthlyDepositMax);
+  const jeonseDeposit = requestMax(limits?.jeonseMax);
+  const monthlyMax = requestMax(limits?.monthlyMax);
+  const saleMax = sale ? requestMax(limits?.saleMax) : null;
+  if (monthlyDeposit === jeonseDeposit) return [{
+    suffix: '', label: '', deals: sale ? ['monthly', 'jeonse', 'sale'] : ['monthly', 'jeonse'],
+    depositMax: monthlyDeposit, monthlyMax, saleMax,
+  }];
+  return [
+    { suffix: '-monthly', label: sale ? '월세와 매매' : '월세', deals: sale ? ['monthly', 'sale'] : ['monthly'],
+      depositMax: monthlyDeposit, monthlyMax, saleMax },
+    { suffix: '-jeonse', label: '전세', deals: ['jeonse'], depositMax: jeonseDeposit, monthlyMax: null, saleMax: null },
+  ];
+}
+
+/** With a request scope, verify the transmitted caps and require readable amounts for locally enforced caps. */
+export function dabangPricesMatch(prices: PriceOption[], limits: CollectionPriceLimits, scope?: DabangPriceScope): boolean {
+  const within = (amount: number | null, exactMax: number | null, requestMax: number | null) =>
+    exactMax === null || amount !== null && (requestMax === null || amount <= requestMax);
+  return prices.some(price => {
+    if (price.deal === 'monthly') return (!scope || scope.deals.includes('monthly'))
+      && within(price.deposit, limits.monthlyDepositMax, scope ? scope.depositMax : limits.monthlyDepositMax)
+      && within(price.monthly, limits.monthlyMax, scope ? scope.monthlyMax : limits.monthlyMax);
+    if (price.deal === 'jeonse') return (!scope || scope.deals.includes('jeonse'))
+      && within(price.deposit, limits.jeonseMax, scope ? scope.depositMax : limits.jeonseMax);
+    return price.deal === 'sale' && !limits.excludeSale && (!scope || scope.deals.includes('sale'))
+      && within(price.price, limits.saleMax, scope ? scope.saleMax : limits.saleMax);
+  });
+}
+
+/** Same defaults as the public map, independently of notification and list filters. */
+export function dabangFilters(category: DabangCategory, scope = dabangPriceScopes(category)[0]) {
+  const range = { min: 0, max: OPEN_PRICE_MAX };
+  const capped = (max: number | null) => max === null ? range : { ...range, max };
   const floors = ['GROUND_FIRST', 'GROUND_SECOND_OVER', 'SEMI_BASEMENT', 'ROOFTOP'];
   const common = {
-    sellingTypeList: category === 'one-two' ? ['MONTHLY_RENT', 'LEASE'] : ['MONTHLY_RENT', 'LEASE', 'SELL'],
-    depositRange: range, priceRange: range, isIncludeMaintenance: false, pyeongRange: range,
+    sellingTypeList: scope.deals.map(deal => SELLING_TYPES[deal]),
+    depositRange: capped(scope.depositMax), priceRange: capped(scope.monthlyMax), isIncludeMaintenance: false, pyeongRange: range,
     useApprovalDateRange: range, dealTypeList: ['AGENT'], isShortLease: false,
   };
   if (category === 'one-two') return { ...common, roomFloorList: floors, roomTypeList: ['ONE_ROOM', 'TWO_ROOM'],
     canParking: false, hasElevator: false, hasPano: false, isDivision: false, isDuplex: false };
-  const other = { ...common, tradeRange: range, roomCountList: ['ONE_ROOM', 'TWO_ROOM', 'THREE_ROOM', 'FOUR_ROOM'] };
+  const other = { ...common, tradeRange: capped(scope.saleMax), roomCountList: ['ONE_ROOM', 'TWO_ROOM', 'THREE_ROOM', 'FOUR_ROOM'] };
   if (category === 'apt') return { ...other, householdNumRange: range, parkingNumRange: range, hasTakeTenant: false };
   return { ...other, canParking: false, hasElevator: false, hasPano: false,
     ...(category === 'house-villa' ? { roomFloorList: floors } : { parkingNumRange: range }) };
 }
 
-export function dabangListUrl(category: DabangCategory, bounds: DabangBounds, page: number): string {
+export function dabangListUrl(category: DabangCategory, bounds: DabangBounds, page: number, scope?: DabangPriceScope): string {
   return `https://www.dabangapp.com/api/v5/room-list/category/${category}/bbox?${new URLSearchParams({
-    filters: JSON.stringify(dabangFilters(category)), bbox: JSON.stringify(bounds), zoom: '13', useMap: 'naver', page: String(page),
+    filters: JSON.stringify(dabangFilters(category, scope)), bbox: JSON.stringify(bounds), zoom: '13', useMap: 'naver', page: String(page),
   })}`;
 }
 

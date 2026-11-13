@@ -1,10 +1,12 @@
 import type { BadgeTone, BrowserSession } from '../browser.js';
-import type { Area, CollectionCoverage, NormalizedListing, SourceId } from '../../shared/types.js';
+import type { Area, CollectionCoverage, CollectionPriceLimits, NormalizedListing, SourceId } from '../../shared/types.js';
 
 export interface CollectContext {
   runId: number;
   areas: Area[];
   session: BrowserSession;
+  priceLimits?: CollectionPriceLimits;
+  rentalOnly?: boolean;
   /** 조회 기록에 한 줄 남긴다. */
   log(message: string): void;
   /** 지금 하는 일을 사이트 위 진행 띠와 대시보드에 보여 준다. */

@@ -29,7 +29,7 @@ import { importRedevZones, redevZones } from './redev-zones.js';
 import { areaRestoreState, LINE_RADII, lineView, restoreAreas, setLineView } from './line-areas.js';
 import { restSeconds } from './browser.js';
 import { updateZonesNow, zoneFileCheckState } from './redev-zones-update.js';
-import { getProgress, staleText, startLineRun, startRun, stopRun } from './runner.js';
+import { getProgress, runPlan, staleText, startLineRun, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
 import { browseConsole, normalizeBrowseProgress, type BrowseProgress } from './browse-progress.js';
 import { BROWSE_SCOPES_KEY, readBrowseScopes } from './browse-settings.js';
@@ -48,7 +48,8 @@ import { refreshDabangUrls } from './dabang-links.js';
 import { purgeOldRunFiles, RUN_FILES_KEEP_DAYS, RUN_FILES_PURGED_KEY } from './run-files.js';
 import { dabangNearUrl, parseDabangNear } from './dabang-parse.js';
 import { DABANG_HEADERS } from './dabang-client.js';
-import { CAPTURE_SOURCES, REST_CHOICES, RUN_SCOPES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type SourceId, type Verdict, VERDICTS } from '../shared/types.js';
+import { collectionPriceLimitsChange, collectionPriceLimitsKey, collectionPriceLimitsState, collectionPriceLimitsToken, collectionPriceOverrides, runCollectionPriceLimits, validateCommonPriceLimits } from './collection-price-limits.js';
+import { CAPTURE_SOURCES, REST_CHOICES, RUN_SCOPES, SEOUL, SOURCE_LABEL, type AppState, type Area, type RunInfo, type RunPreview, type RunScope, type SourceId, type Verdict, VERDICTS } from '../shared/types.js';
 
 // 처리하지 못한 비동기 오류가 나도 대시보드 서버가 꺼지지 않게 기록만 남긴다.
 process.on('unhandledRejection', (e) => console.error('처리하지 못한 오류:', e instanceof Error ? e.message : e));
@@ -619,18 +620,62 @@ app.delete<{ Params: { id: string } }>('/api/areas/:id', async (req, reply) => {
   return { ok: true };
 });
 
+function describeRun(scope?: RunScope): RunPreview {
+  const { collectors, notices } = runPlan(scope, false);
+  const { limits, upstreamSites } = runCollectionPriceLimits(store.getSetting, collectors.map(collector => collector.id), scope);
+  return {
+    sites: collectors.map(({ id }) => ({ source: id, limits: limits[id] ?? null, supportsPriceLimits: upstreamSites.includes(id) })),
+    noticeCount: notices.length,
+    rentalOnly: scope === 'rentOnly',
+    priceLimitsToken: collectionPriceLimitsToken(limits),
+  };
+}
+
+app.get<{ Querystring: { scope?: unknown } }>('/api/runs/preview', async (req, reply) => {
+  if (!fromDashboard(req.headers.origin)) return reply.code(403).send({ error: '대시보드에서만 조회 조건을 확인할 수 있습니다.' });
+  reply.header('Cache-Control', 'no-store');
+  const scope = RUN_SCOPES.find(candidate => candidate.id === req.query.scope)?.id;
+  if (req.query.scope !== undefined && !scope) {
+    return reply.code(400).send({ error: '지원하지 않는 조회 범위입니다. 대시보드를 새로고침해 주세요.' });
+  }
+  try { return describeRun(scope); }
+  catch { return reply.code(503).send({ error: '저장된 조회 조건을 불러오지 못했습니다.' }); }
+});
+
 /**
  * 조회를 시작한다. scope(RUN_SCOPES의 id, 예: 'auction')를 주면 그 탭에 보이는 사이트와 공고만 돈다.
  * 예전 화면이 보내는 sources(['courtauction', 'onbid'])는 경매 범위로 본다.
  */
-app.post<{ Body: { visible?: boolean; scope?: unknown; sources?: unknown } }>('/api/runs', async (req, reply) => {
+app.post<{ Body: {
+  visible?: boolean; scope?: unknown; sources?: unknown; priceLimitsToken?: unknown;
+  priceOverrides?: unknown; commonPriceLimits?: unknown; selectedSources?: SourceId[]; includeNotices?: boolean;
+} }>('/api/runs', async (req, reply) => {
   if (req.body?.scope != null && !RUN_SCOPES.some((s) => s.id === req.body.scope)) {
     return reply.code(400).send({ error: '지원하지 않는 조회 범위입니다. 대시보드를 새로고침해 주세요.' });
   }
   const scope = RUN_SCOPES.find((s) => s.id === req.body?.scope)?.id
     ?? (Array.isArray(req.body?.sources) && req.body!.sources.some((s) => s === 'courtauction' || s === 'onbid') ? 'auction' : undefined);
+  const selectedSources = req.body?.selectedSources;
+  const includeNotices = req.body?.includeNotices;
+  if ((req.body?.priceOverrides !== undefined || req.body?.commonPriceLimits !== undefined
+    || selectedSources !== undefined || includeNotices !== undefined) && !fromDashboard(req.headers.origin)) {
+    return reply.code(403).send({ error: '대시보드에서만 이번 조회의 사이트와 가격 조건을 바꿀 수 있습니다.' });
+  }
+  let priceOverrides: ReturnType<typeof collectionPriceOverrides>;
+  let commonPriceLimits: ReturnType<typeof validateCommonPriceLimits>;
   try {
-    return { runId: startRun(req.body?.visible !== false, scope) };
+    const sources = runPlan(scope, false, { selectedSources, includeNotices }).collectors.map(collector => collector.id);
+    priceOverrides = collectionPriceOverrides(req.body?.priceOverrides, sources);
+    commonPriceLimits = validateCommonPriceLimits(req.body?.commonPriceLimits, sources);
+  } catch (e) {
+    return reply.code(400).send({ error: e instanceof Error ? e.message : '이번 조회의 가격 조건을 확인해 주세요.' });
+  }
+  try {
+    if ((req.body?.priceLimitsToken !== undefined || commonPriceLimits || Object.keys(priceOverrides).length > 0)
+      && req.body?.priceLimitsToken !== describeRun(scope).priceLimitsToken) {
+      return reply.code(409).send({ error: '저장된 가격 조건이 바뀌었습니다. 조건을 다시 불러와 확인해 주세요.' });
+    }
+    return { runId: startRun(req.body?.visible !== false, scope, { priceOverrides, commonPriceLimits, selectedSources, includeNotices }) };
   } catch (e) {
     reply.code(409);
     return { error: e instanceof Error ? e.message : String(e) };
@@ -681,7 +726,21 @@ function browseAutoReply(reply: { code: (status: number) => unknown }, action: (
     return { error: status < 500 && error instanceof Error ? error.message : '예약 조회 상태를 처리하지 못했습니다.' };
   }
 }
-const fromDashboard = (origin: string | undefined) => !origin || ['http://localhost:8787', 'http://127.0.0.1:8787', 'http://localhost:5173', 'http://127.0.0.1:5173'].includes(origin);
+const dashboardOrigins = new Set([DASHBOARD_URL, `http://${HOST}:${PORT}`, 'http://localhost:5173', 'http://127.0.0.1:5173']);
+const fromDashboard = (origin: string | undefined) => !origin || dashboardOrigins.has(origin);
+app.get('/api/collection/price-limits', async (req, reply) => {
+  if (!fromDashboard(req.headers.origin)) return reply.code(403).send({ error: '대시보드에서만 가격 제한을 확인할 수 있습니다.' });
+  reply.header('Cache-Control', 'no-store');
+  return collectionPriceLimitsState(store.getSetting);
+});
+app.put('/api/collection/price-limits', async (req, reply) => {
+  if (!fromDashboard(req.headers.origin)) return reply.code(403).send({ error: '대시보드에서만 가격 제한을 저장할 수 있습니다.' });
+  let change: ReturnType<typeof collectionPriceLimitsChange>;
+  try { change = collectionPriceLimitsChange(req.body); }
+  catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : '가격 제한을 확인해 주세요.' }); }
+  store.setQuietSetting(collectionPriceLimitsKey(change.source), JSON.stringify(change.limits));
+  return collectionPriceLimitsState(store.getSetting);
+});
 app.get('/api/browse/naver-preset',async (_req,reply)=>{reply.header('Cache-Control','no-store');return browseAutoReply(reply,()=>({preset:naverPresetState()}));});
 app.put<{Body:Parameters<typeof saveNaverPreset>[0]}>('/api/browse/naver-preset',async (req,reply)=>{
   if(!fromExtension(req.headers.origin) && !fromDashboard(req.headers.origin)){reply.code(403);return {error:'확장 팝업이나 로컬 대시보드에서만 조건을 저장할 수 있습니다.'};}

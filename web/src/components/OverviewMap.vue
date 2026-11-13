@@ -231,7 +231,9 @@ function tooltip(g: Group) {
     const mark = l.verdict === 'meh' ? ', 별로' : l.contactedAt ? ', 문의함' : looksSeen(l) ? ', 봤음' : '';
     const site = `${SOURCE_LABEL[l.source]}${mark}`;
     const memo = l.note ? ` <span class="tip-note">📝 ${esc(l.note.length > 24 ? `${l.note.slice(0, 24)}…` : l.note)}</span>` : '';
-    return `${esc(pricesText(l))}${l.title ? `, ${esc(l.title.slice(0, 24))}` : ''} <span class="tip-site">(${esc(site)})</span>${memo}`;
+    // 평수는 가격 바로 뒤에 굵게 쓴다(몇 평인지를 가장 먼저 본다).
+    const area = l.areaM2 != null ? `, <b>${pyeong(l.areaM2)}평</b>` : '';
+    return `${esc(pricesText(l))}${area}${l.title ? `, ${esc(l.title.slice(0, 24))}` : ''} <span class="tip-site">(${esc(site)})</span>${memo}`;
   });
   if (items.length > 6) lines.push(`외 ${items.length - 6}건`);
   return (items.length > 1 ? `<strong>${g.spots > 1 ? '이 근처' : '이 자리'} ${items.length}건</strong><br>` : '') + lines.join('<br>');
@@ -506,6 +508,28 @@ const POPUP_MAX = 12;
 /** 정보 창 내용 폭의 한계(px). 폭은 Leaflet이 내용에 맞춰 정하는데, 단추 줄은 줄바꿈하지 않아 사실상 단추 줄 폭에 맞는다. */
 const POPUP_WIDTH = { min: 200, max: 480 };
 
+/** 정보 창 카드 왼쪽의 사진 칸. 크기가 정해져 있어 사진이 늦게 와도 창 크기는 그대로다. 없거나 못 불러오면 '사진 없음'. */
+function popupThumb(src: string | null) {
+  const el = document.createElement('div');
+  el.className = 'mp-thumb';
+  const empty = () => {
+    el.replaceChildren();
+    el.textContent = '사진 없음';
+  };
+  if (!src) {
+    empty();
+    return el;
+  }
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = '';
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  img.addEventListener('error', empty, { once: true });
+  el.appendChild(img);
+  return el;
+}
+
 /** 고른 매물이 묶음에 들어 있으면 맨 앞으로 옮긴다(나머지는 묶음 순서 그대로). */
 function withSelectedFirst(items: ListingView[]) {
   const i = props.selectedId ? items.findIndex((l) => l.id === props.selectedId) : -1;
@@ -514,7 +538,7 @@ function withSelectedFirst(items: ListingView[]) {
 
 /**
  * 누르면 보이는 창: 맨 위에 건수 머리글(창 안을 스크롤해도 남음), 그 아래 매물마다 카드 하나.
- * 카드에는 가격(크게, 월세는 낱말 없이)과 오른쪽 끝 평수 상자, 그 아래 '원본 열기', '네이버 지도' 단추만 둔다. 옆에 목록이 있으면 카드를 누를 때
+ * 카드에는 왼쪽 사진(popupThumb), 가격(크게, 월세는 낱말 없이)과 오른쪽 끝 평수 상자, 그 아래 '원본 열기', '네이버 지도' 단추만 둔다. 옆에 목록이 있으면 카드를 누를 때
  * 목록에서 그 매물을 고른다(예전 '목록에서 보기' 단추). 층, 유형, 사이트, 내 표시(봤음, 문의함 등), 메모는 매물 카드와
  * 올리면 보이는 글에 있어서 창에는 쓰지 않는다(가격을 먼저 보게).
  * 고른 매물이 맨 위, 나머지는 싼 순(월세와 전세는 환산 월세), 별로는 맨 아래.
@@ -525,9 +549,16 @@ function popup(g: Group) {
   const box = document.createElement('div');
   box.className = 'mp';
   if (items.length > 1) box.appendChild(line('mp-head', `${g.spots > 1 ? '이 근처' : '이 자리'} 매물 ${items.length}건`));
-  for (const l of items.slice(0, POPUP_MAX)) {
+  const shown = items.slice(0, POPUP_MAX);
+  // 사진은 보이는 매물 중 하나라도 있을 때만 왼쪽 칸에 둔다(같은 매물을 여러 번 올린 것을 사진으로 가려 보게). 경매처럼 사진이 없는 묶음은 칸을 비우지 않는다.
+  const withThumb = shown.some((l) => l.thumbnail);
+  for (const l of shown) {
     const card = document.createElement('div');
     card.className = 'mp-card';
+    if (withThumb) {
+      card.classList.add('has-thumb');
+      card.appendChild(popupThumb(l.thumbnail));
+    }
     const top = document.createElement('div');
     top.className = 'mp-top';
     const price = document.createElement('strong');
@@ -1695,6 +1726,16 @@ onBeforeUnmount(() => {
 /* 매물 하나 = 카드 하나: 위에 가격(가장 크게)과 평수, 아래 단추 줄 */
 :deep(.mp-card) { display: grid; gap: 8px; padding: 9px 10px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
 /* 옆에 목록이 있으면 카드를 누르면 목록에서 그 매물을 고른다. */
+/* 사진이 있으면 왼쪽에 사진, 오른쪽에 가격 줄과 단추 줄. */
+:deep(.mp-card.has-thumb) { grid-template-columns: 88px auto; grid-template-areas: 'thumb top' 'thumb actions'; column-gap: 10px; }
+:deep(.mp-card.has-thumb .mp-thumb) { grid-area: thumb; }
+:deep(.mp-card.has-thumb .mp-top) { grid-area: top; }
+:deep(.mp-card.has-thumb .mp-actions) { grid-area: actions; }
+:deep(.mp-thumb) {
+  width: 88px; height: 66px; align-self: center; overflow: hidden; border-radius: 6px;
+  background: #dfe5ea; display: grid; place-items: center; color: var(--muted); font-size: 11px;
+}
+:deep(.mp-thumb img) { width: 100%; height: 100%; object-fit: cover; display: block; }
 :deep(.mp-card.go) { cursor: pointer; }
 :deep(.mp-card.go:hover) { border-color: var(--line-strong); background: #e7ebee; }
 /* 가격 줄: 왼쪽에 가격, 오른쪽 끝에 평수 상자(줄바꿈하지 않아 창 폭이 이 줄보다 좁아지지 않는다). */

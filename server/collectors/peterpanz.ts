@@ -338,6 +338,9 @@ export const peterpanz: Collector = {
           await session.pause(PAGE_DELAY_MS);
         }
       }
+    } catch (error) {
+      if (!(error instanceof BlockedError)) throw error;
+      ctx.partial(error.message, false);
     } finally {
       page.off('response', onResponse);
     }

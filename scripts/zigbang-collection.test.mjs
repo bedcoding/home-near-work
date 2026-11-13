@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   ZIGBANG_DETAIL_PAGE, ZIGBANG_HEADERS, ZIGBANG_MAX_STATIONS, ZigbangStationLedger, readZigbangStationIds, zigbangDetailChunks,
-  zigbangStationListUrl, zigbangStationsFor,
+  zigbangPriceScopes, zigbangStationListUrl, zigbangStationsFor,
 } from '../server/zigbang-client.ts';
 import { createZigbangCollector } from '../server/zigbang-collect.ts';
 import { pointInRegion, regionBoundaries } from '../shared/region-geometry.ts';
@@ -14,6 +14,9 @@ const detail = (id, extra = {}) => ({ item_id: id, sales_type: '월세', deposit
 const list = (ids) => JSON.stringify({ items: ids.map((id) => ({ id, lat: 37.5, lng: 127, userNo: 1 })), sections: [], subways: [] });
 const details = (ids, mutate = (x) => x) => JSON.stringify({ items: ids.map((id) => mutate(detail(id))), itemSummaries: [], totalCount: ids.length });
 const area = { id: 1, name: '가상 지역', lat: 37.5, lng: 127, radiusM: 500, region: null, enabled: true, purpose: 'collection' };
+const caps = (overrides = {}) => ({
+  saleMax: null, jeonseMax: null, monthlyDepositMax: null, monthlyMax: null, excludeSale: false, ...overrides,
+});
 
 test('station list URL keeps the verified one-kilometre query and refuses malformed station numbers', () => {
   const url = new URL(zigbangStationListUrl('123'));
@@ -23,6 +26,21 @@ test('station list URL keeps the verified one-kilometre query and refuses malfor
   assert.throws(() => zigbangStationListUrl('0'));
   assert.throws(() => zigbangStationListUrl('12/../1'));
   assert.equal(Object.keys(ZIGBANG_HEADERS).some((key) => /cookie|authorization/i.test(key)), false);
+});
+
+test('station query uses indexed trade values and sends finite caps including zero', () => {
+  const [scope] = zigbangPriceScopes(caps({ saleMax: 53000, jeonseMax: 10000, monthlyDepositMax: 10000, monthlyMax: 0 }));
+  const params = new URL(zigbangStationListUrl('123', scope)).searchParams;
+  assert.equal(params.get('salesPriceMax'), '53000');
+  assert.equal(params.get('depositMax'), '10000');
+  assert.equal(params.get('rentMax'), '0');
+  assert.equal(params.has('salesTypes[0]'), false);
+  const [rent] = zigbangPriceScopes(caps({ saleMax: 53000, excludeSale: true }));
+  const exclude = new URL(zigbangStationListUrl('123', rent)).searchParams;
+  assert.deepEqual([...exclude].filter(([key]) => key.startsWith('salesTypes')), [
+    ['salesTypes[0]', '월세'], ['salesTypes[1]', '단기'], ['salesTypes[2]', '전세'],
+  ]);
+  assert.equal(exclude.has('salesPriceMax'), false);
 });
 
 test('radius areas use stations whose 1km overlaps the area, falling back to the nearest within 2km', () => {
@@ -97,9 +115,12 @@ test('the ledger completes only when every listed ID returns a readable detail',
   assert.equal(empty.result().complete, true);
 });
 
-function fixture({ status = 200, stations = [{ id: '7', name: '가상역', lat: 37.5, lng: 127.001 }], ids = [1, 2, 3], drop = [], stopAfter = Infinity } = {}) {
+function fixture({
+  status = 200, stations = [{ id: '7', name: '가상역', lat: 37.5, lng: 127.001 }], ids = [1, 2, 3],
+  drop = [], stopAfter = Infinity, idsFor = () => ids, detailOf = row => row, initialSeen = { old: [1] },
+} = {}) {
   const requests = [], coverage = [], partial = [], touched = [], saved = [];
-  let seen = { old: [1] };
+  let seen = initialSeen;
   let known = stations;
   let calls = 0;
   const fetchStub = async (url, init = {}) => {
@@ -108,8 +129,8 @@ function fixture({ status = 200, stations = [{ id: '7', name: '가상역', lat: 
     const u = new URL(String(url));
     let body;
     if (u.pathname === '/common/subway/all') body = JSON.stringify([{ id: 7, name: '가상역', lat: 37.5, lng: 127.001, subway_area: '수도권' }]);
-    else if (u.pathname.endsWith('/onerooms')) body = list(ids);
-    else body = details(JSON.parse(init.body).itemIds.filter((id) => !drop.includes(id)));
+    else if (u.pathname.endsWith('/onerooms')) body = list(idsFor(u.searchParams));
+    else body = details(JSON.parse(init.body).itemIds.filter((id) => !drop.includes(id)), detailOf);
     return new Response(body, { status: u.pathname.endsWith('/onerooms') ? status : 200 });
   };
   const collector = createZigbangCollector({
@@ -144,6 +165,49 @@ test('collector requests the ID list, then every detail in POST batches, and pro
   assert.equal(f.touched.length, 16);
   assert.equal(items[0].pageUrl, 'https://www.zigbang.com/home/oneroom/subways/7/items');
   assert.deepEqual(Object.keys(f.seen).sort(), ['old', 'zigbang|7|depositMin=0&radius=1&rentMin=0']);
+});
+
+test('different rental caps use separate station queries and preserve the previous unfiltered baseline', async () => {
+  const prior = 'zigbang|7|depositMin=0&radius=1&rentMin=0';
+  const f = fixture({
+    idsFor: params => params.get('salesTypes[0]') === '전세' ? [2] : [1],
+    detailOf: row => row.item_id === 2 ? { ...row, sales_type: '전세', deposit: 17000 } : { ...row, deposit: 0 },
+    initialSeen: { [prior]: [9] },
+  });
+  f.ctx.priceLimits = caps({ excludeSale: true, monthlyDepositMax: 0, monthlyMax: 43, jeonseMax: 17300 });
+  assert.deepEqual((await f.collector.collect(f.ctx)).map(item => item.listing.sourceId), ['1', '2']);
+  const [monthly, lease] = f.requests.filter(request => request.method === 'GET').map(request => new URL(request.url).searchParams);
+  assert.deepEqual([monthly.get('depositMax'), monthly.get('rentMax'), lease.get('depositMax'), lease.get('rentMax')], ['0', '43', '17300', null]);
+  assert.deepEqual(f.coverage.filter(({ row }) => row.complete).map(({ row }) => row.category), ['zigbang-7-monthly', 'zigbang-7-jeonse']);
+  assert.deepEqual(f.seen[prior], [9]);
+  assert.equal(Object.keys(f.seen).length, 3);
+  assert.deepEqual(f.touched, []);
+  assert.deepEqual(f.partial, []);
+});
+
+test('details outside the requested caps do not enter storage or establish a verified station baseline', async () => {
+  const f = fixture({
+    detailOf: row => row.item_id === 2 ? { ...row, rent: 44 } : row.item_id === 3 ? { ...row, rent: null } : row,
+  });
+  f.ctx.priceLimits = caps({ monthlyMax: 43 });
+  const items = await f.collector.collect(f.ctx);
+  assert.deepEqual(items.map(item => item.listing.sourceId), ['1']);
+  assert.equal(f.coverage.at(-1).row.complete, false);
+  assert.match(f.partial[0].reason, /2건이 요청한 가격/);
+  assert.deepEqual(f.touched, []);
+  assert.deepEqual(f.seen, { old: [1] });
+});
+
+test('rental-only lookup requests and retains only monthly and jeonse rows with no saved caps', async () => {
+  const f = fixture({
+    detailOf: row => row.item_id === 2 ? { ...row, sales_type: '전세' } : row.item_id === 3 ? { ...row, sales_type: '매매' } : row,
+  });
+  f.ctx.rentalOnly = true;
+  assert.deepEqual((await f.collector.collect(f.ctx)).map(item => item.listing.sourceId), ['1', '2']);
+  const params = new URL(f.requests[0].url).searchParams;
+  assert.deepEqual([...params].filter(([key]) => key.startsWith('salesTypes')), [['salesTypes[0]', '월세'], ['salesTypes[1]', '전세']]);
+  assert.match(f.partial[0].reason, /1건이 요청한 가격 또는 거래 조건/);
+  assert.deepEqual(f.seen, { old: [1] });
 });
 
 test('missing details, blocking and stopping leave partial results instead of a false completion', async () => {

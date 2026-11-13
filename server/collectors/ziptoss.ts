@@ -1,7 +1,7 @@
 import { PAGE_DELAY_MS } from '../config.js';
 import { distanceM } from '../geo.js';
 import { knownStations } from '../station-catalog.js';
-import { BlockedError, toNumber, type Collector, type CollectedItem } from './types.js';
+import { toNumber, type Collector, type CollectedItem } from './types.js';
 import { floorText, money, priceText, yesNo } from '../../shared/format.js';
 import type { Area, DealType, ExplainRow, NormalizedListing, PriceOption, Station } from '../../shared/types.js';
 
@@ -123,7 +123,10 @@ export const ziptoss: Collector = {
       ctx.progress(`집토스, ${station.name} 주변 (${i + 1}/${stations.length})`);
       const response = await session.goto('ziptoss', url);
       const status = response?.status() ?? 0;
-      if (status === 403 || status === 429) throw new BlockedError(`집토스가 요청을 막았습니다(HTTP ${status}). 우회하지 않고 멈춥니다.`);
+      if (status === 403 || status === 429) {
+        ctx.partial(`집토스 ${station.name}: 접근 제한(HTTP ${status})으로 조회 중단`, false);
+        break;
+      }
       if (status >= 400) {
         ctx.log(`집토스: ${station.name} 페이지 응답 ${status}, 건너뜁니다`);
         ctx.partial(`집토스 ${station.name}: HTTP ${status}`);

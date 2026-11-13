@@ -620,3 +620,114 @@ test('Daangn account responses are never stored and identity fields are masked',
   assert.equal(r.rows().length, 0);
   assert.equal(r.api.redact('{"realName":"x","di":"abc","ci":"def","name":"y"}'), '{"realName":"***","di":"***","ci":"***","name":"y"}');
 });
+
+async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePrevious }) {
+  const { collectDaangn } = await import('../server/collectors/daangn.ts');
+  const { url } = daangnCapture([], null, false, 'fixture');
+  const pauses = [], actions = [], partial = [], coverage = [];
+  const listeners = new Map();
+  let frameUrl = 'about:blank', opened = 0, pageNumber = 0, stopped = false;
+  let lateRequest;
+  const frame = { url: () => frameUrl };
+  function startRequest() {
+    const request = { url: () => url, frame: () => frame, isNavigationRequest: () => false };
+    listeners.get('request')(request);
+    return request;
+  }
+  function reply(request, id, cursor, hasNextPage, status = 200) {
+    listeners.get('response')({
+      request: () => request,
+      url: () => url,
+      status: () => status,
+      text: async () => JSON.stringify({ data: { articleFeed: {
+        edges: [{ node: { article: daangnArticle(id) } }],
+        pageInfo: { endCursor: String(cursor), hasNextPage },
+      } } }),
+    });
+  }
+  function emitNext() {
+    const index = ++pageNumber;
+    reply(startRequest(), (opened - 1) * 1000 + index, index, index < lastPage, index === blockedAt ? 429 : 200);
+  }
+  const page = {
+    on: (event, handler) => { listeners.set(event, handler); },
+    off: event => { listeners.delete(event); },
+    mainFrame: () => frame,
+    evaluate: async () => ({ x: 20, y: 20 }),
+    waitForTimeout: async ms => {
+      if (ms !== 250) {
+        pauses.push(ms);
+        if (stopDuringWait) {
+          stopped = true;
+          throw new Error('Test browser closed');
+        }
+      }
+    },
+  };
+  const session = {
+    page,
+    rest: async () => {},
+    goto: async (_source, targetUrl) => {
+      opened++;
+      pageNumber = 0;
+      const previousDocumentRequest = lateRequest ? startRequest() : null;
+      frameUrl = targetUrl;
+      listeners.get('framenavigated')(frame);
+      if (lateRequest) {
+        reply(lateRequest, 999, 1, false);
+        reply(previousDocumentRequest, 998, 2, false);
+      }
+      emitNext();
+      if (latePrevious && opened === 1) lateRequest = startRequest();
+      return { status: () => 200 };
+    },
+    screenshot: async () => null,
+    wheel: async () => { actions.push(pauses.length); emitNext(); },
+  };
+  const targets = (blockedAt || latePrevious ? [1, 2] : [1]).map(id => ({
+    area: { id, name: `가상동 ${id}` },
+    station: { name: '가상역' },
+    box: { south: 35, west: 127, north: 36 + id / 100, east: 128, zoom: 14 },
+  }));
+  const items = await collectDaangn({
+    session, log() {}, progress() {},
+    stopped: () => stopped,
+    partial: (...args) => partial.push(args),
+    coverage: (row, ids) => coverage.push({ ...row, ids }),
+  }, targets);
+  return { items, pauses, actions, partial, coverage, opened };
+}
+
+test('map feed waits before every next page and continues past page 30 to the end', async () => {
+  const run = await collectMapFeed({ lastPage: 32 });
+  assert.equal(run.items.length, 32);
+  assert.deepEqual(run.actions, Array.from({ length: 31 }, (_, i) => i + 1));
+  assert.equal(run.pauses.length, 31);
+  assert.ok(run.pauses.every(ms => ms >= 3000 && ms <= 5000));
+  assert.deepEqual(run.partial, []);
+  assert.deepEqual(run.coverage.map(row => [row.pages, row.complete, row.ids.length]), [[32, true, 32]]);
+});
+
+test('map feed accepts a response before navigation returns and rejects late responses owned by the prior document', async () => {
+  const run = await collectMapFeed({ lastPage: 1, latePrevious: true });
+  assert.deepEqual(run.coverage.map(row => [row.areaId, row.complete, row.ids]), [[1, true, ['1']], [2, true, ['1001']]]);
+  assert.deepEqual(run.items.map(item => item.listing.sourceId), ['1', '1001']);
+  assert.equal(run.partial.length, 0);
+  assert.notEqual(run.items[0].pageUrl, run.items[1].pageUrl);
+});
+
+test('map feed keeps the pages already read when access is limited or the user stops', async () => {
+  const blocked = await collectMapFeed({ lastPage: 3, blockedAt: 2 });
+  assert.equal(blocked.opened, 1);
+  assert.equal(blocked.items.length, 1);
+  assert.equal(blocked.actions.length, 1);
+  assert.equal(blocked.coverage[0].complete, false);
+  assert.match(blocked.partial[0][0], /HTTP 429/);
+  assert.equal(blocked.partial[0][1], false);
+
+  const stopped = await collectMapFeed({ lastPage: 3, stopDuringWait: true });
+  assert.equal(stopped.items.length, 1);
+  assert.deepEqual(stopped.actions, []);
+  assert.equal(stopped.coverage[0].complete, false);
+  assert.match(stopped.partial[0][0], /중단/);
+});

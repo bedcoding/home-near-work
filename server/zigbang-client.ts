@@ -1,6 +1,6 @@
 import { distanceM } from '../shared/geo.js';
 import { pointInRegion, regionBounds } from '../shared/region-geometry.js';
-import type { Area } from '../shared/types.js';
+import type { Area, CollectionPriceLimits, PriceOption } from '../shared/types.js';
 import { parseZigbangItemRows } from './zigbang-parse.js';
 
 /** 직방 공개 웹 클라이언트가 붙이는 헤더. 로그인, 쿠키, 개인 브라우저 정보는 쓰지 않는다. */
@@ -20,12 +20,62 @@ export const ZIGBANG_STATION_IDS_KEY = 'zigbang_station_ids';
 
 export interface ZigbangStationPlace { id: string; name: string; lat: number; lng: number }
 
-/** 사이트 필터 없이(보증금, 월세 하한 0) 역 1km 원룸 번호 전체. 확장이 저장한 역 화면 요청과 같은 조건이다. */
-export function zigbangStationListUrl(stationId: string): string {
+const STATION_DEAL_LABELS = { monthly: '월세', short: '단기', jeonse: '전세', sale: '매매' } as const;
+type StationDeal = keyof typeof STATION_DEAL_LABELS;
+
+export interface ZigbangPriceScope {
+  suffix: string;
+  label: string;
+  deals: readonly StationDeal[] | null;
+  saleMax: number | null;
+  depositMax: number | null;
+  rentMax: number | null;
+}
+
+/** 전세금과 월세 보증금이 같은 조회 필드를 쓰므로 상한이 다를 때 목록을 나눈다. */
+export function zigbangPriceScopes(limits?: CollectionPriceLimits, rentalOnly = false): (ZigbangPriceScope | null)[] {
+  if (!limits && !rentalOnly) return [null];
+  const excludeSale = rentalOnly || !!limits?.excludeSale;
+  const jeonseMax = limits?.jeonseMax ?? null;
+  const monthlyDepositMax = limits?.monthlyDepositMax ?? null;
+  const monthlyMax = limits?.monthlyMax ?? null;
+  const saleMax = excludeSale ? null : limits?.saleMax ?? null;
+  const monthlyDeals: StationDeal[] = rentalOnly ? ['monthly'] : ['monthly', 'short'];
+  if (jeonseMax === monthlyDepositMax) {
+    return [{ suffix: rentalOnly ? '-rent' : '-price', label: rentalOnly ? '전세와 월세' : '가격 조건',
+      deals: excludeSale ? [...monthlyDeals, 'jeonse'] : null,
+      saleMax, depositMax: jeonseMax, rentMax: monthlyMax }];
+  }
+  const otherDeals: StationDeal[] = excludeSale ? monthlyDeals : [...monthlyDeals, 'sale'];
+  return [
+    { suffix: '-monthly', label: otherDeals.map(deal => STATION_DEAL_LABELS[deal]).join(', '),
+      deals: otherDeals, saleMax, depositMax: monthlyDepositMax, rentMax: monthlyMax },
+    { suffix: '-jeonse', label: '전세', deals: ['jeonse'], saleMax: null, depositMax: jeonseMax, rentMax: null },
+  ];
+}
+
+export function zigbangPricesMatch(prices: readonly PriceOption[], limits?: CollectionPriceLimits, scope?: ZigbangPriceScope, rentalOnly = false): boolean {
+  const within = (amount: number | null, max: number | null) => max === null || (amount !== null && amount >= 0 && amount <= max);
+  return prices.some(({ deal, deposit, monthly, price }) => {
+    if (scope?.deals && !scope.deals.some(type => type === deal)) return false;
+    if (rentalOnly && deal !== 'monthly' && deal !== 'jeonse') return false;
+    if (deal === 'monthly' || deal === 'short') return within(deposit, limits?.monthlyDepositMax ?? null) && within(monthly, limits?.monthlyMax ?? null);
+    if (deal === 'jeonse') return within(deposit, limits?.jeonseMax ?? null);
+    return deal === 'sale' && !limits?.excludeSale && within(price, limits?.saleMax ?? null);
+  });
+}
+
+/** 역 1km 원룸 번호 목록. 거래 유형 배열은 공개 웹 클라이언트와 같은 인덱스 표기를 사용한다. */
+export function zigbangStationListUrl(stationId: string, scope?: ZigbangPriceScope | null): string {
   if (!/^[1-9]\d{0,19}$/.test(stationId)) throw new Error('직방 역 번호가 올바르지 않습니다');
-  return `${ZIGBANG_API}/house/property/v1/items/subways/${stationId}/onerooms?${new URLSearchParams({
-    radius: String(ZIGBANG_RADIUS_KM), depositMin: '0', rentMin: '0',
-  })}`;
+  const params = new URLSearchParams({ radius: String(ZIGBANG_RADIUS_KM), depositMin: '0', rentMin: '0' });
+  if (scope) {
+    scope.deals?.forEach((deal, index) => params.append(`salesTypes[${index}]`, STATION_DEAL_LABELS[deal]));
+    if (scope.saleMax !== null) params.set('salesPriceMax', String(scope.saleMax));
+    if (scope.depositMax !== null) params.set('depositMax', String(scope.depositMax));
+    if (scope.rentMax !== null) params.set('rentMax', String(scope.rentMax));
+  }
+  return `${ZIGBANG_API}/house/property/v1/items/subways/${stationId}/onerooms?${params}`;
 }
 
 /** 원본 열기에 쓰는 직방 역 화면 주소 */

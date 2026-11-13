@@ -81,6 +81,15 @@ test('a server Dabang GU run counts as a recent full collection, while extension
   }
 });
 
+test('a manually narrowed collection does not suppress the scheduled full run', () => {
+  const startedAt = new Date(2026, 9, 20, 22, 20).toISOString();
+  const f = fixture({ recent: [{ id: 90, startedAt, scope: null, line: null, summary: {
+    selectedSubset: true, sources: [{ source: 'dabang', coverage: [{ complete: true }] }],
+  } }] });
+  assert.equal(f.api.runMissedCheck(), 'started');
+  assert.equal(f.state.starts, 1);
+});
+
 test('failed start is not retried in the same slot', () => {
   const f = fixture({ failStart: true });
   assert.equal(f.api.runMissedCheck(), 'skipped');
