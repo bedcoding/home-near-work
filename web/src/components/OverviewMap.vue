@@ -18,6 +18,7 @@ import {
   checkZonesNow, loadZones, uploadZones, ZONE_COLOR, ZONE_GROUPS, ZONE_SOURCE_URL, zones, zonesBusy, zonesChecking, zonesError, zonesMessage, zonesOn,
 } from '../redevZones';
 import type { RedevZoneFeature } from '../../../shared/types';
+import { loadSubway, NEAR_M, nearLines, subwayBaseDate, SubwayLayer, subwayOn } from '../subwayLines';
 import InfoModal from './InfoModal.vue';
 
 // 매물 탭 오른쪽 지도와 경매 탭, 고시원과 쉐어 탭의 지도가 같이 쓴다.
@@ -31,6 +32,8 @@ import InfoModal from './InfoModal.vue';
 // - 정비사업 구역(서울플랜+ 파일을 넣었으면)을 매물과 역 아래 층에 칠한다. 마우스를 올리면 구역 이름, 사업 종류, 추진 단계가 보인다.
 // - '거리 핀'으로 자주 가는 곳에 핀(MAX_WALK_PINS개까지, 모든 지도가 같이 씀)을 꽂으면 매물 카드에 핀까지 걸어서 몇 분인지 보인다.
 //   '표시 핀'은 지도에 이름만 보이고(MAX_MARK_PINS개까지), 마우스를 올리면 거리 핀까지 걸어서 몇 분인지 보인다. 핀은 끌어서 옮기고, 누르면 이름이나 종류를 바꾸거나 뺀다.
+// - 지하철 노선(subwayLines.ts)을 노선 색으로 정비구역 위, 역 아래 층에 늘 깐다. 거리 핀 근처 역을 지나는 노선은 굵게 보이고,
+//   역에 마우스를 올리면 그 역 노선이 진해진다.
 
 
 const props = withDefaults(
@@ -88,6 +91,7 @@ let stationLayer: L.LayerGroup | null = null; // 역
 let stationRenderer: L.Renderer | null = null;
 let zoneLayer: L.GeoJSON | null = null; // 정비사업 구역
 let zoneRenderer: L.Renderer | null = null;
+let subway: SubwayLayer | null = null; // 지하철 노선
 let pinLayer: L.LayerGroup | null = null; // 거리 핀과 표시 핀
 let pinMove: { marker: L.Marker; popup: L.Popup } | null = null;
 let listingPopup: L.Popup | null = null;
@@ -102,7 +106,7 @@ const PRICE_ZOOM = { strong: 14, normal: 15 };
 /** 지도 아래 '지도 보는 법' 모달의 탭 */
 const MAP_TABS = [
   { id: 'marks', label: '매물 표시' },
-  { id: 'areas', label: '구역과 역' },
+  { id: 'areas', label: '구역, 역, 노선' },
   { id: 'pins', label: '핀' },
   { id: 'zones', label: '정비구역' },
 ];
@@ -925,9 +929,11 @@ function showListingPopup(id: string) {
 
 defineExpose({ showListingPopup });
 
-/** 역: 켜진 지역이면 검은 동그라미, 아니면 흰 동그라미. 누르면 station 이벤트로 켜고 끈다. */
+/** 역: 켜진 지역이면 검은 동그라미, 아니면 흰 동그라미. 누르면 station 이벤트로 켜고 끈다. 마우스를 올리면 그 역 노선을 진하게 한다. */
 function drawStations() {
   if (!map || !stationLayer || !stationRenderer) return;
+  // 마우스를 올려 둔 역 표시를 지우면 mouseout이 오지 않으므로 역에서 켠 노선 강조를 먼저 푼다.
+  subway?.unfocus('station');
   stationLayer.clearLayers();
   if (map.getZoom() < STATION_MIN_ZOOM) return;
   const on = new Set(props.areas.map((a) => a.name));
@@ -945,8 +951,33 @@ function drawStations() {
     })
       .bindTooltip(`${esc(s.label)}<br><span class="st-tip">${enabled ? '누르면 이 역 알림 끄기' : '누르면 이 역 알림 켜기(1km)'}</span>`, { direction: 'top', offset: [0, -6] })
       .on('click', () => emit('station', s))
+      .on('mouseover', () => subway?.focusNames(s.lines))
+      .on('mouseout', () => subway?.unfocus('station'))
       .addTo(stationLayer);
   }
+}
+
+/** 지하철 노선: 켜져 있으면 자료를 받아(처음 한 번) 그리고, 끄면 뺀다. */
+async function syncSubway() {
+  if (!subway) return;
+  if (!subwayOn.value) {
+    subway.setVisible(false);
+    return;
+  }
+  try {
+    const data = await loadSubway();
+    if (!subway || !subwayOn.value) return;
+    subway.setData(data);
+    syncSubwayNear();
+    subway.setVisible(true);
+  } catch {
+    /* 노선 자료를 못 받으면 노선만 안 보인다 */
+  }
+}
+
+/** 거리 핀 근처 역을 지나는 노선을 다시 고른다(핀을 꽂거나 옮기거나 뺄 때, 역 목록을 받았을 때). */
+function syncSubwayNear() {
+  subway?.setNear(nearLines(walkPins.value.filter((p) => p.kind !== 'mark'), stations.value));
 }
 
 /** 정비사업 구역: 사업 구역은 옅게 칠하고, 넓은 구역(재정비촉진지구, 모아타운, 존치관리구역)은 점선 테두리만 그린다. */
@@ -1753,6 +1784,9 @@ onMounted(() => {
   // 정비사업 구역은 역보다도 아래 층에 그린다(구역 수가 많아 canvas로).
   map.createPane('zones').style.zIndex = '350';
   zoneRenderer = L.canvas({ pane: 'zones', padding: 0.3 }).addTo(map);
+  // 지하철 노선은 정비구역 위, 역 아래 층에 svg로 그린다(역 동그라미가 노선 위에 얹히고, 선 밖의 마우스는 정비구역으로 흘러간다).
+  map.createPane('subway').style.zIndex = '370';
+  subway = new SubwayLayer(map, L.svg({ pane: 'subway', padding: 0.3 }).addTo(map));
   // 점과 숫자 동그라미는 구 경계(400)보다 위, 가격 표시(600)보다 아래의 캔버스에 그린다.
   // 이 칸은 마우스를 흘려보내고, 마우스가 표시 위에 있을 때만 캔버스가 받는다(onMapPointer).
   const dotsPane = map.createPane('dots');
@@ -1783,6 +1817,7 @@ onMounted(() => {
       stations.value = list;
       drawBase();
       drawStations();
+      syncSubwayNear();
     })
     .catch(() => {
       /* 역 목록을 못 받으면 역만 안 보인다 */
@@ -1796,6 +1831,7 @@ onMounted(() => {
   drawPins();
   if (zonesOn.value) void loadZones();
   drawZones();
+  void syncSubway();
   fittedKey = props.fitKey;
   if (savedView) drawDots(false);
   else {
@@ -1852,6 +1888,8 @@ watch(
 );
 watch([zones, zonesOn], drawZones);
 watch(walkPins, drawPins, { deep: true });
+watch(walkPins, syncSubwayNear, { deep: true });
+watch(subwayOn, syncSubway);
 // 조회나 확장으로 새 매물이 들어오면 그 매물까지 걷는 거리도 다시 묻는다.
 watch(
   () => props.background,
@@ -1894,6 +1932,7 @@ onBeforeUnmount(() => {
   // 늦게 끝난 역 목록 받기 등이 지운 지도에 그리지 않게 한다.
   map = null;
   base = dots = stationLayer = zoneLayer = pinLayer = liveLayer = null;
+  subway = null;
   dotRenderer = null;
   dotCanvas = null;
   hoverDistricts = [];
@@ -1935,7 +1974,7 @@ onBeforeUnmount(() => {
           <i class="live-dot"></i>{{ visibleLiveCount ? `이번에 들어온 매물 ${visibleLiveCount}건 표시 중` : `이번에 들어온 매물 ${liveListingIds.size}건, 현재 지도에는 0건` }}
         </span>
       </div>
-      <InfoModal heading="지도 보는 법" label="지도 보는 법" storage-key="hnw-map-info-tab" :tabs="MAP_TABS" title="점 색, 숫자와 가격, 구역과 역, 핀, 정비구역">
+      <InfoModal heading="지도 보는 법" label="지도 보는 법" storage-key="hnw-map-info-tab" :tabs="MAP_TABS" title="점 색, 숫자와 가격, 구역과 역, 지하철 노선, 핀, 정비구역">
         <template #marks>
           <dl class="keys">
             <dt><i class="key-dot" style="background:#e5484d"></i></dt>
@@ -1989,9 +2028,18 @@ onBeforeUnmount(() => {
             <dt><i class="alert-sample"></i></dt>
             <dd><b>초록 점선 원</b>: 매물 알림을 받는 구역(역과 반경)입니다. 어느 역을 몇 km로 정했는지는 지역 탭에서 보고 바꿉니다.</dd>
             <dt><i class="key-station"></i></dt>
-            <dd><b>흰 동그라미</b>: 역입니다. 누르면 그 역 알림을 켜고 끕니다.</dd>
+            <dd><b>흰 동그라미</b>: 역입니다. 누르면 그 역 알림을 켜고 끕니다. 마우스를 올리면 그 역을 지나는 노선이 진해집니다.</dd>
+            <dt><i class="line-sample"></i></dt>
+            <dd>
+              <b>지하철 노선</b>: 수도권 전철 노선을 노선 색으로 그립니다. 거리 핀에서 {{ NEAR_M / 1000 }}km 안에 역이 있는 노선은
+              갈아타지 않고 그 핀까지 가는 노선이라 굵고 진하게, 나머지는 가늘고 옅게 그립니다. 거리 핀이 없으면 모두 같은 굵기입니다.
+              노선에 마우스를 올리면 그 노선만 진해지고 이름이 보입니다. 지도 아래 '지하철 노선'으로 켜고 끕니다.
+            </dd>
           </dl>
-          <p class="info-text">구 경계 출처는 지도 오른쪽 아래에 있습니다.</p>
+          <p class="info-text">
+            구 경계 출처는 지도 오른쪽 아래에 있습니다. 지하철 노선 모양은 OpenStreetMap 기여자의 자료(ODbL)<template v-if="subwayBaseDate">를
+            {{ subwayBaseDate.replace(/-/g, '.') }}에 받은 것</template>입니다.
+          </p>
         </template>
         <template #pins>
           <dl class="keys">
@@ -2061,6 +2109,9 @@ onBeforeUnmount(() => {
       <span v-else-if="walkState.missing.length" class="zone-note err">
         {{ walkPins.filter((p) => walkState.missing.includes(p.id)).map((p) => p.name).join(', ') }} 근처에 길이 없어 못 잼
       </span>
+      <label class="zone-toggle" title="수도권 전철 노선을 노선 색으로 그립니다. 거리 핀 근처 역을 지나는 노선은 굵게, 나머지는 옅게 보입니다">
+        <input v-model="subwayOn" type="checkbox"> 지하철 노선
+      </label>
       <label class="zone-toggle" title="재개발과 재건축, 모아타운, 재정비촉진, 공공주택 복합사업 구역을 칠합니다(서울시 서울플랜+ 파일을 넣어야 보임)">
         <input v-model="zonesOn" type="checkbox"> 정비구역 칠하기
       </label>
@@ -2113,6 +2164,9 @@ onBeforeUnmount(() => {
 .keys dd b { color: var(--ink); }
 .key-dot { display: inline-block; width: 13px; height: 13px; margin-top: 3px; border-radius: 50%; }
 .key-station { display: inline-block; width: 13px; height: 13px; margin-top: 3px; border: 2px solid #16202e; border-radius: 50%; background: #fff; box-sizing: border-box; }
+.line-sample { display: inline-block; width: 34px; height: 5px; margin-top: 10px; border-radius: 3px; background: #00a84d; box-shadow: 0 0 0 1.5px #fff, 0 0 0 2.5px rgba(22, 32, 46, .12); }
+/* 지하철 노선은 누를 것이 없어 손가락 모양 대신 지도 끌기 모양을 그대로 쓴다. */
+.map :deep(path.subway-line) { cursor: inherit; }
 .area-sample { display: inline-block; width: 34px; height: 22px; border: 2.5px solid; border-radius: 4px; box-sizing: border-box; }
 .alert-sample { display: inline-block; width: 26px; height: 26px; border: 2.5px dashed #087f5b; border-radius: 50%; background: rgba(8, 127, 91, .05); box-sizing: border-box; }
 .keys .zone-sample { display: inline-block; width: 26px; height: 18px; margin-top: 3px; border: 1.5px solid; border-radius: 3px; box-sizing: border-box; }
