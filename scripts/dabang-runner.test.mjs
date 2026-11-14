@@ -19,10 +19,11 @@ const short = { deal: 'short', deposit: 100, monthly: 40, price: null };
 
 async function run({
   skipWrite = false, wrongRun = false, auto = false, limits = null, priceOverrides, commonPriceLimits, scope = 'dabang',
-  source = 'dabang', offers = [[monthly]],
+  source = 'dabang', offers = [[monthly]], earlyOffers = [], failAfterEarly = false, existingBaseline = false,
 } = {}) {
   const rows = new Map(), gone = [], notes = [];
-  const settingWrites = [];
+  const settingWrites = [], events = [], liveSnapshots = [];
+  const baselines = new Set();
   let goneChecks = 0;
   let savedLimits = limits;
   let collectorLimits;
@@ -34,9 +35,15 @@ async function run({
   }));
   const collector = { id: source, label: types.SOURCE_LABEL[source], emptyOk: source === 'dabang', retainMissing: source === 'dabang', collect: async ctx => {
     collectorLimits = ctx.priceLimits;
+    const asItem = listing => ({ listing, raw: { seq: listing.sourceId }, pageUrl: 'https://example.invalid/data', screenshot: null });
+    for (const [index, prices] of earlyOffers) {
+      ctx.publishListings([asItem({ ...listings[index], prices })]);
+      liveSnapshots.push({ ids: [...rows.keys()], revision: context.exports.getProgress().listingRevision, baselines: baselines.size });
+    }
+    if (failAfterEarly) throw new Error('Synthetic collection failure');
     ctx.coverage({ areaId: 1, areaName: '가상구', category: 'apt', label: '아파트', pages: 1, totalPages: 1,
       total: listings.length, received: listings.length, stored: 0, complete: true, reason: 'verified' }, listings.map(listing => listing.sourceId));
-    return listings.map(listing => ({ listing, raw: { seq: listing.sourceId }, pageUrl: 'https://example.invalid/data', screenshot: null }));
+    return listings.map(asItem);
   } };
   let finish;
   const completed = new Promise(resolve => { finish = resolve; });
@@ -44,10 +51,14 @@ async function run({
     enabledAreas: () => [area], createRun: () => 12, aptGus: () => [], allVerdicts: () => [],
     db: { transaction: fn => fn }, getListing: id => rows.get(id), allListings: () => [...rows.values()],
     insertListing: (id, listing, key, sig, runId) => { if (!skipWrite) rows.set(id, { source: listing.source, data: JSON.stringify(listing), price_sig: sig, last_seen_run: wrongRun ? 11 : runId }); },
-    hasBaseline: () => false, setBaseline() {}, aptSpot: () => -1, markGone: ids => { goneChecks++; gone.push(...ids); },
+    updateListingSeen: (id, listing, key, sig, runId) => {
+      rows.set(id, { ...rows.get(id), data: JSON.stringify(listing), price_sig: sig, last_seen_run: wrongRun ? 11 : runId });
+    },
+    hasBaseline: (key, spot) => existingBaseline || baselines.has(`${key}:${spot}`),
+    setBaseline: (key, spot) => { baselines.add(`${key}:${spot}`); }, aptSpot: () => -1, markGone: ids => { goneChecks++; gone.push(...ids); },
     tidyListings: () => ({ stale: 0, purged: 0 }), finishRun: (_id, _status, summary) => finish(summary),
     getSetting: key => key === collectionPriceLimits.collectionPriceLimitsKey('dabang') ? JSON.stringify(savedLimits) : null,
-    setSetting: key => { settingWrites.push(key); }, addEvent() {},
+    setSetting: key => { settingWrites.push(key); }, addEvent: (_runId, id, event) => { events.push({ id, event }); },
   };
   const dependencies = {
     './db.js': store, './collectors/index.js': { COLLECTORS: [collector] }, './collectors/notices.js': { NOTICE_COLLECTORS: [] },
@@ -66,8 +77,35 @@ async function run({
   context.exports.startRun(false, auto ? undefined : scope, { quiet: true, auto, priceOverrides, commonPriceLimits });
   savedLimits = null;
   const summary = await completed;
-  return { summary, rows, gone, notes, collectorLimits, goneChecks, settingWrites };
+  return { summary, rows, gone, notes, collectorLimits, goneChecks, settingWrites, events, liveSnapshots, baselines };
 }
+
+test('new pages are stored before the collector finishes without counting duplicates or premature price changes', async () => {
+  const previous = [{ ...monthly, monthly: 70 }];
+  const result = await run({ existingBaseline: true, offers: [[monthly], [monthly]], earlyOffers: [[0, previous], [0, previous], [1, [monthly]]] });
+  assert.deepEqual(result.liveSnapshots, [
+    { ids: ['dabang:101'], revision: 1, baselines: 0 },
+    { ids: ['dabang:101'], revision: 1, baselines: 0 },
+    { ids: ['dabang:101', 'dabang:102'], revision: 2, baselines: 0 },
+  ]);
+  assert.deepEqual(result.events.map(item => item.event), ['new', 'new']);
+  assert.equal(JSON.parse(result.rows.get('dabang:101').data).prices[0].monthly, 30);
+  assert.equal(result.summary.sources[0].newCount, 2);
+  assert.equal(result.summary.sources[0].priceChanged, 0);
+  assert.equal(result.summary.sources[0].coverage[0].stored, 2);
+});
+
+test('an interrupted first collection preserves early pages without labelling later first-run rows new', async () => {
+  const offers = [[monthly], [jeonse]];
+  const earlyOffers = [[0, offers[0]], [1, offers[1]]];
+  const result = await run({ offers, earlyOffers, failAfterEarly: true });
+  assert.deepEqual(result.liveSnapshots.map(row => row.baselines), [0, 0]);
+  assert.equal(result.baselines.size, 1);
+  assert.equal(result.rows.size, 2);
+  assert.deepEqual(result.events, []);
+  assert.equal(result.summary.sources[0].kept, 2);
+  assert.equal(result.summary.sources[0].status, 'error');
+});
 
 test('Dabang server collection persists incidental rows and reads storage back before declaring complete', async () => {
   const f = await run();

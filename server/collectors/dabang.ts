@@ -69,6 +69,7 @@ export const dabang: Collector = {
             fs.writeFileSync(path.join(dir, `${area.id}-${key}-${page}.json`), body);
             const { parsed, more, totalPages } = pagination.accept(body, page, category.id);
             const regularIds = hasLimits ? new Set(parsed.regularIds) : null;
+            const received = ctx.publishListings ? new Map<string, CollectedItem>() : null;
             for (const item of parsed.items) {
               const { sourceId, prices } = item.listing;
               if (limits && regularIds) {
@@ -86,8 +87,11 @@ export const dabang: Collector = {
                 if (verified) verifiedPriceIds.add(sourceId);
               }
               ids.add(sourceId);
-              items.set(sourceId, { ...item, pageUrl: requestUrl, screenshot });
+              const collected = { ...item, pageUrl: requestUrl, screenshot };
+              items.set(sourceId, collected);
+              received?.set(sourceId, collected);
             }
+            if (received?.size) ctx.publishListings?.([...received.values()]);
             ctx.log(`다방 ${area.name} ${label}: ${page}/${totalPages}페이지, 일반 ${parsed.regularCount}건, 누적 고유 ${pagination.ids.size}/${parsed.total}건`);
             ctx.coverage?.({ areaId: area.id, areaName: area.name, category: key, label,
               pages: page, totalPages, total: parsed.total, received: pagination.ids.size, stored: 0, complete: false, reason: '목록 조회 중, 수집 후 서버 저장 확인' }, [...ids]);

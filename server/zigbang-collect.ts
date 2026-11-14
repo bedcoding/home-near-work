@@ -118,6 +118,7 @@ export function createZigbangCollector(deps: ZigbangCollectDeps): Collector {
               { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemIds: chunk }) });
             deps.save(ctx.runId, `${artifact}-details-${index + 1}.json`, body);
             const requestedIds = scope ? new Set(chunk.map(String)) : null;
+            const received = ctx.publishListings ? new Map<string, CollectedItem>() : null;
             for (const item of ledger.acceptDetails(body, chunk)) {
               const { sourceId, prices } = item.listing;
               if (scope) {
@@ -134,8 +135,11 @@ export function createZigbangCollector(deps: ZigbangCollectDeps): Collector {
                 if (expectedId && inScope) verified.add(sourceId);
               }
               ids.add(sourceId);
-              items.set(sourceId, { ...item, pageUrl, screenshot: null });
+              const collected = { ...item, pageUrl, screenshot: null };
+              items.set(sourceId, collected);
+              received?.set(sourceId, collected);
             }
+            if (received?.size) ctx.publishListings?.([...received.values()]);
             ctx.coverage?.(rowOf(job, ledger, `상세 받는 중 (${ids.size}/${expected.length})`), [...ids]);
           }
         } catch (error) {

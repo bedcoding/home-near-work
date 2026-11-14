@@ -26,8 +26,9 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 function appHarness(t) {
   storage.clear();
   const state = { dataRevision: 'session-a:1', running: null, naverCapture: { total: 0 }, newNotices: 0, gus: [], areas: [], autoCheck: { visible: true } };
-  const data = { listings: [], market: { fixture: 'market' }, failNotices: false, failMarket: false, failVerdict: false, failSeen: false };
-  const calls = { listings: 0, since: [], deltas: 0, notices: 0, market: 0, zones: 0, verdict: 0 };
+  const data = { listings: [], market: { fixture: 'market' }, failNotices: false, failMarket: false, failVerdict: false, failSeen: false, waitForListings: null };
+  const calls = { listings: 0, since: [], deltas: 0, notices: 0, market: 0, zones: 0, verdict: 0, pollInterval: null };
+  let now = Date.parse('2026-11-13T09:00:00.000Z');
   const mounted = [];
   // 서버처럼 지난번에 보낸 목록 버전(since)을 알면 바뀐 매물만, 모르면 전체를 보낸다. 매물은 JSON으로 오가 새 객체로 온다.
   let cache = createListingsCache();
@@ -38,6 +39,7 @@ function appHarness(t) {
     listings: async (since = null) => {
       calls.listings += 1;
       calls.since.push(since);
+      if (data.waitForListings) await data.waitForListings;
       if (remembered !== data.listings) {
         cache.remember(encodeListings(data.listings));
         remembered = data.listings;
@@ -88,11 +90,12 @@ function appHarness(t) {
     location: { search: '', pathname: '/', origin: 'https://example.invalid' },
     history: { replaceState() {} },
     URLSearchParams,
-    window: { clearTimeout() {}, setTimeout() { return 1; }, addEventListener() {}, postMessage() {} },
+    window: { clearTimeout() {}, setTimeout(_cb, delay) { calls.pollInterval = delay; return 1; }, addEventListener() {}, postMessage() {} },
     document: { addEventListener() {}, querySelector() { return null; } },
+    Date: class extends Date { static now() { return now; } },
   }, { filename: 'App.synthetic-test.cjs' });
   const app = scope.run(() => exports.default.setup({}, { expose() {} }));
-  return { app, state, data, calls, server, mount: async () => { for (const fn of mounted) await fn(); await settle(); } };
+  return { app, state, data, calls, server, advance(ms) { now += ms; }, mount: async () => { for (const fn of mounted) await fn(); await settle(); } };
 }
 
 test('확장 응답 저장 뒤 지연 파싱이 끝나면 같은 네이버 건수에서도 목록을 갱신한다', async (t) => {
@@ -155,7 +158,7 @@ test('시세 탭 최초 읽기 실패는 데이터 버전이 그대로여도 자
   assert.equal(h.app.marketLoadError.value, null);
 });
 
-test('조회 중 버전 변경은 큰 응답을 반복 요청하지 않고 완료 뒤 반영한다', async (t) => {
+test('조회 중에는 공통 자료 버전이 바뀌어도 매물 저장 신호가 없으면 완료 뒤 반영한다', async (t) => {
   const h = appHarness(t);
   await h.mount();
   const initialCalls = h.calls.listings;
@@ -168,6 +171,54 @@ test('조회 중 버전 변경은 큰 응답을 반복 요청하지 않고 완�
   h.state.running = null;
   await h.app.poll();
   assert.equal(h.calls.listings, initialCalls + 1);
+});
+
+test('조회 중 저장된 매물은 진행 상태를 기다리게 하지 않고 4초 간격의 변화분으로 반영한다', async (t) => {
+  const h = appHarness(t);
+  h.data.listings = [listing('old')];
+  await h.mount();
+  const initialCalls = h.calls.listings;
+  const initialNotices = h.calls.notices;
+  let releaseListings;
+  h.data.waitForListings = new Promise(resolve => { releaseListings = resolve; });
+  h.data.listings = [listing('old', { title: '새 제목' }), listing('a')];
+  h.state.running = { runId: 42, listingRevision: 1 };
+  await h.app.poll();
+  assert.equal(h.calls.pollInterval, 1000, '매물 응답이 늦어도 진행 상태는 1초 뒤에 확인한다');
+  assert.equal(h.calls.listings, initialCalls + 1);
+  assert.ok(h.calls.since.at(-1));
+  assert.deepEqual(h.app.listings.value.map(row => row.id), ['old']);
+  h.advance(4000);
+  await h.app.poll();
+  assert.equal(h.calls.listings, initialCalls + 1, '같은 변화분이 아직 오는 중이면 추가 요청을 쌓지 않는다');
+  releaseListings();
+  h.data.waitForListings = null;
+  await settle();
+  assert.equal(h.calls.deltas, 1);
+  assert.deepEqual(h.app.listings.value.map(row => row.id), ['old', 'a']);
+  assert.deepEqual([...h.app.liveListingIds.value], ['a']);
+
+  h.state.dataRevision = 'session-a:2';
+  await h.app.poll();
+  assert.equal(h.calls.listings, initialCalls + 1, '로그에만 새 기록이 있으면 매물을 요청하지 않는다');
+  h.state.running = { runId: 42, listingRevision: 2 };
+  h.data.listings = [...h.data.listings, listing('b')];
+  await h.app.poll();
+  await settle();
+  assert.deepEqual(h.app.listings.value.map(row => row.id), ['old', 'a', 'b']);
+  assert.deepEqual([...h.app.liveListingIds.value], ['b']);
+  h.advance(3999);
+  h.state.running = { runId: 42, listingRevision: 3 };
+  await h.app.poll();
+  assert.equal(h.calls.listings, initialCalls + 2, '다음 저장 신호는 간격이 지날 때까지 합친다');
+  assert.equal(h.calls.notices, initialNotices, '조회 중에는 공고와 시세를 함께 받지 않는다');
+
+  h.state.running = null;
+  await h.app.poll();
+  await settle();
+  assert.equal(h.calls.listings, initialCalls + 3, '종료 시에는 대기 중인 변화까지 포함해 다시 받는다');
+  assert.equal(h.calls.notices, initialNotices + 1);
+  assert.equal(h.app.liveListingIds.value.size, 0, '조회가 끝나면 임시 표시를 지운다');
 });
 
 /** 화면 계산에 필요한 칸만 채운 가짜 매물(같은 자리, 같은 층, 같은 면적이면 서로 '비슷'하다) */

@@ -1025,6 +1025,8 @@ export interface RunProgress {
   log: string[];
   /** 중단을 눌러 멈추는 중 */
   stopping: boolean;
+  /** 매물 저장이 끝난 묶음의 번호 */
+  listingRevision?: number;
   coverage?: CollectionCoverage[];
   /** 이번 조회가 도는 매물 사이트(시작 순서)와 사이트마다 상태. 공고만 확인이면 빈 목록. */
   sites?: RunSiteProgress[];

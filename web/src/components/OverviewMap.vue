@@ -39,6 +39,7 @@ const props = withDefaults(
     listings: ListingView[];
     /** 보일 매물 전체. 펼친 목록이 있으면 연하게, 없으면 보통으로 보인다. */
     background: ListingView[];
+    liveListingIds?: ReadonlySet<string>;
     areas: Area[];
     selectedId: string | null;
     /** 옆에 매물 목록이 있으면 정보 창에 '목록에서 보기'를 둔다(지도 탭은 없음). */
@@ -73,6 +74,7 @@ const big = ref(false);
 let map: L.Map | null = null;
 let base: L.LayerGroup | null = null; // 지역 원, 역 이름이 아닌 지역 표시
 let dots: L.LayerGroup | null = null; // 매물
+let liveLayer: L.LayerGroup | null = null;
 /**
  * 가격을 쓰지 않는 매물 표시(점과 같은 자리 숫자 동그라미)를 그리는 캔버스. 예전에는 숫자 동그라미를 HTML 요소로 그려서
  * 보통 확대에서 3천 개 가까이 되면 지도를 끄는 동안 한 프레임에 0.3초씩 걸렸다. 가격 표시는 지금처럼 HTML이다.
@@ -122,6 +124,7 @@ let shown: { zoom: number; level: number; groups: Group[] } | null = null;
 const groupOf = new Map<string, Group>();
 /** 그려 둔 표시: 묶음 열쇠 → 표시 */
 const drawn = new Map<string, Drawn>();
+const liveMarkers = new Map<string, L.Marker>();
 let selected: Drawn | null = null;
 let resize: ResizeObserver | null = null;
 let fitPending = false;
@@ -1107,6 +1110,44 @@ function drawGroup(layer: L.LayerGroup, g: Group): Drawn {
   return { marker, group: g, base, z };
 }
 
+/** 가격 표시와 캔버스 점 위에 새 매물 테두리만 올린다. */
+function drawLiveListings() {
+  if (!liveLayer || (!props.liveListingIds?.size && !liveMarkers.size)) return;
+  const groups = new Set<Group>();
+  const keep = new Set<string>();
+  for (const id of props.liveListingIds ?? []) {
+    const group = groupOf.get(id);
+    if (!group || groups.has(group)) continue;
+    const drawnGroup = drawn.get(group.key);
+    if (!drawnGroup) continue;
+    groups.add(group);
+    keep.add(id);
+
+    let marker = liveMarkers.get(id);
+    if (!marker) {
+      marker = L.marker([group.lat, group.lng], {
+        pane: 'live-listings', keyboard: false, interactive: false,
+        icon: L.divIcon({ className: 'live-listing', html: '<span></span>', iconSize: [0, 0], iconAnchor: [0, 0] }),
+      }).addTo(liveLayer);
+      liveMarkers.set(id, marker);
+      marker.getElement()?.setAttribute('aria-hidden', 'true');
+    } else if (!marker.getLatLng().equals([group.lat, group.lng])) {
+      marker.setLatLng([group.lat, group.lng]);
+    }
+    const price = drawnGroup.marker instanceof L.Marker ? drawnGroup.marker.getElement()?.firstElementChild : null;
+    const ring = marker.getElement()?.firstElementChild as HTMLElement | null;
+    if (ring) {
+      ring.style.width = `${price ? price.clientWidth + 16 : 32}px`;
+      ring.style.height = `${price ? price.clientHeight + 16 : 32}px`;
+    }
+  }
+  for (const [id, marker] of liveMarkers) {
+    if (keep.has(id)) continue;
+    liveLayer.removeLayer(marker);
+    liveMarkers.delete(id);
+  }
+}
+
 /**
  * 매물 표시를 그린다. 화면 근처(사방으로 화면 크기의 30%)에 있는 묶음만 그리고, 이미 그린 같은 묶음은 그대로 둔다.
  * full이면 매물이 바뀐 것이라 처음부터 다시 그린다. 확대가 바뀌면 가격 표시를 다시 묶는다.
@@ -1150,6 +1191,7 @@ function render(full: boolean) {
   if (added) orderCanvas();
   buildHitGrid();
   highlight(false);
+  drawLiveListings();
 }
 
 /**
@@ -1313,6 +1355,10 @@ onMounted(() => {
   stationLayer = L.layerGroup().addTo(map);
   base = L.layerGroup().addTo(map);
   dots = L.layerGroup().addTo(map);
+  const livePane = map.createPane('live-listings');
+  livePane.style.zIndex = '620';
+  livePane.style.pointerEvents = 'none';
+  liveLayer = L.layerGroup().addTo(map);
   pinLayer = L.layerGroup().addTo(map);
   map.on('moveend', drawStations);
   map.on('moveend', onView);
@@ -1373,6 +1419,7 @@ watch(
 );
 // 환산 월세 전환율이 바뀌면(매물이나 기준금리가 바뀌어 카드 값이 바뀔 때) 대표 가격과 묶음 안 순서를 다시 낸다.
 watch(currentRate, () => drawDots(false));
+watch(() => props.liveListingIds, drawLiveListings);
 watch(
   () => props.areas,
   () => {
@@ -1426,7 +1473,7 @@ onBeforeUnmount(() => {
   }
   // 늦게 끝난 역 목록 받기 등이 지운 지도에 그리지 않게 한다.
   map = null;
-  base = dots = stationLayer = zoneLayer = pinLayer = null;
+  base = dots = stationLayer = zoneLayer = pinLayer = liveLayer = null;
   dotRenderer = null;
   dotCanvas = null;
   hoverDistricts = [];
@@ -1434,6 +1481,7 @@ onBeforeUnmount(() => {
   shown = null;
   spotCache = null;
   drawn.clear();
+  liveMarkers.clear();
   groupOf.clear();
   hitGrid.clear();
   selected = null;
@@ -1691,6 +1739,18 @@ onBeforeUnmount(() => {
   color: #fff; font: 700 11px/1.4 var(--font); border: 1.5px solid #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
 }
 :deep(.price span) { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); cursor: pointer; }
+:deep(.live-listing span) {
+  position: absolute; display: block; left: 0; top: 0; border: 2px solid #075bc6;
+  border-radius: 32px; box-shadow: 0 0 0 1px #fff; pointer-events: none;
+  transform: translate(-50%, -50%); animation: live-listing-ring 900ms ease-out 2 forwards;
+}
+@keyframes live-listing-ring {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(.9); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(1.24); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :deep(.live-listing span) { animation: none; }
+}
 :deep(.price span b) {
   display: inline-grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px;
   background: #fff; color: #16202e; font-size: 10px; line-height: 1;

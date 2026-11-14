@@ -7,6 +7,8 @@ export interface CollectContext {
   session: BrowserSession;
   priceLimits?: CollectionPriceLimits;
   rentalOnly?: boolean;
+  /** 저장 가능한 매물 묶음을 조회 중에도 보낸다. */
+  publishListings?(items: CollectedItem[]): void;
   /** 조회 기록에 한 줄 남긴다. */
   log(message: string): void;
   /** 지금 하는 일을 사이트 위 진행 띠와 대시보드에 보여 준다. */

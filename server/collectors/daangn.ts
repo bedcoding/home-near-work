@@ -145,10 +145,15 @@ export async function collectDaangn(ctx: CollectContext, targets: ReturnType<typ
         for (const id of read.ids) log.ids.add(id);
         for (const id of read.excludedIds) log.excluded.add(id);
         for (const id of read.unreadableIds) log.unreadable.add(id);
+        const received = ctx.publishListings ? new Map<string, CollectedItem>() : null;
         for (const i of read.items) {
-          log.housingIds.add(i.listing.sourceId);
-          items.set(i.listing.sourceId, { listing: i.listing, raw: i.raw, pageUrl: state.url.href, screenshot: state.shot });
+          const id = i.listing.sourceId;
+          log.housingIds.add(id);
+          const collected = { listing: i.listing, raw: i.raw, pageUrl: state.url.href, screenshot: state.shot };
+          items.set(id, collected);
+          received?.set(id, collected);
         }
+        if (received?.size) ctx.publishListings?.([...received.values()]);
         session.record('daangn', 'data', r.url(), status, `지도 범위 매물 목록 ${log.pages}쪽 ${read.ids.length}건`);
       })(),
     );

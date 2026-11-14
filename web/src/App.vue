@@ -612,6 +612,41 @@ const refreshData = createRevisionRefresh(async () => {
   if (results.some((result) => result.status === 'rejected' || !result.value)) throw new Error('저장된 자료를 모두 불러오지 못했습니다.');
 });
 
+// 조회 중에는 저장이 확인된 매물 변화분만 받는다. 진행 상태 폴링은 이 응답을 기다리지 않는다.
+const LIVE_LISTINGS_INTERVAL_MS = 4000;
+const LIVE_LISTING_MARK_MS = 6000;
+const emptyLiveListingIds: ReadonlySet<string> = new Set();
+const liveListingIds = shallowRef(emptyLiveListingIds);
+let lastLiveListingsRequestAt = -Infinity;
+let loadedLiveListingsRevision: string | null = null;
+let liveListingMarkTimer: number | undefined;
+function clearLiveListingMarks() {
+  window.clearTimeout(liveListingMarkTimer);
+  liveListingIds.value = emptyLiveListingIds;
+}
+watch(() => running.value?.runId, clearLiveListingMarks);
+
+function refreshLiveListings(progress: NonNullable<AppState['running']>) {
+  if (!progress.listingRevision || listingsLoading.value > 0) return;
+  const revision = `${progress.runId}:${progress.listingRevision}`;
+  const now = Date.now();
+  if (revision === loadedLiveListingsRevision || now - lastLiveListingsRequestAt < LIVE_LISTINGS_INTERVAL_MS) return;
+  lastLiveListingsRequestAt = now;
+  const previous = listingsLoaded.value ? listings.value : null;
+  void refreshListings().then(() => {
+    loadedLiveListingsRevision = revision;
+    if (!previous || previous === listings.value || running.value?.runId !== progress.runId) return;
+    const previousIds = new Set(previous.map(listing => listing.id));
+    const added = new Set(listings.value.filter(listing => !previousIds.has(listing.id)).map(listing => listing.id));
+    if (!added.size) return;
+    window.clearTimeout(liveListingMarkTimer);
+    liveListingIds.value = added;
+    liveListingMarkTimer = window.setTimeout(clearLiveListingMarks, LIVE_LISTING_MARK_MS);
+  }).catch(() => {
+    // 실패한 변화분은 다음 폴링에서 다시 시도한다.
+  });
+}
+
 let timer: number | undefined;
 function schedule() {
   window.clearTimeout(timer);
@@ -621,9 +656,10 @@ async function poll() {
   const wasRunning = !!running.value;
   try {
     await refreshState();
-    // 확장 응답의 저장뿐 아니라 매물 파싱 완료와 폴링 사이에 끝난 조회도 버전으로 확인한다.
-    // 조회 중에는 진행 상태만 읽고, 자료의 큰 응답은 조회가 끝난 뒤에 받는다.
-    if (state.value && !running.value) {
+    const progress = running.value;
+    if (progress) refreshLiveListings(progress);
+    else if (state.value) {
+      // 확장 응답의 저장과 폴링 사이에 끝난 조회도 자료 버전으로 확인한다.
       const retryMarket = tab.value === 'market' && (!market.value || !!marketLoadError.value);
       if (await refreshData(state.value.dataRevision, wasRunning || !!connectionError.value || retryMarket || zonesNeedReload())) runsKey.value += 1;
     }
@@ -1148,6 +1184,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', onDocClick);
   window.removeEventListener('message', onExtMessage);
   window.clearTimeout(timer);
+  clearLiveListingMarks();
   window.removeEventListener('keydown', onKey);
 });
 
@@ -1393,7 +1430,7 @@ const filterUse = computed<string[] | 'all'>(() => {
 
       <template v-if="tab === 'overview'">
         <Overview
-          ref="overview" :listings="homes" :filters="filters" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected"
+          ref="overview" :listings="homes" :live-listing-ids="liveListingIds" :filters="filters" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected"
           @visible="setOverviewVisible" @select="(l) => (selectListing(l), scrollToSelected())" @open="openOriginal" @verdict="setVerdict"
           @source="showSource" @raw="showRaw" @areas="(ids) => (filters.areaIds = ids)" @deals="(d) => (filters.deals = d)" @station="toggleStation"
           @area="turnOffArea"

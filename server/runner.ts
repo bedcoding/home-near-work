@@ -33,7 +33,8 @@ let current: (RunProgress & { log: string[]; session: BrowserSession | null }) |
 
 export const getProgress = (): RunProgress | null =>
   current
-    ? { runId: current.runId, message: current.message, log: current.log.slice(-300), stopping: current.stopping, coverage: current.coverage, sites: current.sites, noticeCount: current.noticeCount }
+    ? { runId: current.runId, message: current.message, log: current.log.slice(-300), stopping: current.stopping,
+      coverage: current.coverage, sites: current.sites, noticeCount: current.noticeCount, listingRevision: current.listingRevision ?? 0 }
     : null;
 
 /** 조회 범위(scope, 없으면 전부)에서 돌 매물 사이트와 공고 곳. 공고만 확인은 매물 사이트 없이 공고 전부. */
@@ -189,6 +190,11 @@ export interface ApplyOptions {
   seenAt?: string;
   /** 주면 신규, 가격 변동 매물을 여기에 더한다(버린 매물의 가격 변동은 빼고). */
   news?: NewsItem[];
+  /** 같은 사이트의 중간 저장과 마지막 저장이 공유하는 기존 기준점 판정 */
+  baselineLacks?: Map<string, boolean>;
+  deferBaseline?: boolean;
+  /** 이번 조회가 처음 저장해 둔 매물은 마지막 응답의 가격으로 정리한다. */
+  insertedEarlier?: ReadonlySet<string>;
 }
 
 /**
@@ -213,7 +219,7 @@ export function applyResults(
     return section === 'shop' || section === 'land' ? `${source}:${section}` : source;
   };
   /** '기준점 키|자리 번호' → 이번 조회 전에 그 자리에 기준점이 없었는지(자리는 켜진 지역 번호나 store.aptSpot) */
-  const lackCache = new Map<string, boolean>();
+  const lackCache = options.baselineLacks ?? new Map<string, boolean>();
   const lacks = (key: string, spot: number) => {
     const k = `${key}|${spot}`;
     let v = lackCache.get(k);
@@ -253,7 +259,8 @@ export function applyResults(
 
       if (existing) {
         const before = (JSON.parse(existing.data) as NormalizedListing).prices;
-        const change = existing.price_sig !== sig ? comparePrices(before, listing.prices) : null;
+        const change = !options.insertedEarlier?.has(listing.sourceId) && existing.price_sig !== sig
+          ? comparePrices(before, listing.prices) : null;
         store.updateListingSeen(id, listing, key, sig, runId, ref, !!change, raw, options.seenAt);
         if (change) {
           store.addEvent(runId, id, change, { before, after: listing.prices });
@@ -290,7 +297,7 @@ export function applyResults(
       store.markGone(gone);
     }
     // 기준점은 이번에 실제로 매물을 받은 자리만 저장한다(못 받았는데 저장하면 다음 조회에서 전부 '신규'가 된다).
-    if (!options.isBaseline) {
+    if (!options.isBaseline && !options.deferBaseline) {
       for (const k of keptPerKey.keys()) {
         const [key, spot] = splitKey(k);
         if (lacks(key, spot)) store.setBaseline(key, spot, runId);
@@ -426,13 +433,15 @@ async function execute(
     /** 브라우저 탭(tab)마다 쓰는 수집 맥락. site를 주면 그 사이트의 진행, 일부 못 봄, 범위 확인을 그 사이트 몫으로 받는다. */
     const makeCtx = (
       tab: BrowserSession,
-      site?: { progress: RunSiteProgress; missed: string[]; coverage: Map<string, { row: CollectionCoverage; ids: string[] }> },
+      site?: { progress: RunSiteProgress; missed: string[]; coverage: Map<string, { row: CollectionCoverage; ids: string[] }>;
+        publishListings: NonNullable<CollectContext['publishListings']> },
     ): CollectContext => ({
       runId,
       areas,
       session: tab,
       priceLimits: site ? priceLimits[site.progress.source] : undefined,
       rentalOnly: !!site && rentOnly,
+      publishListings: site?.publishListings,
       log,
       classify,
       stopped: () => state.stopping,
@@ -483,10 +492,36 @@ async function execute(
       updateMessage();
       const limits = priceLimits[collector.id];
       log(limits ? `${collector.label}: 이번 조회의 가격 제한으로 시작` : `${collector.label}: 시작`);
+      const earlyItems = new Map<string, CollectedItem>();
+      const earlyNews: NewsItem[] = [];
+      const baselineLacks = new Map<string, boolean>();
+      let earlyNew = 0;
+      let earlyRelisted = 0;
+      const included = ({ listing }: CollectedItem) =>
+        !rentOnly || listing.prices.some(price => price.deal === 'monthly' || price.deal === 'jeonse');
+      const collectBaseline = plan.line ? () => true : undefined;
+      const bumpListings = () => { state.listingRevision = (state.listingRevision ?? 0) + 1; };
+      const publishListings: NonNullable<CollectContext['publishListings']> = batch => {
+        const fresh = batch.filter(item => included(item) && !store.getListing(`${collector.id}:${item.listing.sourceId}`));
+        if (!fresh.length) return;
+        try {
+          const batchNews: NewsItem[] = [];
+          const saved = applyResults(runId, collector.id, fresh, areas, false, undefined, {
+            isBaseline: collectBaseline, baselineLacks, deferBaseline: true, news: batchNews,
+          });
+          for (const item of fresh) earlyItems.set(item.listing.sourceId, item);
+          for (const item of batchNews) earlyNews.push(item);
+          earlyNew += saved.newCount;
+          earlyRelisted += saved.relisted;
+          bumpListings();
+        } catch {
+          log(`${collector.label}: 중간 저장을 완료하지 못해 마지막 저장에서 다시 시도합니다`);
+        }
+      };
       try {
         // 기본 탭은 닫으면 안 되므로 tab에는 따로 연 탭만 둔다(아래 finally가 tab만 닫는다).
         tab = collector.noTab ? null : await rootSession.fork();
-        items = await collector.collect(makeCtx(tab ?? rootSession, { progress, missed, coverage }));
+        items = await collector.collect(makeCtx(tab ?? rootSession, { progress, missed, coverage, publishListings }));
         if (areas.some((area) => area.region) && ['ziptoss', 'peterpanz'].includes(collector.id)) {
           missed.push('역과 지도 범위의 목록을 확인했습니다. 선택한 구나 동 전체는 확인하지 못했습니다');
         }
@@ -517,21 +552,35 @@ async function execute(
         await tab?.closePage();
       }
       // Common prices are sent to supported collectors. Only the explicit rental-only run filters other responses.
-      const toSave = rentOnly ? items.filter(({ listing }) => listing.prices.some(price => price.deal === 'monthly' || price.deal === 'jeonse')) : items;
+      const toSave = rentOnly ? items.filter(included) : items;
+      // 후속 수집이 실패해도 먼저 저장한 매물은 남긴다. 같은 번호는 마지막 응답의 정보로 저장한다.
+      const finalItems = new Map(earlyItems);
+      for (const item of toSave) finalItems.set(item.listing.sourceId, item);
       const excluded = new Set<string>();
       if (toSave.length < items.length) {
-        const eligible = new Set(toSave.map(({ listing }) => listing.sourceId));
-        for (const { listing } of items) if (!eligible.has(listing.sourceId)) excluded.add(listing.sourceId);
+        for (const { listing } of items) if (!finalItems.has(listing.sourceId)) excluded.add(listing.sourceId);
         log(`${collector.label}: 전월세 조건에 해당하지 않는 매물 ${excluded.size}건 제외`);
       }
-      const summary = applyResults(runId, collector.id, toSave, areas, complete && !collector.retainMissing && !rentOnly, error, {
+      const summary = applyResults(runId, collector.id, [...finalItems.values()], areas, complete && !collector.retainMissing && !rentOnly, error, {
         goneOutsideRadius: !plan.line && collector.wholeDistrict,
         // 노선 조회는 역마다 처음 본 것만이 아니라 모두 기준으로 둔다(회사 근처 신규 알림과 섞이지 않게).
-        isBaseline: plan.line ? () => true : undefined,
+        isBaseline: collectBaseline, baselineLacks, insertedEarlier: new Set(earlyItems.keys()),
         news,
         status: complete ? 'ok' : 'error',
       });
-      if (rentOnly) summary.fetched = items.length;
+      summary.newCount += earlyNew;
+      summary.relisted += earlyRelisted;
+      for (const item of earlyNews) {
+        if (item.type !== 'listing') continue;
+        const latest = finalItems.get(item.listing.sourceId);
+        if (latest) news.push({ ...item, listing: latest.listing, aptGu: latest.aptGu });
+      }
+      summary.fetched = items.length;
+      if (earlyItems.size) {
+        const returnedIds = new Set(items.map(item => item.listing.sourceId));
+        for (const id of earlyItems.keys()) if (!returnedIds.has(id)) summary.fetched++;
+      }
+      if (summary.kept > 0 || complete && !collector.retainMissing && !rentOnly) bumpListings();
       if (limits || Object.hasOwn(plan.priceOverrides ?? {}, collector.id)) summary.collectionPriceLimits = limits ?? null;
       if (coverage.size) {
         let storedScopes = 0;
