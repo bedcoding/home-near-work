@@ -7,7 +7,7 @@ import { auctionSiteLinks, claimsChip, isAuction, saleDateOf, saleDay, type Expe
 import { isNoOption } from '../filters';
 import { KIND_LABEL, kindOf } from '../kinds';
 import { isRoomStay, roomRange as rangeOf, roomTypesText } from '../rooms';
-import { naverLink } from '../naverPlaces';
+import { naverLink, naverMapLink } from '../naverPlaces';
 import { redevChip } from '../zones';
 import { loanView } from '../loans';
 import { cannotGet, profile } from '../profile';
@@ -97,8 +97,10 @@ const walkTip = computed(() =>
     '다방처럼 좌표를 흐리게 주는 사이트는 조금 다를 수 있습니다.',
   ].join('\n'),
 );
-/** '네이버' 단추: 네이버 단지 화면(이 매물이 단지 매물이거나 같은 자리 단지를 찾으면), 아니면 그 자리 네이버 부동산 지도 */
+/** '네이버 단지' 단추: 이 매물이 단지 매물이거나 같은 자리 단지를 찾으면 그 단지 화면(아니면 없음) */
 const naver = computed(() => naverLink(l.value));
+/** '네이버 지도' 단추: 네이버 지도에서 이 매물 좌표를 찾아 핀을 찍어 연다(회사까지 시간 보기) */
+const naverMap = computed(() => naverMapLink(l.value));
 /** 경매 물건을 다른 경매 사이트에서 여는 주소 */
 const siteLinks = computed(() => auctionSiteLinks(props.listing));
 
@@ -342,6 +344,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
         <button v-if="l.sourceShot" class="btn btn-ghost btn-sm" title="이 매물을 어디서 어떻게 모았는지" @click="emit('source')">출처 보기</button>
         <button class="btn btn-ghost btn-sm" title="사이트가 준 원래 값과 저장한 값 비교" @click="emit('raw')">원본 데이터</button>
         <a v-if="naver" class="btn btn-ghost btn-sm" :href="naver.url" target="_blank" rel="noopener" :title="naver.title">{{ naver.label }}</a>
+        <a v-if="naverMap" class="btn btn-ghost btn-sm" :href="naverMap.url" target="_blank" rel="noopener" :title="naverMap.title">{{ naverMap.label }}</a>
       </div>
     </div>
 

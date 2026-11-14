@@ -1,12 +1,12 @@
 import type { ListingView } from '../../shared/types';
 import { distanceM } from '../../shared/geo';
 import { kindOf } from './kinds';
-import { naverCenter } from './siteLinks';
 
 // 카드와 지도 정보 창의 '네이버' 단추가 여는 곳을 고른다.
 // - 네이버 단지 매물: 그 단지 화면(fin.land.naver.com/complexes/번호).
 // - 다른 사이트 매물: 같은 자리에 같은 종류의 네이버 단지가 있으면 그 단지 화면. 위치로 찾은 것이라 다른 단지일 수 있어 단추 설명에 적는다.
-// - 그 밖: 지금처럼 그 자리의 네이버 부동산 지도.
+// - 그 밖: 단추를 두지 않는다. 그 자리 네이버 부동산 지도는 핀이 없고 이 매물이 없을 수도 있어 쓸모가 없다.
+//   위치는 '네이버 지도' 단추(naverMapLink)로 본다.
 // 다른 사이트 매물은 네이버 매물 번호가 없어서 그 매물의 네이버 상세는 열 수 없다.
 
 /** 단추 하나: 여는 주소, 글자, 마우스를 올리면 보이는 설명 */
@@ -95,7 +95,7 @@ function nearestComplex(l: ListingView): Place | null {
   return best;
 }
 
-/** 카드와 지도 정보 창의 '네이버' 단추. 위치를 모르는 매물이면 null(단추를 두지 않는다). */
+/** 카드와 지도 정보 창의 '네이버 단지' 단추. 맞는 단지가 없으면 null(단추를 두지 않는다). */
 export function naverLink(l: ListingView): NaverLink | null {
   const own = naverComplexOf(l);
   if (own) return { url: complexUrl(own), label: '네이버 단지 ↗', title: '네이버 부동산에서 이 단지 화면을 엽니다' };
@@ -108,11 +108,22 @@ export function naverLink(l: ListingView): NaverLink | null {
       title: `같은 자리(${NEAR_M[kindOf(l)]}m 안)에 있는 같은 종류의 네이버 단지 화면을 엽니다. 위치로 찾은 것이라 다른 단지일 수 있습니다`,
     };
   }
+  return null;
+}
+
+/** 좌표를 주소에 넣을 글자로. 소수점 아래 7자리(약 1cm)까지만 남긴다. */
+const coord = (v: number) => String(Number(v.toFixed(7)));
+
+/**
+ * 네이버 지도(map.naver.com)에서 이 매물 좌표('위도,경도')를 검색해 연다. 그 자리에 핀이 서므로 어디인지 보이고,
+ * 거기서 길찾기를 눌러 회사까지 시간을 본다. 위치를 모르는 매물이면 null.
+ * 중개 사이트는 지번을 주지 않아(네이버도 구와 동, 좌표만 준다) 주소 대신 좌표로 찾는다.
+ */
+export function naverMapLink(l: Pick<ListingView, 'lat' | 'lng'>): NaverLink | null {
+  if (l.lat == null || l.lng == null) return null;
   return {
-    url: `https://fin.land.naver.com/map?center=${naverCenter(l.lat, l.lng)}&zoom=16`,
+    url: `https://map.naver.com/p/search/${coord(l.lat)},${coord(l.lng)}`,
     label: '네이버 지도 ↗',
-    title: l.source === 'naver'
-      ? '이 자리를 네이버 부동산 지도로 엽니다. 이 매물의 네이버 상세는 원본 열기로 봅니다'
-      : '이 자리를 네이버 부동산 지도로 엽니다(같은 자리의 네이버 단지를 찾지 못했습니다)',
+    title: '네이버 지도에서 이 매물 좌표를 찾아 그 자리에 핀을 찍어 엽니다. 거기서 길찾기로 회사까지 시간을 봅니다',
   };
 }

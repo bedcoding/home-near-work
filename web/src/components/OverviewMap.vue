@@ -7,7 +7,7 @@ import { loadCatalog, type CatalogStation } from '../areaActions';
 import { auctionSiteLinks } from '../auction';
 import { kindOf } from '../kinds';
 import { roomRange } from '../rooms';
-import { naverLink } from '../naverPlaces';
+import { naverLink, naverMapLink } from '../naverPlaces';
 import { looksSeen, markSeen } from '../marks';
 import { rentRate } from '../rentRate';
 import { distanceText, money, priceAmount, priceText, pyeong } from '../format';
@@ -783,9 +783,10 @@ function popup(g: Group, items: ListingView[]) {
     open.addEventListener('click', () => emit('open', l));
     actions.appendChild(open);
     // '📞 문의함'과 '📝 메모' 단추는 매물 카드에만 둔다.
-    // 네이버 단추는 단지 화면(단지 매물이거나 같은 자리 단지를 찾으면)이나 그 자리 지도를 연다(naverLink).
-    const link = naverLink(l);
-    if (link) {
+    // 네이버 단지 단추는 단지 매물이거나 같은 자리 단지를 찾으면 그 단지 화면을 연다(naverLink).
+    // 네이버 지도 단추는 네이버 지도에서 이 매물 좌표를 찾아 핀을 찍어 연다(naverMapLink).
+    for (const link of [naverLink(l), naverMapLink(l)]) {
+      if (!link) continue;
       const naver = document.createElement('a');
       naver.textContent = link.label;
       naver.href = link.url;
