@@ -23,7 +23,7 @@ import InfoModal from './InfoModal.vue';
 // 매물 탭 오른쪽 지도와 경매 탭, 고시원과 쉐어 탭의 지도가 같이 쓴다.
 // - 매물(같은 자리는 숫자 동그라미로 묶음)을 누르면 정보 창이 뜨고, 거기서 '목록에서 보기'나 '원본 열기'를 누른다.
 //   확대해 보면(PRICE_ZOOM) 동그라미 대신 가격('보증금/월세', 전세 '전 1.5억')을 쓴 표시로 그린다. 가격 표시끼리 글자가 가려질 만큼
-//   겹치면 지금 확대에서 한 표시로 묶고 대표 가격과 건수를 쓴다. 매물 탭의 전월세 지도는 월세와 보증금 최저 조건을 표시한다.
+//   겹치면 지금 확대에서 한 표시로 묶고 대표 가격과 건수를 쓴다. 전월세 지도는 월세 최저와 전세금 또는 보증금 최저를 표시한다.
 //   옆에 목록이 있으면 누를 때 그 묶음 매물들을 reveal 이벤트로 알려 목록도 그 매물로 옮기게 한다.
 // - 매물 표시는 화면 근처에 있는 것만 그리고, 지도를 옮기거나 확대하면 바뀐 묶음만 갈아 끼운다(수천 건을 한꺼번에 다시 만들면 느려서).
 // - 역(흰 동그라미, 켜진 지역은 검은 동그라미)을 누르면 그 역 지역을 켜고 끈다(station 이벤트, 확대 12 이상에서 보임).
@@ -244,7 +244,9 @@ function tooltip(g: Group) {
   });
   if (items.length > 6) lines.push(`외 ${items.length - 6}건`);
   const head = items.length > 1 ? `<strong>${g.spots > 1 ? '이 근처' : '이 자리'} ${items.length}건</strong><br>` : '';
-  const prices = g.priced && g.sum.secondary ? `<strong>최저 월세 ${esc(g.sum.text)}<br>최저 보증금 ${esc(g.sum.secondary)}</strong><br>` : '';
+  const { text, secondary } = g.sum;
+  const prices = g.priced && secondary
+    ? `<strong>최저 월세 ${esc(text)}<br>${secondary.quote.price.deal === 'jeonse' ? '최저 전세금' : '최저 보증금'} ${esc(secondary.text)}</strong><br>` : '';
   return head + prices + lines.join('<br>');
 }
 
@@ -257,11 +259,11 @@ function withPriceChangesFirst(items: ListingView[]) {
 
 function withMapPricesFirst(g: Group) {
   const items = withPriceChangesFirst(g.items);
-  const monthly = g.sum.monthly?.listing;
-  if (!g.priced || !monthly || (g.sum.nonMeh && monthly.verdict === 'meh') || g.sum.n < 2) return items;
+  const monthly = eligibleQuote(g.sum, g.sum.monthly)?.listing;
+  if (!g.priced || !monthly || g.sum.n < 2) return items;
   const first = [monthly];
-  const deposit = g.sum.deposit?.listing;
-  if (g.sum.secondary && deposit && deposit.id !== first[0].id) first.push(deposit);
+  const second = g.sum.secondary?.quote.listing;
+  if (second && second.id !== monthly.id) first.push(second);
   const ids = new Set(first.map(l => l.id));
   return [...first, ...items.filter(l => !ids.has(l.id))];
 }
@@ -325,7 +327,7 @@ function lowerQuote(a: RentalQuote | null, b: RentalQuote | null, field: 'monthl
 
 /**
  * 묶음 요약. 확대할 때마다 다시 묶으므로 매물을 다시 훑지 않고 이 값만 더해 가며, 표시 모양도 이것으로 정한다.
- * best는 기존 가격을 쓸 때 고르는 매물이고, 전월세 지도는 월세와 보증금 기준으로 따로 고른다.
+ * best는 기존 가격을 쓸 때 고르는 매물이고, 전월세 지도는 월세, 전세금, 보증금 기준을 쓴다.
  * text와 secondary는 가격 표시의 첫째 줄과 둘째 줄, n은 든 매물 수. 표시 앞 글자(📞, ✓, ✕)는
  * called와 '별로가 아닌 매물을 다 봤는지'(nonMehSeen === nonMeh, 모두 별로여도 같음)로 정해진다.
  */
@@ -335,7 +337,7 @@ interface Summary {
   deposit: RentalQuote | null;
   jeonse: RentalQuote | null;
   text: string;
-  secondary: string;
+  secondary: { quote: RentalQuote; text: string } | null;
   n: number;
   nonMeh: number;
   nonMehSeen: number;
@@ -348,7 +350,7 @@ interface Summary {
 /** items는 showOrder로 늘어선 것이라 가격이 있는 첫 매물이 best다. */
 function summarize(items: ListingView[]): Summary {
   const best = items.find((l) => l.prices[0]) ?? null;
-  const s: Summary = { best, monthly: null, deposit: null, jeonse: null, text: '', secondary: '', n: items.length, nonMeh: 0, nonMehSeen: 0, called: false, fresh: false, changed: false, star: false };
+  const s: Summary = { best, monthly: null, deposit: null, jeonse: null, text: '', secondary: null, n: items.length, nonMeh: 0, nonMehSeen: 0, called: false, fresh: false, changed: false, star: false };
   for (const l of items) {
     for (const price of props.rentalOptions?.get(l.id) ?? []) {
       const quote = { listing: l, price };
@@ -368,15 +370,26 @@ function summarize(items: ListingView[]): Summary {
   return priceLabel(s);
 }
 
+function eligibleQuote(s: Summary, quote: RentalQuote | null) {
+  return s.nonMeh && quote?.listing.verdict === 'meh' ? null : quote;
+}
+
+function rentalLabel(price: PriceOption) {
+  return price.deal === 'jeonse' ? `전 ${money(price.deposit)}` : priceAmount(price);
+}
+
 function priceLabel(s: Summary) {
-  const eligible = (quote: RentalQuote | null) => s.nonMeh && quote?.listing.verdict === 'meh' ? null : quote;
-  const monthly = eligible(s.monthly);
-  const deposit = eligible(s.deposit);
-  const primary = monthly ?? deposit ?? eligible(s.jeonse);
-  s.text = primary ? (primary.price.deal === 'jeonse' ? `전 ${money(primary.price.deposit)}` : priceAmount(primary.price))
-    : s.best ? mapPrice(s.best.prices[0]) : '';
-  const other = monthly && deposit ? priceAmount(deposit.price) : '';
-  s.secondary = other !== s.text ? other : '';
+  const monthly = eligibleQuote(s, s.monthly);
+  const deposit = eligibleQuote(s, s.deposit);
+  const jeonse = eligibleQuote(s, s.jeonse);
+  const rental = monthly ?? deposit;
+  const primary = rental ?? jeonse;
+  s.text = primary ? rentalLabel(primary.price) : s.best ? mapPrice(s.best.prices[0]) : '';
+  const other = rental ? jeonse ?? deposit : null;
+  if (other) {
+    const text = rentalLabel(other.price);
+    if (text !== s.text) s.secondary = { quote: other, text };
+  }
   return s;
 }
 
@@ -388,7 +401,7 @@ function combine(a: Summary, b: Summary): Summary {
     deposit: lowerQuote(a.deposit, b.deposit, 'deposit'),
     jeonse: lowerQuote(a.jeonse, b.jeonse, 'deposit'),
     text: '',
-    secondary: '',
+    secondary: null,
     n: a.n + b.n,
     nonMeh: a.nonMeh + b.nonMeh,
     nonMehSeen: a.nonMehSeen + b.nonMehSeen,
@@ -430,13 +443,7 @@ function textWidth(text: string, px: number) {
  */
 function labelWidth(s: Summary, strong: boolean) {
   const fs = strong ? 12 : 11;
-  let w = (strong ? 16 : 13) + textWidth(s.text || '?', fs);
-  if (s.secondary) {
-    const [firstDeposit, firstRent] = s.text.split('/');
-    const [secondDeposit, secondRent] = s.secondary.split('/');
-    w = (strong ? 16 : 13) + Math.max(textWidth(firstDeposit, fs), textWidth(secondDeposit, fs)) + textWidth('/', fs) +
-      Math.max(textWidth(firstRent, fs), textWidth(secondRent, fs)) + 2 * PRICE_COLUMN_GAP;
-  }
+  let w = (strong ? 16 : 13) + Math.max(textWidth(s.text || '?', fs), s.secondary ? stackedPriceWidth(s.text, s.secondary, fs) : 0);
   const mark = s.called ? '📞' : s.nonMehSeen === s.nonMeh ? (s.nonMeh ? '✓' : '✕') : '';
   if (mark) w += 3 + textWidth(mark, fs);
   if (s.n > 1) w += countWidth(s.n);
@@ -451,6 +458,16 @@ function countWidth(n: number) {
 }
 const LABEL_H = { normal: 20.5, strong: 25 };
 const PRICE_COLUMN_GAP = 2;
+function stackedPriceWidth(first: string, second: NonNullable<Summary['secondary']>, fs: number) {
+  const [firstDeposit, firstRent] = first.split('/');
+  if (second.quote.price.deal === 'jeonse') {
+    const monthlyWidth = textWidth(firstDeposit, fs) + textWidth('/', fs) + textWidth(firstRent, fs) + 2 * PRICE_COLUMN_GAP;
+    return Math.max(monthlyWidth, textWidth(second.text, fs));
+  }
+  const [secondDeposit, secondRent] = second.text.split('/');
+  return Math.max(textWidth(firstDeposit, fs), textWidth(secondDeposit, fs)) + textWidth('/', fs) +
+    Math.max(textWidth(firstRent, fs), textWidth(secondRent, fs)) + 2 * PRICE_COLUMN_GAP;
+}
 const labelHeight = (s: Summary, strong: boolean) => (strong ? LABEL_H.strong : LABEL_H.normal) + (s.secondary ? (strong ? 17 : 16) : 0);
 
 /** 가격 표시끼리 이만큼은 겹쳐도 글자가 가려지지 않는다(px, 상자의 안쪽 여백과 테두리 몫). */
@@ -1221,10 +1238,9 @@ function drawGroup(layer: L.LayerGroup, g: Group): Drawn {
   let z: number | undefined = zIndexOffset;
   if (priced) {
     const { text, secondary } = g.sum;
-    const amounts = secondary ? `<span class="price-lines" style="--price-column-gap:${PRICE_COLUMN_GAP}px">${[text, secondary].map((amount) => {
-      const [deposit, rent] = amount.split('/');
-      return `<span class="price-line"><span>${esc(deposit)}</span><span>/</span><span>${esc(rent)}</span></span>`;
-    }).join('')}</span>` : esc(text);
+    const amounts = secondary ? `<span class="price-lines" style="--price-column-gap:${PRICE_COLUMN_GAP}px">${rentalPriceRow(text)}${
+      secondary.quote.price.deal === 'jeonse' ? `<span class="price-line"><span class="price-jeonse">${esc(secondary.text)}</span></span>` : rentalPriceRow(secondary.text)
+    }</span>` : esc(text);
     marker = L.marker([g.lat, g.lng], {
       icon: L.divIcon({
         className: `price${g.strong ? ' strong' : ''}${muted ? ' dim' : ''}${seen ? ' seen' : ''}${meh ? ' meh' : ''}${called ? ' called' : ''}`,
@@ -1280,6 +1296,11 @@ function drawGroup(layer: L.LayerGroup, g: Group): Drawn {
   });
   marker.addTo(layer);
   return { marker, group: g, base, z };
+}
+
+function rentalPriceRow(amount: string) {
+  const [deposit, rent] = amount.split('/');
+  return `<span class="price-line"><span>${esc(deposit)}</span><span>/</span><span>${esc(rent)}</span></span>`;
 }
 
 /** 가격 표시와 캔버스 점 위에 새 매물 강조를 묶음당 하나씩 올린다. */
@@ -1728,8 +1749,8 @@ onBeforeUnmount(() => {
             <dt><b class="price-sample">500/40<i class="cnt">4</i></b></dt>
             <dd>
               <b>묶음</b>: 가격 표시끼리 겹치면 한 표시로 묶습니다. 가격 옆 숫자는 묶인 매물 수입니다. 더 확대하면 풀립니다.
-              전월세 핀에 두 줄이 보이면 윗줄은 월세 최저, 아랫줄은 월세 매물의 보증금 최저입니다. 두 조건의 금액이 같으면 한 줄만 표시합니다. 전세만 있으면 가장 낮은 전세금을 표시합니다.
-              핀을 누르면 고른 매물, 핀에 표시한 월세 매물과 가격이 바뀐 매물을 먼저 볼 수 있습니다.
+              월세와 전세가 함께 있으면 윗줄에 최저 월세, 아랫줄에 최저 전세금을 표시합니다. 월세만 있으면 아랫줄에 최저 보증금을 표시하고, 같은 조건이면 한 줄만 표시합니다. 전세만 있으면 최저 전세금 한 줄이 표시됩니다.
+              핀을 누르면 고른 매물, 핀에 표시한 매물과 가격이 바뀐 매물을 먼저 볼 수 있습니다.
             </dd>
             <dt><b class="price-sample seen-sample">✓ 500/40</b></dt>
             <dd>
@@ -1938,6 +1959,7 @@ onBeforeUnmount(() => {
 }
 :deep(.price-line) { display: contents; }
 :deep(.price-line + .price-line > span) { justify-self: stretch; text-align: right; box-shadow: inset 0 1px rgba(255, 255, 255, .45); }
+:deep(.price-jeonse) { grid-column: 1 / -1; }
 :deep(.price.seen .price-line + .price-line > span) { box-shadow: inset 0 1px rgba(22, 32, 46, .22); }
 :deep(.live-ring) {
   position: absolute; display: block; left: 0; top: 0; border: 3px solid #ffde59;
