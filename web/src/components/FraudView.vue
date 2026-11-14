@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { FRAUD_CASES, FRAUD_CHECKED, FRAUD_GROUPS, FRAUD_TOOLS, type FraudGroup } from '../frauds';
 
-// 사기 사례 탭: 부동산 사기 수법을 카드로 보인다(수법, 실제 사례, 서류에서 보이는 곳, 당하면 생기는 일, 근거 링크).
+// 사기 사례 탭: 부동산 사기 수법과 계약 위험을 보여 주는 민사 판례를 카드로 보인다.
 // 위에 확인 도구 링크, 거르기(FRAUD_GROUPS의 거래 유형과 서류로 못 잡는 것)와 검색어. 고른 거르기는 이 브라우저에 기억한다.
 // 카드 이름 옆 거래 유형 라벨을 누르면 그 유형으로 거른다.
 
@@ -45,7 +45,7 @@ const dot = (iso: string) => iso.replace(/-/g, '.');
 <template>
   <section class="fraud">
     <div class="fraud-head">
-      <h2 class="fraud-title">사기 사례 <span class="muted num">{{ FRAUD_CASES.length }}가지</span></h2>
+      <h2 class="fraud-title">사기 사례와 계약 위험 <span class="muted num">{{ FRAUD_CASES.length }}건</span></h2>
       <span class="muted checked" title="판결, 법령, 공공기관 안내, 언론 보도를 이날 기준으로 확인해 손으로 정리했습니다. 법률 판단은 원문과 전문가로 확인하세요.">{{ dot(FRAUD_CHECKED) }} 확인</span>
     </div>
     <nav class="tools" aria-label="확인 도구">
@@ -84,14 +84,15 @@ const dot = (iso: string) => iso.replace(/-/g, '.');
           </span>
         </div>
         <div class="case-tags">
+          <span v-if="c.kind === 'civil-ruling'" class="chip chip-muted">민사 판례</span>
           <span v-for="d in c.docs" :key="d" class="chip doc">{{ d }}</span>
           <span v-if="c.blind" class="chip chip-warn" title="계약 당일 서류만으로는 못 잡습니다">{{ c.blind }}</span>
         </div>
         <dl class="case-body">
-          <dt>수법</dt><dd>{{ c.how }}</dd>
-          <dt>실제 사례</dt><dd>{{ c.cases }}</dd>
+          <dt>{{ c.kind === 'civil-ruling' ? '쟁점' : '수법' }}</dt><dd>{{ c.how }}</dd>
+          <dt>{{ c.kind === 'civil-ruling' ? '판결' : '실제 사례' }}</dt><dd>{{ c.cases }}</dd>
           <dt>확인할 곳</dt><dd class="check">{{ c.check }}</dd>
-          <dt>당하면</dt><dd class="result">{{ c.result }}</dd>
+          <dt>{{ c.kind === 'civil-ruling' ? '배당에 미치는 영향' : '당하면' }}</dt><dd class="result">{{ c.result }}</dd>
         </dl>
         <div class="case-src">
           <a v-for="s in c.sources" :key="s.url + s.title" :href="s.url" target="_blank" rel="noopener">{{ s.title }}<span v-if="s.date" class="src-date">{{ dot(s.date) }}</span> ↗</a>

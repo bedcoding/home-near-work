@@ -1220,7 +1220,7 @@ const tabs = computed<{ id: Tab; label: string; count: number | null; news?: num
     title: 'SH, LH, 고방 등의 청년과 공공 임대 모집 공고', main: true,
   },
   { id: 'support', label: '지원 제도', count: null, title: '전세 대출, 전세보증금 반환보증, 월세 지원 같은 국가와 서울시 제도', main: true },
-  { id: 'fraud', label: '사기 사례', count: null, title: '부동산 사기 수법과 실제 사례, 서류에서 보이는 곳, 당하면 생기는 일' },
+  { id: 'fraud', label: '사기 사례', count: null, title: '부동산 사기 수법과 계약 위험을 보여 주는 판례, 계약 전에 확인할 서류' },
   { id: 'checklist', label: '체크리스트', count: null, title: '집을 볼 때 확인할 하자와 계약 전에 확인할 것(전세, 월세, 매매, 경매마다)' },
   { id: 'sites', label: '사이트별', count: null, title: '사이트마다 모은 매물 수, 마지막으로 받은 때, 사이트 화면에 있던 수와 받은 수, 조회 기록', main: true },
   { id: 'marked', label: '관심, 별로, 버림', count: markedCounts.value.star + markedCounts.value.meh + markedCounts.value.discard, title: '관심, 별로, 버림으로 표시한 매물' },

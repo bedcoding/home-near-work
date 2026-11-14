@@ -1,10 +1,10 @@
 import type { SupportSource } from './support';
 
-// 사기 사례 탭(FraudView): 부동산 사기 수법마다 실제 사례, 서류에서 보이는 곳, 당하면 생기는 일, 근거 링크를 손으로 정리한 표다.
+// 사기 사례 탭(FraudView): 부동산 사기와 계약 위험을 보여 주는 민사 판례의 내용, 확인할 서류, 근거 링크를 손으로 정리한 표다.
 // 모으는 데이터가 아니라 조사한 날(FRAUD_CHECKED) 기준이다. 고칠 때는 FRAUD_CHECKED와 근거(sources)도 같이 고친다.
 
 /** 사례와 근거를 확인한 날 */
-export const FRAUD_CHECKED = '2026-10-27';
+export const FRAUD_CHECKED = '2026-11-14';
 
 export type FraudGroup = 'buy' | 'jeonse' | 'monthly' | 'auction' | 'sale' | 'shop' | 'land' | 'invest';
 
@@ -25,12 +25,13 @@ export const FRAUD_GROUPS: { id: FraudGroup; name: string; title: string }[] = [
 ];
 
 /**
- * 사기 수법 하나. docs: 확인할 서류 이름표, blind: 계약 당일 서류만으로는 못 잡는 까닭(짧게, 없으면 서류로 잡힘).
- * how 수법, cases 실제 사례, check 서류에서 보이는 곳과 막는 법, result 당하면 생기는 일.
+ * 사기 수법 또는 계약 위험을 보여 주는 민사 판례. docs는 확인할 서류, blind는 계약 당일 서류만으로는 못 잡는 까닭.
+ * how는 수법이나 쟁점, cases는 실제 사례나 판결, check는 확인 방법, result는 계약에 미치는 영향.
  */
 export interface FraudCase {
   id: string;
   name: string;
+  kind?: 'civil-ruling';
   groups: FraudGroup[];
   docs: string[];
   blind?: string;
@@ -409,6 +410,22 @@ export const FRAUD_CASES: FraudCase[] = [
       { title: '더시사법률: 부산 8개 호실 공동근저당, 중개사 30%', url: 'https://www.tsisalaw.com/news/article.html?no=30559', date: '2026-09-17' },
       { title: '민법 제368조(공동저당)', url: `${LAW}민법&joNo=036800`, date: '' },
       { title: '부동산등기규칙 제30조(목록은 신청해야 포함)', url: `${LAW}부동산등기규칙&joNo=003000`, date: '' },
+    ],
+  },
+  {
+    id: 'land-mortgage-before-build',
+    name: '신축 전 토지 근저당과 보증금',
+    kind: 'civil-ruling',
+    groups: ['jeonse', 'monthly'],
+    docs: ['토지 등기부 을구', '건물 등기부 을구', '건축물대장'],
+    how: '빈 땅에 근저당이 잡힌 뒤 집이 지어지고 세입자가 들어왔습니다. 그 토지 근저당으로 경매가 진행되면 세입자가 어느 매각대금에서 보증금을 먼저 받을 수 있는지가 쟁점입니다.',
+    cases: '대법원 99다25532는 토지 매각대금에서 소액임차인의 최우선변제를 인정하지 않았습니다. 대법원 2009다101275는 토지와 신축 건물이 함께 팔린 사건에서 토지 매각대금과 건물 매각대금을 구분하고, 요건을 갖춘 소액임차인이 건물 몫에서 우선변제받을 수 있다고 판단했습니다.',
+    check: '토지와 건물 등기부에서 근저당 설정일과 담보 범위를 각각 확인합니다. 토지 근저당을 설정할 때 건물이 있었는지는 건축물대장의 착공일과 사용승인일, 필요하면 당시 시공 자료를 함께 봅니다.',
+    result: '토지만 팔리면 그 경매에 건물 매각대금이 없습니다. 둘 다 팔려도 건물에 배정된 금액과 다른 권리의 배당 순위에 따라 보증금 회수액이 달라집니다.',
+    sources: [
+      { title: '대법원 99다25532(토지 매각대금)', url: 'https://www.law.go.kr/precInfoP.do?precSeq=192109', date: '1999-07-23' },
+      { title: '대법원 2009다101275(토지와 신축 건물의 일괄경매)', url: 'https://www.law.go.kr/precInfoP.do?precSeq=144525', date: '2010-06-10' },
+      { title: '주택임대차보호법 제8조(보증금 중 일정액의 보호)', url: 'https://www.law.go.kr/lsLinkCommonInfo.do?lsJoLnkSeq=1031262061', date: '' },
     ],
   },
   {
