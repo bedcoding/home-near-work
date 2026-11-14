@@ -30,6 +30,7 @@ const filtersNow = computed(() => plainFilters(props.filters));
 watch(() => props.listings, (list) => rememberNaverPlaces(list), { immediate: true });
 const overviewEl = ref<HTMLElement | null>(null);
 const mapPanel = ref<HTMLElement | null>(null);
+const mapView = ref<InstanceType<typeof OverviewMap> | null>(null);
 const mapPanelHeight = ref<number>();
 let layoutObserver: ResizeObserver | undefined;
 let sizeFrame = 0;
@@ -143,6 +144,7 @@ interface Entry {
   listing: ListingView;
   /** 가격대를 정한 가격 선택지 */
   option: PriceOption;
+  options: PriceOption[];
   value: number | null;
 }
 
@@ -229,7 +231,7 @@ function entriesOf(deal: OverviewDeal, f: Filters): Entry[] {
       const options = dealOptions(listing, d, f, areas);
       if (!options.length) continue;
       const option = cheapest(options);
-      entries.push({ listing, option, value: bandValue(option) });
+      entries.push({ listing, option, options, value: bandValue(option) });
     }
   }
   return entries;
@@ -447,6 +449,21 @@ const listMoves = ref(0);
 const mapFitKey = computed(() => `${deal.value}|${listMoves.value}|${props.filters.areaIds.join(',')}`);
 /** 지도: 펼친 목록이 없으면 고른 거래 유형의 매물을 작게 보여 준다. */
 const mapBackground = computed(() => uniq(byDeal.value.get(deal.value) ?? []).map((e) => e.listing));
+const mapRentalOptions = computed(() => {
+  if (deal.value !== 'rent') return undefined;
+  const byId = new Map<string, PriceOption[]>();
+  for (const entry of byDeal.value.get('rent') ?? []) {
+    const previous = byId.get(entry.listing.id);
+    byId.set(entry.listing.id, previous ? [...previous, ...entry.options] : entry.options);
+  }
+  return byId;
+});
+
+async function selectFromList(listing: ListingView) {
+  emit('select', listing);
+  await nextTick();
+  if (props.selectedId === listing.id) mapView.value?.showListingPopup(listing.id);
+}
 watch(visible, (v) => emit('visible', v), { immediate: true });
 
 function openMap(): Record<string, Pick> {
@@ -637,7 +654,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
               <div v-if="r.shown.length" class="list">
                 <ListingCard
                   v-for="e in r.shown" :key="e.listing.id" :listing="e.listing" :areas="areas" :selected="e.listing.id === selectedId"
-                  @select="emit('select', e.listing)" @open="emit('open', e.listing)" @verdict="(v) => emit('verdict', e.listing, v)"
+                  @select="selectFromList(e.listing)" @open="emit('open', e.listing)" @verdict="(v) => emit('verdict', e.listing, v)"
                   @source="emit('source', e.listing)" @raw="emit('raw', e.listing)" zone-banner
                 />
               </div>
@@ -648,8 +665,9 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
       <SplitHandle />
       <aside ref="mapPanel" class="ov-map" :style="mapPanelHeight ? { '--map-panel-height': `${mapPanelHeight}px` } : undefined">
         <OverviewMap
+          ref="mapView"
           :listings="mapStrong" :background="mapBackground" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="mapFitKey" view-key="overview"
-          :live-listing-ids="liveListingIds"
+          :live-listing-ids="liveListingIds" :rental-options="mapRentalOptions"
           @select="(l) => reveal([l])" @reveal="reveal" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />

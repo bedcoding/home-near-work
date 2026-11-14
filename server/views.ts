@@ -424,12 +424,12 @@ export function buildListingViews(): ListingView[] {
   const notes = store.notesMap();
   const events = store.unackedEvents();
   const newIds = new Set(events.filter((e) => e.type === 'new').map((e) => e.listing_id));
-  const changes = new Map<string, ListingView['priceChange']>();
-  for (const e of events) {
-    if (!e.type.startsWith('price_') || !e.detail) continue;
-    const detail = JSON.parse(e.detail) as { before: PriceOption[]; after: PriceOption[] };
-    changes.set(e.listing_id, { type: e.type as PriceChangeType, before: detail.before, after: detail.after, at: e.created_at });
-  }
+  const unreadPriceIds = new Set(events.filter(e => e.type.startsWith('price_')).map(e => e.id));
+  const changes = new Map(store.latestPriceEvents().map(e => {
+    const { before, after } = JSON.parse(e.detail!) as { before: PriceOption[]; after: PriceOption[] };
+    const change = { type: e.type as PriceChangeType, before, after, at: e.created_at };
+    return [e.listing_id, { change, unread: unreadPriceIds.has(e.id) }];
+  }));
 
   const dabangAddresses = store.dabangAddressMap();
   // 30일 지나 폴더를 지운 조회의 스크린샷은 '출처 보기'를 숨긴다.
@@ -454,6 +454,7 @@ export function buildListingViews(): ListingView[] {
     const verdict = verdicts.get(row.id);
     const raw = row.source === 'courtauction' ? courtRaw.get(row.id) : row.source === 'onbid' ? onbidRaw.get(row.id) : optionRaw.get(row.id);
     const reason = verdict?.reason ?? null;
+    const price = changes.get(row.id);
     // 원본 데이터 설명표(explain)는 '원본 데이터' 버튼을 누를 때 따로 불러온다(listingViewRows가 이미 뺐다). 건물 구분 값은 화면이 쓰지 않는다.
     const { buildingKey: _buildingKey, ...rest } = data;
     return {
@@ -465,7 +466,8 @@ export function buildListingViews(): ListingView[] {
       verdict: verdict?.verdict ?? null,
       verdictReason: reason,
       isNew: newIds.has(row.id),
-      priceChange: changes.get(row.id) ?? null,
+      priceChange: price?.unread ? price.change : null,
+      ...(price && !price.unread ? { latestPriceChange: price.change } : {}),
       seenAt: seen.get(row.id) ?? null,
       contactedAt: contacted.get(row.id) ?? null,
       note: notes.get(row.id)?.note ?? null,

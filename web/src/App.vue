@@ -828,9 +828,11 @@ function updateSimilar(all: ListingView[], x: ListingView): string[] {
  */
 async function setVerdict(input: ListingView, verdict: Verdict | null) {
   const l = toRaw(input);
-  const before = { verdict: l.verdict, verdictReason: l.verdictReason, relistedOf: l.relistedOf, isNew: l.isNew, priceChange: l.priceChange, seenAt: l.seenAt ?? null };
+  const before = { verdict: l.verdict, verdictReason: l.verdictReason, relistedOf: l.relistedOf, isNew: l.isNew,
+    priceChange: l.priceChange, latestPriceChange: l.latestPriceChange, seenAt: l.seenAt ?? null };
   // 서버는 사용자가 남긴 표시에 이유를 두지 않는다(재등록이라 숨김 같은 이유는 사라진다).
-  Object.assign(l, { verdict, verdictReason: null, relistedOf: null, isNew: false, priceChange: null, seenAt: new Date().toISOString() });
+  Object.assign(l, { verdict, verdictReason: null, relistedOf: null });
+  acknowledgeListing(l, new Date().toISOString());
   touchMarks([l.id, ...updateSimilar(listings.value, l)]);
   triggerRef(listings);
   try {
@@ -870,6 +872,13 @@ async function openOriginal(l: ListingView) {
   await saveSeen([l]);
 }
 
+function acknowledgeListing(l: ListingView, at: string) {
+  l.seenAt = at;
+  l.isNew = false;
+  if (l.priceChange) l.latestPriceChange = l.priceChange;
+  l.priceChange = null;
+}
+
 /**
  * 눌러 본 매물을 '봤음'으로 남기고 신규와 가격 변동 표시를 끈다(지도 표시, 카드, 원본 열기).
  * 화면에 먼저 반영하고, 서버 자료가 이것 말고 바뀐 게 없으면 수만 건짜리 매물 목록을 다시 받지 않는다.
@@ -878,11 +887,7 @@ async function saveSeen(items: ListingView[]) {
   const todo = items.filter((l) => !l.seenAt || hasNews(l));
   if (!todo.length) return;
   const at = new Date().toISOString();
-  for (const l of todo) {
-    l.seenAt = at;
-    l.isNew = false;
-    l.priceChange = null;
-  }
+  for (const l of todo) acknowledgeListing(l, at);
   triggerRef(listings);
   touchMarks(todo.map((l) => l.id));
   try {
@@ -896,14 +901,11 @@ async function saveSeen(items: ListingView[]) {
 
 /** '📞 문의함'을 남기거나 푼다(카드와 지도 창의 단추). 남기면 '봤음'도 된다. 저장하지 못하면 되돌리고 알린다. */
 async function setContacted(l: ListingView, on: boolean) {
-  const before = { contactedAt: l.contactedAt ?? null, seenAt: l.seenAt ?? null, isNew: l.isNew, priceChange: l.priceChange };
+  const before = { contactedAt: l.contactedAt ?? null, seenAt: l.seenAt ?? null, isNew: l.isNew,
+    priceChange: l.priceChange, latestPriceChange: l.latestPriceChange };
   const at = new Date().toISOString();
   l.contactedAt = on ? (l.contactedAt ?? at) : null;
-  if (on) {
-    l.seenAt = at;
-    l.isNew = false;
-    l.priceChange = null;
-  }
+  if (on) acknowledgeListing(l, at);
   triggerRef(listings);
   touchMarks([l.id]);
   try {
@@ -920,15 +922,12 @@ async function setContacted(l: ListingView, on: boolean) {
 async function saveNote(l: ListingView, text: string) {
   const note = text.trim().slice(0, NOTE_MAX) || null;
   if (note === (l.note ?? null)) return;
-  const before = { note: l.note ?? null, noteAt: l.noteAt ?? null, seenAt: l.seenAt ?? null, isNew: l.isNew, priceChange: l.priceChange };
+  const before = { note: l.note ?? null, noteAt: l.noteAt ?? null, seenAt: l.seenAt ?? null, isNew: l.isNew,
+    priceChange: l.priceChange, latestPriceChange: l.latestPriceChange };
   const at = new Date().toISOString();
   l.note = note;
   l.noteAt = note ? at : null;
-  if (note) {
-    l.seenAt = at;
-    l.isNew = false;
-    l.priceChange = null;
-  }
+  if (note) acknowledgeListing(l, at);
   triggerRef(listings);
   touchMarks([l.id]);
   try {

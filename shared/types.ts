@@ -516,6 +516,8 @@ export interface ListingView extends Omit<NormalizedListing, 'explain' | 'buildi
   /** 확인하지 않은 '신규' 표시가 있다. */
   isNew: boolean;
   priceChange: { type: PriceChangeType; before: PriceOption[]; after: PriceOption[]; at: string } | null;
+  /** 지도에서 다시 볼 수 있는 마지막 가격 변동 기록. 확인한 뒤에도 남는다. */
+  latestPriceChange?: ListingView['priceChange'];
   /** 이 대시보드에서 지도 표시나 카드를 눌러(또는 원본을 열어) 마지막으로 본 때. 안 봤으면 null. */
   seenAt?: string | null;
   /** '📞 문의함'을 누른 때(중개사에게 문의한 매물). 안 눌렀으면 null. */

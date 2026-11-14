@@ -1737,6 +1737,12 @@ export function unackedEvents(): EventRow[] {
   return db.prepare('SELECT * FROM events WHERE acked = 0 AND created_at >= ? ORDER BY id').all(newsSince()) as EventRow[];
 }
 
+export function latestPriceEvents(): EventRow[] {
+  return db.prepare(`SELECT * FROM events WHERE id IN (
+    SELECT MAX(id) FROM events WHERE type IN ('price_down', 'price_up', 'price_changed') AND detail IS NOT NULL GROUP BY listing_id
+  )`).all() as EventRow[];
+}
+
 /**
  * 대시보드에서 눌러 본 매물(지도 표시, 카드, 원본 열기, 판정)을 '봤음'으로 남기고 그 매물의 변화 기록(신규, 가격 변동)을 확인 처리한다.
  * 변화 기록은 '봤음' 뒤에 새로 생기면 다시 확인하지 않은 것으로 남는다.
