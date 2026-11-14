@@ -91,6 +91,8 @@ let zoneRenderer: L.Renderer | null = null;
 let pinLayer: L.LayerGroup | null = null; // 거리 핀과 표시 핀
 let pinMove: { marker: L.Marker; popup: L.Popup } | null = null;
 let listingPopup: L.Popup | null = null;
+let hoveredListingPin: L.Layer | null = null;
+let closeListingTipTimer: number | undefined;
 const fileEl = ref<HTMLInputElement | null>(null);
 const stations = ref<CatalogStation[]>([]);
 /** 이 확대보다 멀리서 보면 역을 그리지 않는다(수도권 658곳이 한꺼번에 보이면 매물이 가려서). */
@@ -162,7 +164,7 @@ interface Group {
   sum: Summary;
   /** 든 자리마다 매물(각각 showOrder 순) */
   parts: ListingView[][];
-  /** 별로가 아닌 매물을 싼 순(comparePrice)으로, 별로는 맨 뒤. 정보 창이나 올리면 보이는 글을 처음 열 때 늘어놓는다. */
+  /** 별로가 아닌 매물을 싼 순(comparePrice)으로, 별로는 맨 뒤. 정보 창이나 툴팁에서 필요할 때 늘어놓는다. */
   readonly items: ListingView[];
 }
 
@@ -230,24 +232,115 @@ function spots(): Spot[] {
   });
 }
 
-/** 올리면 보이는 글: 매물마다 가격, 제목 앞부분, 끝에 괄호로 사이트와 내 표시(별로, 문의함, 봤음) */
-function tooltip(g: Group) {
-  const items = withMapPricesFirst(g);
-  const lines = items.slice(0, 6).map((l) => {
+/** 최저 월세와 전세 매물을 위에 두고, 같은 핀에 있는 나머지 매물도 보여 준다. */
+function tooltip(g: Group, pin: L.Layer) {
+  const box = document.createElement('div');
+  box.className = 'listing-tip';
+  const { sum } = g;
+  const previews = new Map<ListingView, string[]>();
+  if (sum.n > 1) {
+    box.appendChild(line('tip-heading', `${g.spots > 1 ? '이 근처' : '이 자리'} ${sum.n}건`));
+    for (const quote of [eligibleQuote(sum, sum.monthly), eligibleQuote(sum, sum.jeonse)]) {
+      if (!quote) continue;
+      const label = quote.price.deal === 'jeonse' ? '최저 전세' : '최저 월세';
+      const text = `${label} ${priceAmount(quote.price)}`;
+      const prices = previews.get(quote.listing);
+      if (prices) prices.push(text);
+      else previews.set(quote.listing, [text]);
+    }
+  }
+  for (const l of withPriceChangesFirst(g.items)) {
+    if (!previews.has(l)) previews.set(l, []);
+  }
+
+  for (const [l, prices] of previews) {
+    const row = document.createElement(props.listMode ? 'button' : 'div');
+    row.className = 'tip-preview';
+    if (row instanceof HTMLButtonElement) {
+      row.type = 'button';
+      row.addEventListener('click', () => {
+        pin.closeTooltip();
+        listingPopup?.remove();
+        big.value = false;
+        emit('select', l);
+        markSeen([l]);
+      });
+    }
+    if (l.thumbnail) row.appendChild(listingThumb(l.thumbnail));
+
+    const details = document.createElement('span');
+    details.className = 'tip-details';
+    for (const text of prices.length ? prices : [pricesText(l) || '가격 정보 없음']) {
+      details.appendChild(line('tip-price', text));
+    }
     const mark = l.verdict === 'meh' ? ', 별로' : l.contactedAt ? ', 문의함' : looksSeen(l) ? ', 봤음' : '';
-    const site = `${SOURCE_LABEL[l.source]}${mark}`;
-    const memo = l.note ? ` <span class="tip-note">📝 ${esc(l.note.length > 24 ? `${l.note.slice(0, 24)}…` : l.note)}</span>` : '';
-    // 평수는 가격 바로 뒤에 굵게 쓴다(몇 평인지를 가장 먼저 본다).
-    const area = l.areaM2 != null ? `, <b>${pyeong(l.areaM2)}평</b>` : '';
-    const changes = mapPriceChangeLines(l.priceChange).map(text => `<br><span class="tip-price-change">${esc(text)}</span>`).join('');
-    return `${esc(pricesText(l))}${area}${l.title ? `, ${esc(l.title.slice(0, 24))}` : ''} <span class="tip-site">(${esc(site)})</span>${memo}${changes}`;
+    const description = [l.areaM2 != null ? `${pyeong(l.areaM2)}평` : '', l.title].filter(Boolean).join(', ');
+    if (description) details.appendChild(line('tip-description', description));
+    details.appendChild(line('tip-site', `${SOURCE_LABEL[l.source]}${mark}`));
+    if (l.note) details.appendChild(line('tip-note', `📝 ${l.note.length > 24 ? `${l.note.slice(0, 24)}…` : l.note}`));
+    for (const text of mapPriceChangeLines(l.priceChange ?? l.latestPriceChange ?? null)) details.appendChild(line('tip-price-change', text));
+
+    row.appendChild(details);
+    box.appendChild(row);
+  }
+  return box;
+}
+
+function scheduleListingTipClose(pin: L.Layer) {
+  if (hoveredListingPin !== pin) return;
+  window.clearTimeout(closeListingTipTimer);
+  // 핀에서 툴팁으로 마우스를 옮길 때 화살표 사이를 건널 수 있게 한다.
+  closeListingTipTimer = window.setTimeout(() => pin.closeTooltip(), 200);
+}
+
+function bindListingTip(pin: L.Layer, g: Group) {
+  pin.bindTooltip(() => {
+    const box = tooltip(g, pin);
+    L.DomEvent.disableScrollPropagation(box);
+    L.DomEvent.disableClickPropagation(box);
+    const preview = pin.getTooltip();
+    if (!map || !preview) return box;
+
+    const size = map.getSize();
+    const point = map.latLngToContainerPoint([g.lat, g.lng]);
+    const width = Math.min(376, size.x - 16);
+    const margin = width / 2 + 8;
+    const shift = Math.round(Math.max(margin, Math.min(size.x - margin, point.x)) - point.x);
+    // 확대 버튼과 지도 도구 아래에서 시작하도록 위쪽 공간을 남긴다.
+    const controlsHeight = 82;
+    const pinHeight = g.priced ? labelHeight(g.sum, g.strong) : 0;
+    const belowOffset = Math.max(pinHeight, controlsHeight - point.y + pinHeight / 2);
+    const aboveRoom = point.y - pinHeight / 2 - controlsHeight;
+    const belowRoom = size.y - point.y + pinHeight / 2 - belowOffset;
+    const below = belowRoom > aboveRoom;
+    preview.options.direction = below ? 'bottom' : 'top';
+    preview.options.offset = [shift, below ? belowOffset : 0];
+    box.style.width = `${width - 14}px`;
+    box.style.maxHeight = `${Math.min(420, below ? belowRoom - 34 : aboveRoom - 20)}px`;
+    preview.getElement()?.style.setProperty('--tip-arrow-x', `clamp(8px, calc(50% - ${shift}px), 100% - 8px)`);
+    return box;
+  }, { pane: 'listing-tooltips', direction: 'top', opacity: 1, className: 'listing-tooltip', interactive: true });
+
+  pin.off('mouseout', pin.closeTooltip);
+  pin.on('mouseover', () => {
+    if (hoveredListingPin === pin) window.clearTimeout(closeListingTipTimer);
   });
-  if (items.length > 6) lines.push(`외 ${items.length - 6}건`);
-  const head = items.length > 1 ? `<strong>${g.spots > 1 ? '이 근처' : '이 자리'} ${items.length}건</strong><br>` : '';
-  const { text, secondary } = g.sum;
-  const prices = g.priced && secondary
-    ? `<strong>최저 월세 ${esc(text)}<br>${secondary.quote.price.deal === 'jeonse' ? '최저 전세금' : '최저 보증금'} ${esc(secondary.text)}</strong><br>` : '';
-  return head + prices + lines.join('<br>');
+  pin.on('mouseout', () => scheduleListingTipClose(pin));
+  pin.on('tooltipopen', ({ tooltip: preview }: L.TooltipEvent) => {
+    hoveredListingPin?.closeTooltip();
+    hoveredListingPin = pin;
+    const element = preview.getElement();
+    if (!element) return;
+    const list = element.firstElementChild;
+    element.classList.toggle('tip-clickable', props.listMode || (!!list && list.scrollHeight > list.clientHeight));
+    element.onmouseenter = () => window.clearTimeout(closeListingTipTimer);
+    element.onmouseleave = () => scheduleListingTipClose(pin);
+  });
+  pin.on('tooltipclose', () => {
+    if (hoveredListingPin !== pin) return;
+    window.clearTimeout(closeListingTipTimer);
+    hoveredListingPin = null;
+  });
 }
 
 /** 창에 보이는 건수를 제한하므로 가격이 바뀐 매물을 먼저 보여 준다. */
@@ -596,12 +689,12 @@ const line = (className: string, text: string) => {
 
 /** 정보 창에 보이는 매물 수. 더 있으면 '외 N건'으로 줄인다. */
 const POPUP_MAX = 12;
-/** 정보 창 내용 폭의 한계(px). 폭은 Leaflet이 내용에 맞춰 정하는데, 단추 줄은 줄바꿈하지 않아 사실상 단추 줄 폭에 맞는다. */
-const POPUP_WIDTH = { min: 200, max: 480 };
+/** 정보 창 내용 폭의 한계(px). 좁은 지도에서는 지도 폭에 맞춘다. */
+const POPUP_WIDTH = { min: 436, max: 520 };
 
-/** 정보 창 카드 왼쪽의 사진 칸. 크기가 정해져 있어 사진이 늦게 와도 창 크기는 그대로다. 없거나 못 불러오면 '사진 없음'. */
-function popupThumb(src: string | null) {
-  const el = document.createElement('div');
+/** 매물 사진 칸. 사진이 늦게 와도 창 크기는 그대로다. 없거나 못 불러오면 '사진 없음'. */
+function listingThumb(src: string | null) {
+  const el = document.createElement('span');
   el.className = 'mp-thumb';
   const empty = () => {
     el.replaceChildren();
@@ -612,11 +705,11 @@ function popupThumb(src: string | null) {
     return el;
   }
   const img = document.createElement('img');
-  img.src = src;
   img.alt = '';
   img.loading = 'lazy';
   img.decoding = 'async';
   img.addEventListener('error', empty, { once: true });
+  img.src = src;
   el.appendChild(img);
   return el;
 }
@@ -629,11 +722,11 @@ function withSelectedFirst(items: ListingView[]) {
 
 /**
  * 누르면 보이는 창: 맨 위에 건수 머리글(창 안을 스크롤해도 남음), 그 아래 매물마다 카드 하나.
- * 카드에는 왼쪽 사진(popupThumb), 가격과 변동 내역, 오른쪽 끝 평수 상자, 그 아래 '원본 열기', '네이버 지도' 단추를 둔다. 옆에 목록이 있으면 카드를 누를 때
+ * 카드에는 왼쪽 사진, 가격과 변동 내역, 오른쪽 끝 평수 상자, 그 아래 '원본 열기', '네이버 지도' 단추를 둔다. 옆에 목록이 있으면 카드를 누를 때
  * 목록에서 그 매물을 고른다(예전 '목록에서 보기' 단추). 층, 유형, 사이트, 내 표시(봤음, 문의함 등), 메모는 매물 카드와
  * 올리면 보이는 글에 있어서 창에는 쓰지 않는다(가격을 먼저 보게).
  * 고른 매물, 핀에 표시한 매물과 가격이 바뀐 매물이 먼저 나오고, 나머지는 싼 순(월세와 전세는 환산 월세)이다.
- * 폭은 Leaflet이 줄바꿈 없이 잰 내용 폭에 맞추므로, 가격 줄과 단추 줄은 줄바꿈하지 않게 해서 창이 그 둘 중 긴 쪽에 딱 맞게 한다.
+ * 가격과 변동 내역을 함께 읽을 폭을 확보하고, 좁은 지도에서는 글과 단추가 자연스럽게 줄을 바꾸게 한다.
  */
 function popup(g: Group, items: ListingView[]) {
   if (!map) return;
@@ -649,7 +742,7 @@ function popup(g: Group, items: ListingView[]) {
     card.dataset.listingId = l.id;
     if (withThumb) {
       card.classList.add('has-thumb');
-      card.appendChild(popupThumb(l.thumbnail));
+      card.appendChild(listingThumb(l.thumbnail));
     }
     const top = document.createElement('div');
     top.className = 'mp-top';
@@ -719,7 +812,10 @@ function popup(g: Group, items: ListingView[]) {
     more.textContent = `외 ${items.length - POPUP_MAX}건`;
     box.appendChild(more);
   }
-  const layer = listingPopup ?? L.popup({ minWidth: POPUP_WIDTH.min, maxWidth: POPUP_WIDTH.max, className: 'mp-popup' });
+  const layer = listingPopup ?? L.popup({ className: 'mp-popup' });
+  const availableWidth = map.getSize().x - 48;
+  layer.options.minWidth = Math.min(POPUP_WIDTH.min, availableWidth);
+  layer.options.maxWidth = Math.min(POPUP_WIDTH.max, availableWidth);
   if (!listingPopup) {
     layer.once('remove', () => {
       if (listingPopup === layer) listingPopup = null;
@@ -1285,10 +1381,10 @@ function drawGroup(layer: L.LayerGroup, g: Group): Drawn {
     );
     z = zIndexOffset + 50;
   }
-  // 올리면 보이는 글은 올릴 때 만든다(표시를 수백 개씩 새로 그릴 때 글까지 미리 만들면 느려서).
-  (marker as L.Marker).bindTooltip(() => tooltip(g), { direction: 'top' });
+  bindListingTip(marker, g);
   // 누르면 바로 넘어가지 않고 정보 창을 먼저 띄우고, 창에 보인 매물(POPUP_MAX건까지)을 '봤음'으로 남긴다.
   marker.on('click', () => {
+    marker.closeTooltip();
     const items = withSelectedFirst(withMapPricesFirst(g));
     popup(g, items);
     markSeen(items.slice(0, POPUP_MAX));
@@ -1555,6 +1651,8 @@ onMounted(() => {
   el.value.addEventListener('mouseleave', clearDistrictHover);
   // 핀은 지역 이름표(툴팁 층 650)보다 위, 정보 창(700)보다 아래에 그린다(역 자리에 꽂아도 이름표에 가리지 않게).
   map.createPane('walkpins').style.zIndex = '660';
+  // 매물 툴팁은 핀 위에, 클릭으로 여는 정보 창은 툴팁 위에 띄운다.
+  map.createPane('listing-tooltips').style.zIndex = '675';
   stationLayer = L.layerGroup().addTo(map);
   base = L.layerGroup().addTo(map);
   dots = L.layerGroup().addTo(map);
@@ -2003,6 +2101,20 @@ onBeforeUnmount(() => {
 .legend i.live-dot { border: 2px solid #16202e; background: #ffde59; }
 .key-dot.meh-dot { display: inline-grid; place-items: center; color: #fff; font: normal 700 9px/1 var(--font); }
 :deep(.tip-site) { color: var(--muted); }
+:deep(.listing-tooltip.leaflet-interactive:not(.tip-clickable)) { pointer-events: none; }
+:deep(.listing-tooltip.leaflet-tooltip-top::before), :deep(.listing-tooltip.leaflet-tooltip-bottom::before) { left: var(--tip-arrow-x, 50%); }
+:deep(.listing-tip) { overflow: auto; overscroll-behavior: contain; white-space: normal; font-size: 14px; line-height: 1.45; }
+:deep(.tip-heading) { display: block; padding: 2px 0 8px; font-size: 15px; font-weight: 700; color: var(--ink-2); }
+:deep(.tip-preview) { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
+:deep(.tip-preview:last-child) { padding-bottom: 0; }
+:deep(.tip-preview + .tip-preview) { padding-top: 8px; border-top: 1px solid var(--line); }
+:deep(button.tip-preview) { width: 100%; border: 0; padding-inline: 4px; background: transparent; color: inherit; font: inherit; text-align: left; }
+:deep(button.tip-preview:hover), :deep(button.tip-preview:focus-visible) { background: var(--surface-2); }
+:deep(button.tip-preview:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+:deep(.tip-preview .mp-thumb) { flex: 0 0 auto; width: min(112px, 32%); height: auto; aspect-ratio: 4 / 3; }
+:deep(.tip-details) { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+:deep(.tip-price) { font-size: 16px; font-weight: 800; color: var(--ink); }
+:deep(.tip-price), :deep(.tip-description), :deep(.tip-site) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 신규 딱지: 표시 오른쪽 위 모서리에 걸친다. 누르면 아래 표시가 눌리게 한다. */
 :deep(.nw), .nw-sample {
   padding: 0 3px; border-radius: 4px; border: 1px solid #e5484d; background: #fff;
@@ -2019,7 +2131,7 @@ onBeforeUnmount(() => {
 :deep(.mp-card) { display: grid; gap: 8px; padding: 9px 10px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
 /* 옆에 목록이 있으면 카드를 누르면 목록에서 그 매물을 고른다. */
 /* 사진이 있으면 왼쪽에 사진, 오른쪽에 가격 줄과 단추 줄. */
-:deep(.mp-card.has-thumb) { grid-template-columns: 88px auto; grid-template-areas: 'thumb top' 'thumb actions'; column-gap: 10px; }
+:deep(.mp-card.has-thumb) { grid-template-columns: 88px minmax(0, 1fr); grid-template-areas: 'thumb top' 'thumb actions'; column-gap: 10px; }
 :deep(.mp-card.has-thumb .mp-thumb) { grid-area: thumb; }
 :deep(.mp-card.has-thumb .mp-top) { grid-area: top; }
 :deep(.mp-card.has-thumb .mp-actions) { grid-area: actions; }
@@ -2038,11 +2150,10 @@ onBeforeUnmount(() => {
 :deep(.mp-top strong) { font-size: 15px; font-weight: 800; color: var(--ink); }
 :deep(.mp-price-change) { display: grid; gap: 2px; margin-top: 2px; color: var(--ink-2); font-size: 12px; font-weight: 600; white-space: normal; }
 :deep(.mp-area) {
-  align-self: flex-start; margin-left: auto; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 6px;
+  flex: none; align-self: flex-start; margin-left: auto; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 6px;
   background: #fff; color: var(--ink-2); font-size: 12px; font-weight: 700; line-height: 20px;
 }
-/* 단추 줄은 줄바꿈하지 않는다(Leaflet이 이 줄 폭에 맞춰 창 폭을 정한다. 단추는 많아야 넷). */
-:deep(.mp-actions) { display: flex; flex-wrap: nowrap; gap: 6px; }
+:deep(.mp-actions) { display: flex; flex-wrap: wrap; gap: 6px; }
 :deep(.mp-actions button), :deep(.mp-actions a) {
   display: inline-flex; align-items: center;
   min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font: 600 13px var(--font); cursor: pointer;
@@ -2050,5 +2161,5 @@ onBeforeUnmount(() => {
 :deep(.mp-more) { color: var(--muted); }
 /* 올리면 보이는 글의 메모 */
 :deep(.tip-note) { color: var(--star); }
-:deep(.tip-price-change) { color: var(--ink-2); font-size: 12px; }
+:deep(.tip-price-change) { color: var(--ink-2); font-size: 13px; }
 </style>
