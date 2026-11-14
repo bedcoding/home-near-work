@@ -120,9 +120,12 @@ let drawnPriceLevel = -1;
  */
 interface Drawn {
   marker: L.Layer;
+  /** 표시가 보여 주는 묶음. 매물이 바뀌어도 모양이 같으면 표시는 그대로 두고 이것만 새 묶음으로 바꾼다(툴팁과 누름이 이것을 읽는다). */
   group: Group;
   base?: { radius: number; color: string; weight: number };
   z?: number;
+  /** 그릴 때의 모양(lookOf) */
+  look: string;
 }
 /** 지금 확대에서 나눈 묶음 전체(화면 밖이라 안 그린 것 포함)와 그때의 확대, 가격 표시 단계 */
 let shown: { zoom: number; level: number; groups: Group[] } | null = null;
@@ -138,8 +141,8 @@ let panPending = false;
 
 /** 같은 자리(소수 5자리, 약 1m)의 매물. 펼친 목록의 매물(strong)은 따로 묶는다. */
 interface Spot {
-  /** 묶음 열쇠에 쓰는 번호(spotCache 안의 순서) */
-  idx: number;
+  /** 묶음 열쇠에 쓰는 자리 글자(진한지와 소수 5자리 위도,경도). 매물이 바뀌어도 같은 자리면 같다. */
+  key: string;
   lat: number;
   lng: number;
   /** showOrder로 늘어선 매물 */
@@ -210,26 +213,94 @@ const MEH_MARK = '<i class="ck">✕</i>';
 const hasContacted = (s: Summary) => s.called;
 const PHONE_MARK = '<i class="ck">📞</i>';
 
-const positions = computed(() => new Set(props.background.filter((l) => l.lat != null).map((l) => `${l.lat!.toFixed(5)},${l.lng!.toFixed(5)}`)).size);
+/**
+ * 매물마다 지도 자리 글자(소수 5자리 위도,경도). toFixed를 매물 수만 번 부르면 느려서 매물 객체마다 기억한다
+ * (변화분을 받으면 바뀐 매물만 새 객체로 오고, 화면은 매물 좌표를 고치지 않는다).
+ */
+const posKeys = new WeakMap<ListingView, string>();
+function posKey(l: ListingView): string {
+  let k = posKeys.get(l);
+  if (k === undefined) posKeys.set(l, (k = `${l.lat!.toFixed(5)},${l.lng!.toFixed(5)}`));
+  return k;
+}
 
-/** 같은 자리(소수 5자리, 약 1m)의 매물을 묶는다. 펼친 목록의 매물은 진한 묶음으로 따로 둔다. */
+const positions = computed(() => {
+  const set = new Set<string>();
+  for (const l of props.background) if (l.lat != null && l.lng != null) set.add(posKey(l));
+  return set.size;
+});
+
+/**
+ * 묶음 요약과 순서가 기대는 매물 표시(별로, 관심, 봤음, 문의함, 신규, 가격 변동). 화면이 매물 객체를 직접 고치는 값이라
+ * 같은 자리 묶음을 다시 쓸 때마다 견준다.
+ */
+const markBits = (l: ListingView) =>
+  (l.verdict === 'meh' ? 1 : 0) | (l.verdict === 'star' ? 2 : 0) | (looksSeen(l) ? 4 : 0) | (l.contactedAt ? 8 : 0) | (l.isNew ? 16 : 0) | (l.priceChange ? 32 : 0);
+
+/** 같은 자리 묶음 하나를 만든 재료(매물 순서, 표시, 전월세 선택지)와 그 결과. 재료가 같으면 정렬과 요약을 다시 하지 않는다. */
+interface SpotMemo {
+  items: ListingView[];
+  bits: number[];
+  options: (readonly PriceOption[] | undefined)[];
+  spot: Spot;
+}
+/** 자리 글자 → 지난번 묶음. 전환율이 바뀌면(묶음 안 순서와 대표 가격이 바뀜) 비운다. */
+let spotMemo = new Map<string, SpotMemo>();
+let spotMemoRate: number | null | undefined;
+
+function sameSpot(m: SpotMemo, items: ListingView[], bits: number[], options: (readonly PriceOption[] | undefined)[]) {
+  if (m.items.length !== items.length) return false;
+  for (let i = 0; i < items.length; i++) {
+    if (m.items[i] !== items[i] || m.bits[i] !== bits[i] || m.options[i] !== options[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * 같은 자리(소수 5자리, 약 1m)의 매물을 묶는다. 펼친 목록의 매물은 진한 묶음으로 따로 둔다.
+ * 크롬 확장이 순회하는 동안 변화분이 오면 바뀐 매물만 새 객체라서, 매물과 표시와 선택지가 그대로인 자리는 지난 묶음을 그대로 쓴다.
+ */
 function spots(): Spot[] {
+  if (spotMemoRate !== rateNow) {
+    spotMemo = new Map();
+    spotMemoRate = rateNow;
+  }
   const strongIds = new Set(props.listings.map((l) => l.id));
-  const all = new Map<string, { lat: number; lng: number; items: ListingView[]; strong: boolean }>();
-  const add = (l: ListingView, strong: boolean) => {
+  const background = new Map<string, ListingView[]>();
+  const strong = new Map<string, ListingView[]>();
+  const add = (into: Map<string, ListingView[]>, l: ListingView) => {
     if (l.lat == null || l.lng == null) return;
-    const key = `${strong ? 's' : 'b'}${l.lat.toFixed(5)},${l.lng.toFixed(5)}`;
-    const s = all.get(key);
-    if (s) s.items.push(l);
-    else all.set(key, { lat: l.lat, lng: l.lng, items: [l], strong });
+    const k = posKey(l);
+    const items = into.get(k);
+    if (items) items.push(l);
+    else into.set(k, [l]);
   };
-  for (const l of props.background) if (!strongIds.has(l.id)) add(l, false);
-  for (const l of props.listings) add(l, true);
-  return [...all.values()].map((s, idx) => {
-    const items = s.items.sort(showOrder);
-    const p = L.CRS.EPSG3857.latLngToPoint(L.latLng(s.lat, s.lng), 0);
-    return { idx, lat: s.lat, lng: s.lng, items, strong: s.strong, x0: p.x, y0: p.y, sum: summarize(items) };
-  });
+  for (const l of props.background) if (!strongIds.has(l.id)) add(background, l);
+  for (const l of props.listings) add(strong, l);
+  const rental = props.rentalOptions;
+  const next = new Map<string, SpotMemo>();
+  const out: Spot[] = [];
+  for (const [isStrong, into] of [[false, background], [true, strong]] as const) {
+    for (const [k, items] of into) {
+      const key = `${isStrong ? 's' : 'b'}${k}`;
+      const bits = items.map(markBits);
+      const options = items.map((l) => rental?.get(l.id));
+      const old = spotMemo.get(key);
+      let spot: Spot;
+      if (old && sameSpot(old, items, bits, options)) spot = old.spot;
+      else {
+        // 자리 좌표는 처음 든 매물의 좌표다.
+        const first = items[0];
+        const sorted = [...items].sort(showOrder);
+        const p = L.CRS.EPSG3857.latLngToPoint(L.latLng(first.lat!, first.lng!), 0);
+        spot = { key, lat: first.lat!, lng: first.lng!, items: sorted, strong: isStrong, x0: p.x, y0: p.y, sum: summarize(sorted) };
+      }
+      next.set(key, { items, bits, options, spot });
+      out.push(spot);
+    }
+  }
+  spotMemo = next;
+  return out;
 }
 
 /** 최저 월세와 전세 매물을 위에 두고, 같은 핀에 있는 나머지 매물도 보여 준다. */
@@ -293,8 +364,10 @@ function scheduleListingTipClose(pin: L.Layer) {
   closeListingTipTimer = window.setTimeout(() => pin.closeTooltip(), 200);
 }
 
-function bindListingTip(pin: L.Layer, g: Group) {
+/** current는 지금 그 표시가 보여 주는 묶음(매물이 바뀌어 표시를 그대로 둔 때는 새 묶음)을 준다. */
+function bindListingTip(pin: L.Layer, current: () => Group) {
   pin.bindTooltip(() => {
+    const g = current();
     const box = tooltip(g, pin);
     L.DomEvent.disableScrollPropagation(box);
     L.DomEvent.disableClickPropagation(box);
@@ -653,11 +726,11 @@ function computeGroups(level: number, zoom: number): Group[] {
   const head = (strong: boolean, priced: boolean) => `${level}${strong ? 's' : 'b'}${priced ? 'p' : 'd'}|`;
   for (const s of spotCache) {
     if ((s.strong ? level >= 1 : level >= 2) && s.sum.text) labels[s.strong ? 's' : 'b'].push(s);
-    else out.push(makeGroup(head(s.strong, false) + s.idx, s.lat, s.lng, s.strong, false, s.sum, [s.items]));
+    else out.push(makeGroup(head(s.strong, false) + s.key, s.lat, s.lng, s.strong, false, s.sum, [s.items]));
   }
   for (const strong of [false, true]) {
     for (const p of mergeOverlaps(labels[strong ? 's' : 'b'], strong, zoom)) {
-      const ids = p.spots.length === 1 ? String(p.spots[0].idx) : p.spots.map((s) => s.idx).sort((a, b) => a - b).join(',');
+      const ids = p.spots.length === 1 ? p.spots[0].key : p.spots.map((s) => s.key).sort().join(';');
       out.push(makeGroup(head(strong, true) + ids, p.lat, p.lng, strong, true, p.sum, p.spots.map((s) => s.items)));
     }
   }
@@ -1311,8 +1384,18 @@ const stackColors = (c: string, seen: boolean) => (seen ? { fill: '#fff', stroke
 /** 지금 그리는 지도에 펼친 목록이 있는지(있으면 그 밖의 매물은 회색으로 연하게). render가 그리기 전에 한 번 정한다. */
 let dimNow = false;
 
+/**
+ * 표시 모양을 정하는 값(drawGroup이 쓰는 것 전부). 매물이 바뀌어 다시 그릴 때 같은 묶음 열쇠에 이 값까지 같으면 있던 표시를 그대로 둔다.
+ */
+function lookOf(g: Group) {
+  const s = g.sum;
+  const label = g.priced ? `${s.text}|${s.secondary ? `${s.secondary.quote.price.deal}|${s.secondary.text}` : ''}` : '';
+  return `${g.lat},${g.lng}|${g.strong ? 1 : 0}${g.priced ? 1 : 0}${dimNow ? 1 : 0}${drawnPriceLevel}|${s.n}|${s.nonMeh}|${s.nonMehSeen}|` +
+    `${s.called ? 1 : 0}${s.fresh ? 1 : 0}${s.changed ? 1 : 0}${s.star ? 1 : 0}|${label}`;
+}
+
 /** 묶음 하나를 지도에 그리고, 누르면 정보 창을 띄우게 한다. 가격 표시는 HTML, 점과 숫자 동그라미는 캔버스로 그린다. */
-function drawGroup(layer: L.LayerGroup, g: Group): Drawn {
+function drawGroup(layer: L.LayerGroup, g: Group, look: string): Drawn {
   const dim = dimNow;
   const muted = dim && !g.strong;
   const n = g.sum.n;
@@ -1382,17 +1465,18 @@ function drawGroup(layer: L.LayerGroup, g: Group): Drawn {
     );
     z = zIndexOffset + 50;
   }
-  bindListingTip(marker, g);
+  const d: Drawn = { marker, group: g, base, z, look };
+  bindListingTip(marker, () => d.group);
   // 누르면 바로 넘어가지 않고 정보 창을 먼저 띄우고, 창에 보인 매물(POPUP_MAX건까지)을 '봤음'으로 남긴다.
   marker.on('click', () => {
     marker.closeTooltip();
-    const items = withSelectedFirst(withMapPricesFirst(g));
-    popup(g, items);
+    const items = withSelectedFirst(withMapPricesFirst(d.group));
+    popup(d.group, items);
     markSeen(items.slice(0, POPUP_MAX));
     if (props.listMode) emit('reveal', items);
   });
   marker.addTo(layer);
-  return { marker, group: g, base, z };
+  return d;
 }
 
 function rentalPriceRow(amount: string) {
@@ -1449,15 +1533,16 @@ function drawLiveListings() {
 
 /**
  * 매물 표시를 그린다. 화면 근처(사방으로 화면 크기의 30%)에 있는 묶음만 그리고, 이미 그린 같은 묶음은 그대로 둔다.
- * full이면 매물이 바뀐 것이라 처음부터 다시 그린다. 확대가 바뀌면 가격 표시를 다시 묶는다.
+ * full이면 매물이 바뀐 것이라 묶음을 다시 만들고, 같은 묶음 열쇠에 모양(lookOf)도 같은 표시는 그대로 두고 나머지만 갈아 끼운다
+ * (크롬 확장이 순회하는 동안 몇십 건이 바뀔 때마다 표시 수천 개를 모두 지우고 새로 그리면 화면이 멈췄다).
+ * 가격 표시 단계가 바뀌면 모든 표시 모양이 바뀌므로 처음부터 다시 그린다. 확대가 바뀌면 가격 표시를 다시 묶는다.
  */
 function render(full: boolean) {
   if (!map || !dots) return;
   const level = priceLevel();
   const zoom = map.getZoom();
-  const fresh = full || level !== drawnPriceLevel;
   if (full) spotCache = null;
-  if (fresh) {
+  if (level !== drawnPriceLevel) {
     dots.clearLayers();
     drawn.clear();
     selected = null;
@@ -1471,21 +1556,50 @@ function render(full: boolean) {
     for (const g of shown.groups) for (const part of g.parts) for (const l of part) groupOf.set(l.id, g);
   }
   const view = map.getBounds().pad(0.3);
-  const keep = new Set<string>();
   let added = false;
-  for (const g of shown.groups) {
-    if (!view.contains([g.lat, g.lng])) continue;
-    keep.add(g.key);
-    if (drawn.has(g.key)) continue;
-    const d = drawGroup(dots, g);
-    drawn.set(g.key, d);
-    if (d.marker instanceof L.CircleMarker) added = true;
-  }
-  for (const [key, d] of drawn) {
-    if (keep.has(key)) continue;
+  const drop = (d: Drawn) => {
     if (selected === d) selected = null;
-    dots.removeLayer(d.marker);
-    drawn.delete(key);
+    dots!.removeLayer(d.marker);
+  };
+  if (full) {
+    // 그린 표시를 묶음 순서로 다시 늘어놓는다(새 표시가 있으면 orderCanvas가 모두 그린 것처럼 쌓는다).
+    const next = new Map<string, Drawn>();
+    for (const g of shown.groups) {
+      if (!view.contains([g.lat, g.lng])) continue;
+      const look = lookOf(g);
+      let d = drawn.get(g.key);
+      if (d && d.look === look) {
+        if (d.group !== g) {
+          // 든 매물 객체가 바뀌었을 수 있어 열린 툴팁은 닫는다(예전처럼 표시를 지울 때와 같게). 다시 열면 새 묶음으로 만든다.
+          if (d.marker.isTooltipOpen()) d.marker.closeTooltip();
+          d.group = g;
+        }
+      } else {
+        if (d) drop(d);
+        d = drawGroup(dots, g, look);
+        if (d.marker instanceof L.CircleMarker) added = true;
+      }
+      drawn.delete(g.key);
+      next.set(g.key, d);
+    }
+    for (const d of drawn.values()) drop(d);
+    drawn.clear();
+    for (const [key, d] of next) drawn.set(key, d);
+  } else {
+    const keep = new Set<string>();
+    for (const g of shown.groups) {
+      if (!view.contains([g.lat, g.lng])) continue;
+      keep.add(g.key);
+      if (drawn.has(g.key)) continue;
+      const d = drawGroup(dots, g, lookOf(g));
+      drawn.set(g.key, d);
+      if (d.marker instanceof L.CircleMarker) added = true;
+    }
+    for (const [key, d] of drawn) {
+      if (keep.has(key)) continue;
+      drop(d);
+      drawn.delete(key);
+    }
   }
   if (added) orderCanvas();
   buildHitGrid();
@@ -1786,6 +1900,7 @@ onBeforeUnmount(() => {
   hoveredDistrict = null;
   shown = null;
   spotCache = null;
+  spotMemo = new Map();
   drawn.clear();
   liveMarkers.clear();
   groupOf.clear();

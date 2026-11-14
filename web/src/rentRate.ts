@@ -27,6 +27,29 @@ export const BOARD_RATES = { month: '2026.7', seoul: { all: 5.5, apt: 4.7, villa
 /** App이 매물과 상태를 받을 때마다 채운다(카드가 같이 쓴다). */
 export const rentRate = ref<RentRate>({ local: null, pairs: 0, legal: null, baseRate: null });
 
+/**
+ * 매물 객체마다 낸 전환율 쌍. 변화분을 받으면 바뀐 매물만 새 객체로 오므로 나머지는 다시 내지 않는다
+ * (가격과 상태는 화면이 고치지 않는다). 고시원 판정 함수가 바뀌면 비운다.
+ */
+let pairRates = new WeakMap<ListingView, readonly number[]>();
+let pairRatesFor: ((l: ListingView) => boolean) | null = null;
+const NO_RATES: readonly number[] = [];
+
+/** 한 매물의 월세 선택지를 보증금 순으로 놓고 이웃한 둘마다 '깎아 준 월세 × 12 ÷ 더 낸 보증금'(연 %) */
+function ratesOf(l: ListingView, isRoomStay: (l: ListingView) => boolean): readonly number[] {
+  if (l.status !== 'active' || isRoomStay(l)) return NO_RATES;
+  const options = l.prices
+    .filter((p) => p.deal === 'monthly' && p.deposit != null && p.monthly != null)
+    .sort((a, b) => a.deposit! - b.deposit!);
+  const rates: number[] = [];
+  for (let i = 0; i + 1 < options.length; i++) {
+    const more = options[i + 1].deposit! - options[i].deposit!;
+    const less = options[i].monthly! - options[i + 1].monthly!;
+    if (more > 0 && less > 0) rates.push(((less * 12) / more) * 100);
+  }
+  return rates.length ? rates : NO_RATES;
+}
+
 const median = (xs: number[]) => {
   const s = [...xs].sort((a, b) => a - b);
   const n = s.length;
@@ -38,17 +61,15 @@ const median = (xs: number[]) => {
  * 고시원과 쉐어처럼 가격 둘이 서로 다른 방(가장 싼 방, 비싼 방)인 매물은 뺀다(isRoomStay).
  */
 export function updateRentRate(listings: ListingView[], baseRate: RentRate['baseRate'], isRoomStay: (l: ListingView) => boolean) {
+  if (pairRatesFor !== isRoomStay) {
+    pairRates = new WeakMap();
+    pairRatesFor = isRoomStay;
+  }
   const rates: number[] = [];
   for (const l of listings) {
-    if (l.status !== 'active' || isRoomStay(l)) continue;
-    const options = l.prices
-      .filter((p) => p.deal === 'monthly' && p.deposit != null && p.monthly != null)
-      .sort((a, b) => a.deposit! - b.deposit!);
-    for (let i = 0; i + 1 < options.length; i++) {
-      const more = options[i + 1].deposit! - options[i].deposit!;
-      const less = options[i].monthly! - options[i + 1].monthly!;
-      if (more > 0 && less > 0) rates.push(((less * 12) / more) * 100);
-    }
+    let own = pairRates.get(l);
+    if (!own) pairRates.set(l, (own = ratesOf(l, isRoomStay)));
+    for (const r of own) rates.push(r);
   }
   const legal = baseRate ? Math.min(10, baseRate.value + 2) : null;
   const next: RentRate = { local: rates.length >= MIN_PAIRS ? Math.round(median(rates) * 10) / 10 : null, pairs: rates.length, legal, baseRate };

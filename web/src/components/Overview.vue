@@ -4,9 +4,10 @@ import { SOURCE_LABEL, type Area, type DealType, type ListingView, type PriceOpt
 import {
   bandDeal, bandIdOf, bandsFor, bandValue, DEALS_OF, isRent, OVERVIEW_DEALS, OVERVIEW_LABEL, orderFor, overviewDealOf, type Band, type OverviewDeal,
 } from '../bands';
-import { DEFAULT_FILTERS, dealOptions, passes, plainFilters, type Filters } from '../filters';
+import { DEFAULT_FILTERS, dealOptions, filterJudge, passes, plainFilters, type Filters } from '../filters';
 import type { CatalogStation } from '../areaActions';
 import { money, radiusText } from '../format';
+import { keyedMemo } from '../../../shared/memo';
 import { areaMatches, hasRegions, primaryAreas } from '../../../shared/regions';
 import CountTooltip from './CountTooltip.vue';
 import ListingCard from './ListingCard.vue';
@@ -146,6 +147,8 @@ interface Entry {
   option: PriceOption;
   options: PriceOption[];
   value: number | null;
+  /** 든 가격대 id(bandIdOf) */
+  band: string;
 }
 
 /** 같은 거래 유형의 가격 선택지가 여럿이면 가장 싼 것(같으면 보증금이 낮은 것)으로 가격대를 정한다. */
@@ -155,8 +158,18 @@ function cheapest(options: PriceOption[]): PriceOption {
   return options.reduce((a, b) => (key(b) < key(a) || (key(b) === key(a) && deposit(b) < deposit(a)) ? b : a));
 }
 
-/** 매물마다 하나만 남긴다(카드 건수, 지도, 새 소식 줄). */
-const uniq = (entries: Entry[]) => [...new Map(entries.map((e) => [e.listing.id, e])).values()];
+/**
+ * 매물마다 하나만 남긴다(카드 건수, 지도). 한 매물의 줄(전월세 카드의 월세와 전세)은 entriesOf가 이웃하게 넣으므로
+ * 바로 앞 줄과 같은 매물이면 그 자리를 이 줄로 바꾼다(Map으로 거르던 것과 같은 결과: 처음 자리에 마지막 줄).
+ */
+function uniq(entries: Entry[]) {
+  const out: Entry[] = [];
+  for (const e of entries) {
+    if (out.length && out[out.length - 1].listing.id === e.listing.id) out[out.length - 1] = e;
+    else out.push(e);
+  }
+  return out;
+}
 
 // ---------- 지역 ----------
 // 켜진 지역이 둘 이상이면 지역마다 따로 볼 수 있다.
@@ -165,6 +178,8 @@ const uniq = (entries: Entry[]) => [...new Map(entries.map((e) => [e.listing.id,
  * 지역 칸의 건수: 그 지역만 골랐을 때 필터를 통과하는 매물 수.
  * 필터는 반복 밖에서 한 번만 만들어 쓴다(예전처럼 매물마다 반응형 필터를 펼치면 이 계산 하나에 1.6초씩 걸렸다).
  */
+/** 고른 지역 목록마다 매물 객체 → 지역마다 그 안인지 */
+const hitMemo = keyedMemo<boolean[]>(4);
 const areaChips = computed(() => {
   const f = filtersNow.value;
   const areas = props.areas;
@@ -174,13 +189,16 @@ const areaChips = computed(() => {
   let counts: number[];
   if (hasRegions(areas)) {
     // 구나 동 지역: 그 지역만 고른 건수는 지역을 고르지 않은 필터를 통과하면서 그 지역 안인 매물 수다(passes와 같은 규칙).
-    // 필터는 매물마다 한 번만 보고, 지역 안인지는 매물마다 기억해 둔 판정(matchesRegion)을 쓴다.
-    const base = { ...f, areaIds: [] };
+    // 필터 판정과 지역마다 그 안인지는 매물 객체마다 기억한다(변화분을 받아도 바뀌지 않은 매물은 다시 따지지 않는다).
+    const judge = filterJudge({ ...f, areaIds: [] }, areas);
+    const hits = hitMemo(JSON.stringify(primary));
     counts = primary.map(() => 0);
     for (const l of listings) {
-      if (!passes(l, base, areas)) continue;
+      if (!judge.passes(l)) continue;
       all++;
-      for (let i = 0; i < primary.length; i++) if (areaMatches(l, primary[i])) counts[i]++;
+      let h = hits.get(l);
+      if (!h) hits.set(l, (h = primary.map((a) => areaMatches(l, a))));
+      for (let i = 0; i < primary.length; i++) if (h[i]) counts[i]++;
     }
   } else {
     // 역 반경 지역은 '가장 가까운 지역이 고른 지역인 매물' 규칙이 있어 지역마다 필터를 그대로 돌린다.
@@ -222,16 +240,32 @@ const anyDeal = computed<Filters>(() => ({ ...filtersNow.value, deals: [] }));
 /** 카드에 드는 가격 선택지(전월세는 월세와 전세를 함께) */
 const cardOptions = (listing: ListingView, deal: OverviewDeal, f: Filters, areas: Area[]) => DEALS_OF[deal].flatMap((d) => dealOptions(listing, d, f, areas));
 
+/**
+ * 거래 유형, 필터, 지역마다 매물 객체 → 가격대 줄 하나(그 거래 유형 선택지가 필터를 통과하지 못하면 null).
+ * 크롬 확장이 순회하는 동안 변화분을 받으면 바뀐 매물만 새 객체라서, 나머지 매물은 줄을 다시 만들지 않는다.
+ * 줄이 쓰는 매물 칸(가격, 유형, 면적, 층, 위치, 주소)은 화면이 고치지 않는다(관심, 봤음 같은 표시는 정렬과 건수에서 그때그때 읽는다).
+ */
+const entryMemo = keyedMemo<Entry | null>(12);
+
 /** 카드의 가격대 줄에 드는 매물들: 카드의 거래 유형마다(전월세는 월세와 전세 따로) 가장 싼 선택지 하나 */
 function entriesOf(deal: OverviewDeal, f: Filters): Entry[] {
   const entries: Entry[] = [];
   const areas = props.areas;
+  const key = JSON.stringify([f, areas]);
+  const memos = DEALS_OF[deal].map((d) => ({ d, memo: entryMemo(`${d}|${key}`) }));
   for (const listing of props.listings) {
-    for (const d of DEALS_OF[deal]) {
-      const options = dealOptions(listing, d, f, areas);
-      if (!options.length) continue;
-      const option = cheapest(options);
-      entries.push({ listing, option, options, value: bandValue(option) });
+    for (const { d, memo } of memos) {
+      let e = memo.get(listing);
+      if (e === undefined) {
+        const options = dealOptions(listing, d, f, areas);
+        e = null;
+        if (options.length) {
+          const option = cheapest(options);
+          e = { listing, option, options, value: bandValue(option), band: bandIdOf(deal, option) };
+        }
+        memo.set(listing, e);
+      }
+      if (e) entries.push(e);
     }
   }
   return entries;
@@ -360,10 +394,7 @@ const looseFilters = computed<Filters>(() => {
 const looseByBand = computed(() => {
   const d = deal.value;
   const counts = new Map<string, number>();
-  for (const e of entriesOf(d, looseFilters.value)) {
-    const id = bandIdOf(d, e.option);
-    counts.set(id, (counts.get(id) ?? 0) + 1);
-  }
+  for (const e of entriesOf(d, looseFilters.value)) counts.set(e.band, (counts.get(e.band) ?? 0) + 1);
   return counts;
 });
 
@@ -371,10 +402,9 @@ const rows = computed(() => {
   const d = deal.value;
   const groups = new Map<string, Entry[]>();
   for (const e of byDeal.value.get(d) ?? []) {
-    const id = bandIdOf(d, e.option);
-    const list = groups.get(id);
+    const list = groups.get(e.band);
     if (list) list.push(e);
-    else groups.set(id, [e]);
+    else groups.set(e.band, [e]);
   }
   const defs = new Map(bandsFor(d).map((b) => [b.id, b]));
   const open = saved.open[d] ?? {};
@@ -382,7 +412,8 @@ const rows = computed(() => {
   return orderFor(d, saved.order[d])
     .map((id) => {
       const list = groups.get(id) ?? [];
-      const entries = list.sort(entryOrder(pinId, list));
+      // 접힌 가격대는 건수만 보이므로 늘어놓지 않는다(펼친 가격대만 목록과 지도에 이 순서로 쓰인다).
+      const entries = open[id] !== undefined ? list.sort(entryOrder(pinId, list)) : list;
       return rowOf(defs.get(id)!, entries, open, Math.max(0, (looseByBand.value.get(id) ?? 0) - entries.length));
     })
     .filter((r) => r.band.id !== 'unknown' || r.total > 0);
@@ -391,11 +422,21 @@ type Row = ReturnType<typeof rowOf>;
 
 /** 가격대 줄 하나: 건수, 사이트별 건수, 월세 보증금 범위, 펼침과 고른 사이트, 펼쳐 보이는 매물. hidden은 필터로 가린 수. */
 function rowOf(band: Band, entries: Entry[], open: Record<string, Pick>, hidden: number) {
-  const platforms = SOURCES.map((s) => ({ id: s, label: SOURCE_LABEL[s], ...counts(entries.filter((e) => e.listing.source === s)) })).filter((p) => p.total > 0);
+  // 사이트별로 한 번에 나눈다(사이트마다 줄 전체를 다시 훑지 않게). 나눈 줄은 줄 순서 그대로다.
+  const bySource = new Map<SourceId, Entry[]>();
+  for (const e of entries) {
+    const list = bySource.get(e.listing.source);
+    if (list) list.push(e);
+    else bySource.set(e.listing.source, [e]);
+  }
+  const platforms = SOURCES.flatMap((s) => {
+    const list = bySource.get(s);
+    return list ? [{ id: s, label: SOURCE_LABEL[s], ...counts(list) }] : [];
+  });
   const bd = bandDeal(deal.value, band.id);
   const deposits = bd && isRent(bd) ? entries.map((e) => e.option.deposit).filter((v): v is number => v != null) : [];
   const pick = open[band.id];
-  const shown = !pick ? [] : pick === 'all' ? entries : entries.filter((e) => e.listing.source === pick);
+  const shown = !pick ? [] : pick === 'all' ? entries : (bySource.get(pick) ?? []);
   return {
     band,
     ...counts(entries),
@@ -449,12 +490,20 @@ const listMoves = ref(0);
 const mapFitKey = computed(() => `${deal.value}|${listMoves.value}|${props.filters.areaIds.join(',')}`);
 /** 지도: 펼친 목록이 없으면 고른 거래 유형의 매물을 작게 보여 준다. */
 const mapBackground = computed(() => uniq(byDeal.value.get(deal.value) ?? []).map((e) => e.listing));
+/** 월세 줄 선택지와 전세 줄 선택지를 합친 배열. 같은 두 줄이면 같은 배열을 주어 지도가 바뀐 매물의 자리만 다시 묶게 한다. */
+const rentalPairs = new WeakMap<Entry, { previous: PriceOption[]; options: PriceOption[] }>();
 const mapRentalOptions = computed(() => {
   if (deal.value !== 'rent') return undefined;
   const byId = new Map<string, PriceOption[]>();
   for (const entry of byDeal.value.get('rent') ?? []) {
     const previous = byId.get(entry.listing.id);
-    byId.set(entry.listing.id, previous ? [...previous, ...entry.options] : entry.options);
+    if (!previous) {
+      byId.set(entry.listing.id, entry.options);
+      continue;
+    }
+    let pair = rentalPairs.get(entry);
+    if (!pair || pair.previous !== previous) rentalPairs.set(entry, (pair = { previous, options: [...previous, ...entry.options] }));
+    byId.set(entry.listing.id, pair.options);
   }
   return byId;
 });
