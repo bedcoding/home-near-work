@@ -53,14 +53,38 @@ export function validRegion(value: unknown): value is AdministrativeRegion {
       region[key as 'sido' | 'sigungu' | 'name'].trim().length > 0 && region[key as 'sido' | 'sigungu' | 'name'].length <= 160 && !/[\u0000-\u001f<>]/.test(region[key as 'sido' | 'sigungu' | 'name']));
 }
 
+/** 주소를 낱말로 나눈 것과 그중 시도, 시군구 낱말. 매물마다 한 번만 나눈다(지역마다 다시 나누면 처음 화면을 그릴 때 수만 번 나눈다). */
+interface AddressParts { tokens: string[]; city: string | undefined; gu: string | undefined }
 /**
  * 매물과 구(또는 동)를 견준 결과를 매물 객체마다 기억한다. 화면은 매물이 바뀔 때마다 수만 건을 지역마다 다시 견주는데
  * (지역 칸 건수, 고른 지역 필터, 카드의 지역 이름), 주소를 낱말로 나누고 구 경계 안인지 보는 일이 무거워서다.
  * 판정에 쓰는 칸(법정동코드, 주소, 좌표, 동)이 바뀌면 기억을 버리고 다시 낸다.
  */
-interface RegionMemo { legalDongCode: unknown; address: unknown; lat: unknown; lng: unknown; dong: unknown; hits: Map<string, boolean> }
+interface RegionMemo { legalDongCode: unknown; address: unknown; lat: unknown; lng: unknown; dong: unknown; hits: Map<string, boolean>; parts?: AddressParts }
 const regionMemo = new WeakMap<object, RegionMemo>();
 const regionKey = (region: AdministrativeRegion) => `${region.kind}|${region.code}|${region.sido}|${region.sigungu}|${region.dong ?? ''}`;
+
+/** 지역(구나 동) 하나의 기억 열쇠와 관할 낱말. 같은 지역 객체면 칸이 그대로인 동안 다시 만들지 않는다. */
+interface RegionInfo { kind: unknown; code: unknown; sido: unknown; sigungu: unknown; dong: unknown; key: string; jurisdiction: string[]; sigungus: string[] }
+const regionInfos = new WeakMap<object, RegionInfo>();
+function regionInfo(region: AdministrativeRegion): RegionInfo {
+  let info = regionInfos.get(region);
+  if (!info || info.kind !== region.kind || info.code !== region.code || info.sido !== region.sido || info.sigungu !== region.sigungu || info.dong !== region.dong) {
+    const sigungus = tokens(region.sigungu);
+    info = { kind: region.kind, code: region.code, sido: region.sido, sigungu: region.sigungu, dong: region.dong, key: regionKey(region), jurisdiction: [...tokens(region.sido), ...sigungus], sigungus };
+    regionInfos.set(region, info);
+  }
+  return info;
+}
+
+function addressParts(address: string): AddressParts {
+  const parts = tokens(address);
+  return {
+    tokens: parts,
+    city: parts.find((part) => /(?:특별시|광역시|특별자치시|특별자치도|도)$/.test(part)),
+    gu: parts.find((part) => /(?:구|군|시)$/.test(part) && !/(?:특별시|광역시|특별자치시)$/.test(part)),
+  };
+}
 
 /** Full jurisdiction is required: a same-named dong in another city must not match. */
 export function matchesRegion(listing: RegionalListing, region: AdministrativeRegion): boolean {
@@ -69,27 +93,25 @@ export function matchesRegion(listing: RegionalListing, region: AdministrativeRe
     memo = { legalDongCode: listing.legalDongCode, address: listing.address, lat: listing.lat, lng: listing.lng, dong: listing.dong, hits: new Map() };
     regionMemo.set(listing, memo);
   }
-  const key = regionKey(region);
-  let hit = memo.hits.get(key);
+  const info = regionInfo(region);
+  let hit = memo.hits.get(info.key);
   if (hit === undefined) {
-    hit = judgeRegion(listing, region);
-    memo.hits.set(key, hit);
+    hit = judgeRegion(listing, region, info, memo);
+    memo.hits.set(info.key, hit);
   }
   return hit;
 }
 
-function judgeRegion(listing: RegionalListing, region: AdministrativeRegion): boolean {
+function judgeRegion(listing: RegionalListing, region: AdministrativeRegion, info: RegionInfo, memo: RegionMemo): boolean {
   if (listing.legalDongCode && /^[1-9]\d{9}$/.test(listing.legalDongCode)) return region.kind === 'gu' ? listing.legalDongCode.startsWith(region.code) : listing.legalDongCode === region.code;
-  const address = tokens(listing.address ?? '');
-  const jurisdiction = [...tokens(region.sido), ...tokens(region.sigungu)];
+  const { tokens: address, city, gu } = (memo.parts ??= addressParts(listing.address ?? ''));
   // Explicit address jurisdictions take precedence over approximate site coordinates.
-  const city = address.find((part) => /(?:특별시|광역시|특별자치시|특별자치도|도)$/.test(part));
-  const gu = address.find((part) => /(?:구|군|시)$/.test(part) && !/(?:특별시|광역시|특별자치시)$/.test(part));
-  if (city && city !== region.sido || gu && !tokens(region.sigungu).includes(gu)) return false;
-  if (!jurisdiction.every((part) => address.includes(part)) && listing.lat != null && listing.lng != null) {
+  if (city && city !== region.sido || gu && !info.sigungus.includes(gu)) return false;
+  const inJurisdiction = info.jurisdiction.every((part) => address.includes(part));
+  if (!inJurisdiction && listing.lat != null && listing.lng != null) {
     return pointInRegion(region.code, listing.lat, listing.lng) && (region.kind === 'gu' || listing.dong === region.dong);
   }
-  return jurisdiction.every((part) => address.includes(part)) &&
+  return inJurisdiction &&
     (region.kind === 'gu' || !!region.dong && (address.includes(region.dong) || listing.dong?.trim().normalize('NFC') === region.dong));
 }
 

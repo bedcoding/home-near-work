@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { applyOrder, mergeListings, orderPatch } from '../shared/listings-delta.ts';
-import { createListingsCache, encodeListings } from '../server/listings-cache.ts';
+import { createListingsCache, encodeListings, joinListings } from '../server/listings-cache.ts';
 
 // 매물 목록 변화분: 서버가 지난 목록과 견줘 보낸 변화분을 화면이 가진 목록에 합치면 서버가 지금 보낼 전체 목록과 같아야 한다.
 
@@ -77,6 +77,24 @@ test('응답 JSON: 전체는 JSON.stringify와 바이트까지 같고, 매물마
   assert.deepEqual(json.ids, ['a', 'b', 'c']);
   views.forEach((v, i) => assert.equal(json.body.subarray(json.offsets[i], json.offsets[i + 1] - 1).toString('utf8'), JSON.stringify(v)));
   assert.equal(encodeListings([]).body.toString(), '[]');
+});
+
+test('응답 JSON 잇기: 구간마다 만든 것을 이으면 빈 구간이 끼어도 한 번에 만든 것과 본문, 순서, 경계까지 같다', () => {
+  const next = random(7);
+  const views = Array.from({ length: 40 }, (_, i) => listing(`m${i}`, { title: `매물 ${'가'.repeat(Math.floor(next() * 5))} "${i}" 😀`.repeat(1 + (i % 3)) }));
+  const same = (json, whole) => {
+    assert.ok(json.body.equals(whole.body));
+    assert.deepEqual(json.ids, whole.ids);
+    assert.deepEqual([...json.offsets], [...whole.offsets]);
+  };
+  for (let round = 0; round < 30; round++) {
+    const cuts = [...new Set(Array.from({ length: 1 + Math.floor(next() * 5) }, () => Math.floor(next() * (views.length + 1))))].sort((a, b) => a - b);
+    const parts = [0, ...cuts, views.length].slice(1).map((end, k, ends) => encodeListings(views.slice(k ? ends[k - 1] : 0, end)));
+    same(joinListings(parts), encodeListings(views));
+  }
+  same(joinListings([encodeListings([]), encodeListings(views.slice(0, 1)), encodeListings([])]), encodeListings(views.slice(0, 1)));
+  same(joinListings([encodeListings([]), encodeListings([])]), encodeListings([]));
+  same(joinListings([]), encodeListings([]));
 });
 
 test('서버 기억: 지난 목록 버전부터의 변화분을 합치면 지금 전체 목록과 같다(몇 벌 앞에서도)', () => {

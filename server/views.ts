@@ -404,14 +404,17 @@ function redevRef(source: string, l: NormalizedListing, zonesAt: ReturnType<type
   return at?.hits.length ? at : null;
 }
 
-/** 매물 + 판정 + 확인하지 않은 변화를 화면용으로 합친다. */
-export function buildListingViews(): ListingView[] {
-  const rows = store.listingViewRows();
+/**
+ * 매물 + 판정 + 확인하지 않은 변화를 화면용으로 합친다. range를 주면 그 행 번호 구간의 매물만 만든다(워커 여럿이 나눠 만들 때).
+ * 구간마다 만든 것을 구간 순서대로 이으면 통째로 만든 것과 같다.
+ */
+export function buildListingViews(range: store.RowRange = store.ALL_ROWS): ListingView[] {
+  const rows = store.listingViewRows(range);
   const courtRaw = store.rawBySource('courtauction');
   const onbidRaw = store.rawBySource('onbid');
   const courtClaims = store.courtClaimsAll();
   /** 옵션을 읽는 원본(집토스 옵션 목록, 피터팬 풀옵션 표시, 네이버 소개 글과 단지 번호). 큰 네이버와 피터팬 원본은 쓰는 칸만 읽는다. */
-  const optionRaw = new Map([...store.rawBySource('ziptoss'), ...store.peterpanzViewRaw(), ...store.naverViewRaw()]);
+  const optionRaw = new Map([...store.rawBySource('ziptoss'), ...store.peterpanzViewRaw(range), ...store.naverViewRaw(range)]);
   const redevAt = zonesLookup();
   const compareTrades = tradeComparer();
   const households = store.complexHouseholds();
@@ -437,7 +440,7 @@ export function buildListingViews(): ListingView[] {
   // 다방은 목록에 주소가 없어 '주소 보기'로 받아 둔 지번 주소를 채운다(사이트가 준 주소가 있으면 그것을 쓴다).
   // 직방은 예전에 목록을 받은 화면 주소를 원본 주소로 저장했다. 다시 받지 않은 매물도 그 방 화면이 열리게 번호로 만든다.
   // 직방 사진도 예전에는 크기 조건 없는 주소(400 오류)로 저장했다. 다시 받지 않은 매물도 사진이 보이게 조건을 붙인다(zigbangThumb).
-  const parsed = rows.map((r) => {
+  const parse = (r: store.ListingViewRow) => {
     const data = JSON.parse(r.data) as NormalizedListing;
     const address = !data.address && r.source === 'dabang' ? dabangAddresses.get(r.id) : undefined;
     const zig = r.source === 'zigbang';
@@ -447,8 +450,11 @@ export function buildListingViews(): ListingView[] {
       row: r,
       data: address || url ? { ...data, ...(address ? { address } : {}), ...(url ? { url } : {}), ...(thumbnail ? { thumbnail } : {}) } : data,
     };
-  });
-  const discarded = parsed.filter(({ row }) => verdicts.get(row.id)?.verdict === 'discard');
+  };
+  const parsed = rows.map(parse);
+  // 버린 매물과 비슷한지는 구간을 나눠 만들 때도 구간 밖까지 모든 버린 매물과 견준다.
+  const whole = range.from == null && range.to == null;
+  const discarded = (whole ? parsed : store.discardedViewRows().map(parse)).filter(({ row }) => verdicts.get(row.id)?.verdict === 'discard');
 
   return parsed.map(({ row, data }) => {
     const verdict = verdicts.get(row.id);
@@ -516,11 +522,10 @@ const toManwon = (won: number | null) => (won == null ? null : Math.round(won / 
 
 /** 저장된 법원경매 매각 결과 중 gus(구 이름)에 있는 것을 화면용으로(매각기일 최근 순). 대시보드가 모은 물건이면 그 매물 id를 붙인다. */
 export function buildAuctionResultViews(gus: string[]): AuctionResultView[] {
+  // 법원경매 매물의 건물 구분 값만 읽는다. 예전에는 매물 전체를 data째 읽어 요청마다 서버가 0.7초쯤 멈췄다.
   const byBuilding = new Map<string, string>();
-  for (const row of store.allListings()) {
-    if (row.source !== 'courtauction') continue;
-    const key = (JSON.parse(row.data) as NormalizedListing).buildingKey;
-    if (key) byBuilding.set(key, row.id);
+  for (const { id, key } of store.buildingKeysOf('courtauction')) {
+    if (key) byBuilding.set(key as string, id);
   }
   return store.auctionResultRows(gus).map((r) => ({
     key: r.key,

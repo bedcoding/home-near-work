@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { chromium, type Browser, type BrowserContext, type Download, type Page } from 'playwright';
+import type { Browser, BrowserContext, Download, Page } from 'playwright';
 import * as store from './db.js';
 import { importRedevZones, redevZones } from './redev-zones.js';
 import type { RedevZonesCheck, RedevZonesView } from '../shared/types.js';
@@ -122,6 +122,8 @@ let running: Promise<{ text: string; view: RedevZonesView }> | null = null;
 export function updateZonesNow(): Promise<{ text: string; view: RedevZonesView }> {
   running ??= (async () => {
     let browser: Browser;
+    // playwright는 불러오는 데 0.3초쯤 걸려 서버를 켤 때가 아니라 브라우저를 처음 띄울 때 불러온다(대시보드가 빨리 켜지게).
+    const { chromium } = await import('playwright');
     const exe = process.env.HNW_CHROMIUM_PATH; // 개발과 시험용(설치된 크롬 대신 쓸 실행 파일)
     try {
       browser = await chromium.launch(exe ? { executablePath: exe, headless: true } : { channel: 'chrome', headless: true, chromiumSandbox: true });

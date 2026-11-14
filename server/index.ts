@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import open from 'open';
@@ -7,7 +8,8 @@ import { alertSettings, setAlertSettings } from './alerts.js';
 import { captureNews } from './capture-news.js';
 import { autoCheckState, runMissedCheck, setAutoCheck, startAutoCheck } from './auto-check.js';
 import { gusFor, nearNamesFor } from './collectors/gus.js';
-import { DASHBOARD_URL, HOST, PORT, RUNS_DIR, WEB_DIST } from './config.js';
+import { DASHBOARD_URL, DB_PATH, HOST, PORT, RUNS_DIR, WEB_DIST } from './config.js';
+import { warmDbFiles } from './warm-db.js';
 import * as store from './db.js';
 import { canonicalRegion, regionArea, regionCatalog } from './region-catalog.js';
 import { normalizeAlertLimits } from '../shared/alert-scope.js';
@@ -53,6 +55,25 @@ import { CAPTURE_SOURCES, REST_CHOICES, RUN_SCOPES, SEOUL, SOURCE_LABEL, type Ap
 
 // 처리하지 못한 비동기 오류가 나도 대시보드 서버가 꺼지지 않게 기록만 남긴다.
 process.on('unhandledRejection', (e) => console.error('처리하지 못한 오류:', e instanceof Error ? e.message : e));
+
+/**
+ * 매물 목록 응답은 수만 건(수십 MB)이라 한 번에 만들면 2~3초 걸린다. 그동안 서버가 멈추지 않게 워커에서 만들고(listings-body.ts),
+ * CPU가 넉넉하면 워커 여럿이 매물 행 번호 구간을 나눠 동시에 만든다(대시보드를 처음 열 때 기다리는 시간이 준다).
+ * 워커는 켜자마자 띄워 두어 모듈을 불러오는 시간을 아래 켜기 준비와 겹친다. 만들기는 켜기 준비(DB에 쓰는 일)가 끝난 뒤 시작한다(맨 아래).
+ */
+const LISTINGS_WORKERS = Math.min(4, Math.max(1, os.availableParallelism() - 2));
+const listings = createListingsBody({
+  revision: store.dataRevision,
+  buildHere: () => encodeListings(buildListingViews()),
+  workers: LISTINGS_WORKERS,
+  split: (parts) => store.listingSplits(parts),
+});
+listings.warm();
+
+// 컴퓨터를 켠 뒤 처음 켤 때처럼 DB가 운영체제 캐시에 없으면, 아래 매물 정리와 매물 목록 만들기가 하드디스크를 여기저기 조금씩 읽느라
+// 1분 넘게 걸린다. 그때만 DB 파일을 먼저 이어 읽어 캐시에 올린다(하드디스크에서 몇 초, 캐시에 있으면 바로 끝남).
+const warmedDb = warmDbFiles([DB_PATH, `${DB_PATH}-wal`]);
+if (warmedDb.read) console.log(`DB를 미리 읽었습니다(${Math.round(warmedDb.bytes / 1e6)}MB, ${(warmedDb.ms / 1000).toFixed(1)}초).`);
 
 store.closeInterruptedRuns();
 if (migrateDabangSchedule()) console.log('다방 예약을 구 전체 자동수집으로 전환했습니다. 기존 동별 예약 설정은 로컬에 보관했습니다.');
@@ -236,11 +257,9 @@ app.put<{ Body: unknown }>('/api/alerts', async (req, reply) => {
 app.get('/api/stations/catalog', async () => stationCatalog());
 
 /**
- * 매물 목록 응답은 수만 건(수십 MB)이라 만드는 데 2초쯤 걸린다. 그동안 서버가 멈추지 않게 워커에서 만들고(listings-body.ts),
- * 자료 버전(DB에 무엇이든 쓰면 바뀜)이 같고 10분이 안 지났으면 만들어 둔 JSON을 그대로 보낸다.
+ * 매물 목록(위에서 만든 listings). 자료 버전(DB에 무엇이든 쓰면 바뀜)이 같고 10분이 안 지났으면 만들어 둔 JSON을 그대로 보낸다.
  * 화면이 지난번에 받은 목록 버전(since)을 알려 오면 그 뒤로 바뀐 매물만 보낸다(listings-cache.ts). 모르는 버전이면 전체를 보낸다.
  */
-const listings = createListingsBody({ revision: store.dataRevision, buildHere: () => encodeListings(buildListingViews()) });
 const listingsCache = createListingsCache();
 app.get<{ Querystring: { since?: unknown } }>('/api/listings', async (req, reply) => {
   const token = listingsCache.remember(await listings.json());
@@ -900,10 +919,6 @@ await app.listen({ host: HOST, port: PORT });
 // 켜는 데 걸린 시간(모듈 불러오기 포함). 오래 걸리면 위 준비 작업을 살핀다.
 console.log(`회사근처 내집마련: ${DASHBOARD_URL} (켜는 데 ${process.uptime().toFixed(1)}초)`);
 startAutoCheck();
-// 대시보드를 처음 열 때 기다리지 않게 매물 목록 응답을 미리 만들어 둔다.
-setTimeout(() => {
-  listings.json().then((json) => listingsCache.remember(json)).catch((e) => console.error('매물 목록 미리 만들기 오류:', e instanceof Error ? e.message : e));
-}, 500);
 /** 끝난 지 30일 지난 조회 폴더(스크린샷, 응답 원본)를 지운다. 켠 뒤 잠시 있다가, 그 뒤로는 하루에 한 번. 조회 기록(로그, 요약)은 남는다. */
 function tidyRunFiles() {
   try {
@@ -930,5 +945,8 @@ setTimeout(() => {
 }, 3000);
 processPendingNaverCaptures();
 finishCaptureSession();
+// 대시보드를 처음 열 때 기다리지 않게 매물 목록 응답을 바로 만들기 시작한다. 켤 때 DB에 쓰는 일(매물 정리, 받아 둔 응답 읽기,
+// 링크 힌트 배우기 등)이 모두 끝난 뒤라서 그 사이에 자료 버전이 바뀌어 다시 만드는 일이 없다. 워커에서 만들어 서버는 그동안 다른 요청에 답한다.
+listings.json().then((json) => listingsCache.remember(json)).catch((e) => console.error('매물 목록 미리 만들기 오류:', e instanceof Error ? e.message : e));
 if (!fs.existsSync(WEB_DIST)) console.log('화면이 아직 빌드되지 않았습니다. 개발 중이면 npm run dev로 http://localhost:5173 을 여세요.');
 if (process.argv.includes('--open')) void open(DASHBOARD_URL);

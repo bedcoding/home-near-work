@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
 import { FORM_URL, ID, SCHEDULE_URL, SEARCH_API } from './collectors/courtauction.js';
 
 // 법원경매 물건 하나를 보이는 크롬 창에 연다. 사이트는 물건 상세를 주소로 열 수 없어서(상세 화면은 사이트 안에서 넘긴 값으로만 열림),
@@ -27,6 +27,8 @@ let queue: Promise<unknown> = Promise.resolve();
 
 async function newPage(headless: boolean): Promise<Page> {
   if (!browser?.isConnected() || !context) {
+    // playwright는 불러오는 데 0.3초쯤 걸려 서버를 켤 때가 아니라 브라우저를 처음 띄울 때 불러온다(대시보드가 빨리 켜지게).
+    const { chromium } = await import('playwright');
     browser = await chromium.launch({ channel: 'chrome', headless, chromiumSandbox: true, args: ['--window-size=1400,1000'] });
     context = await browser.newContext({ viewport: null });
     // page.evaluate 안의 함수에 tsx가 넣는 도우미

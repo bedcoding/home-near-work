@@ -1130,6 +1130,11 @@ export function allListings(): ListingRow[] {
   return db.prepare(`SELECT ${LISTING_COLUMNS} FROM listings`).all() as ListingRow[];
 }
 
+/** 한 소스 매물의 건물 구분 값(data.buildingKey, 없으면 null)을 행 번호 순서로. 색인으로 그 소스 매물만 읽는다. */
+export function buildingKeysOf(source: string): { id: string; key: unknown }[] {
+  return db.prepare("SELECT id, json_extract(data, '$.buildingKey') AS key FROM listings WHERE source = ? ORDER BY rowid").all(source) as { id: string; key: unknown }[];
+}
+
 /** 한 소스의 원본 데이터(raw)를 매물 번호별로 읽는다. */
 export function rawBySource(source: string): Map<string, unknown> {
   const rows = db.prepare('SELECT id, raw FROM listings WHERE source = ? AND raw IS NOT NULL').all(source) as { id: string; raw: string }[];
@@ -1152,12 +1157,62 @@ export interface ListingViewRow {
   shot_run: unknown;
 }
 
-export function listingViewRows(): ListingViewRow[] {
+/**
+ * 매물 행 번호(rowid) 구간 [from, to). 매물 목록을 워커 여럿이 나눠 만들 때 쓴다(listings-body.ts). null이면 그쪽 끝이 없다.
+ * 구간마다 만든 목록을 구간 순서대로 이으면 통째로 만든 목록과 매물 순서까지 같다(목록은 행 번호 순서).
+ */
+export interface RowRange {
+  from: number | null;
+  to: number | null;
+}
+export const ALL_ROWS: RowRange = { from: null, to: null };
+
+/** 구간 조건(앞에 AND를 붙여 쓴다)과 그 값 */
+function rowRangeSql(range: RowRange, column = 'rowid'): { sql: string; args: number[] } {
+  const parts: string[] = [];
+  const args: number[] = [];
+  if (range.from != null) { parts.push(`${column} >= ?`); args.push(range.from); }
+  if (range.to != null) { parts.push(`${column} < ?`); args.push(range.to); }
+  return { sql: parts.join(' AND '), args };
+}
+
+const LISTING_VIEW_COLUMNS = `id, source, source_id, json_remove(data, '$.explain') AS data, first_seen_at, last_seen_at, status,
+       seen_ref ->> '$.screenshot' AS shot, seen_ref ->> '$.runId' AS shot_run`;
+
+export function listingViewRows(range: RowRange = ALL_ROWS): ListingViewRow[] {
+  const { sql, args } = rowRangeSql(range);
+  return db.prepare(`SELECT ${LISTING_VIEW_COLUMNS} FROM listings${sql ? ` WHERE ${sql}` : ''} ORDER BY rowid`).all(...args) as ListingViewRow[];
+}
+
+/** 버림을 누른 매물의 행(listingViewRows와 같은 칸). 목록을 나눠 만들 때도 '버린 매물과 비슷함'은 모든 버린 매물과 견준다. */
+export function discardedViewRows(): ListingViewRow[] {
   return db.prepare(
-    `SELECT id, source, source_id, json_remove(data, '$.explain') AS data, first_seen_at, last_seen_at, status,
-       seen_ref ->> '$.screenshot' AS shot, seen_ref ->> '$.runId' AS shot_run
-     FROM listings`,
+    `SELECT ${LISTING_VIEW_COLUMNS} FROM listings WHERE id IN (SELECT listing_id FROM verdicts WHERE verdict = 'discard') ORDER BY rowid`,
   ).all() as ListingViewRow[];
+}
+
+/** 네이버 매물은 원본에서 칸을 뽑느라 한 건을 만드는 데 다른 매물보다 오래 걸린다. 나눌 때 이만큼 무겁게 센다. */
+const NAVER_SPLIT_WEIGHT = 2;
+
+/**
+ * 매물 목록을 워커 parts개가 나눠 만들 행 번호 경계(오름차순, 많아야 parts - 1개). 구간마다 만드는 시간이 비슷하게 네이버 매물을 무겁게 센다.
+ * 색인(listings_source)만 읽어 수만 건에 10ms쯤 걸린다. 매물이 적으면 나누지 않는다(빈 배열).
+ */
+export function listingSplits(parts: number, minRows = 4000): number[] {
+  if (parts < 2) return [];
+  const rows = db.prepare('SELECT rowid AS id, source FROM listings').raw().all() as [number, string][];
+  if (rows.length < minRows) return [];
+  rows.sort((a, b) => a[0] - b[0]);
+  const weight = (source: string) => (source === 'naver' ? NAVER_SPLIT_WEIGHT : 1);
+  const total = rows.reduce((sum, [, source]) => sum + weight(source), 0);
+  const cuts: number[] = [];
+  let sum = 0;
+  for (const [id, source] of rows) {
+    // 이 행부터 다음 구간: 앞 구간들의 무게가 몫을 넘은 첫 행
+    if (sum >= (total * (cuts.length + 1)) / parts && cuts.length < parts - 1) cuts.push(id);
+    sum += weight(source);
+  }
+  return cuts;
 }
 
 /**
@@ -1167,7 +1222,8 @@ export function listingViewRows(): ListingViewRow[] {
  * 읽는 칸: representativeArticleInfo의 complexNumber, complexName, articleDetail.articleFeatureDescription과
  * duplicatedArticleInfo.articleInfoList 각각의 articleDetail.articleFeatureDescription.
  */
-export function naverViewRaw(): Map<string, unknown> {
+export function naverViewRaw(range: RowRange = ALL_ROWS): Map<string, unknown> {
+  const { sql, args } = rowRangeSql(range, 'listings.rowid');
   const rows = db.prepare(
     `SELECT id,
        json_extract(raw, '$.representativeArticleInfo.complexNumber', '$.representativeArticleInfo.complexName',
@@ -1175,8 +1231,8 @@ export function naverViewRaw(): Map<string, unknown> {
        CASE WHEN json_array_length(raw, '$.duplicatedArticleInfo.articleInfoList') > 0 THEN
          (SELECT json_group_array(value -> '$.articleDetail.articleFeatureDescription') FROM json_each(raw, '$.duplicatedArticleInfo.articleInfoList'))
        END AS dup
-     FROM listings WHERE source = 'naver' AND raw IS NOT NULL`,
-  ).all() as { id: string; rep: string; dup: string | null }[];
+     FROM listings WHERE source = 'naver' AND raw IS NOT NULL${sql ? ` AND ${sql}` : ''}`,
+  ).all(...args) as { id: string; rep: string; dup: string | null }[];
   return new Map(rows.map((r) => {
     const [complexNumber, complexName, intro] = JSON.parse(r.rep) as unknown[];
     const dups = r.dup ? (JSON.parse(r.dup) as unknown[]) : [];
@@ -1188,9 +1244,10 @@ export function naverViewRaw(): Map<string, unknown> {
 }
 
 /** 매물 목록이 읽는 피터팬 원본 칸(additional_options, optionsRef의 풀옵션 표시)만 원본과 같은 모양으로 만든다. naverViewRaw와 같은 까닭이다. */
-export function peterpanzViewRaw(): Map<string, unknown> {
-  const rows = db.prepare(`SELECT id, raw -> '$.additional_options' AS options FROM listings WHERE source = 'peterpanz' AND raw IS NOT NULL`)
-    .all() as { id: string; options: string | null }[];
+export function peterpanzViewRaw(range: RowRange = ALL_ROWS): Map<string, unknown> {
+  const { sql, args } = rowRangeSql(range);
+  const rows = db.prepare(`SELECT id, raw -> '$.additional_options' AS options FROM listings WHERE source = 'peterpanz' AND raw IS NOT NULL${sql ? ` AND ${sql}` : ''}`)
+    .all(...args) as { id: string; options: string | null }[];
   return new Map(rows.map((r) => [r.id, r.options == null ? {} : { additional_options: JSON.parse(r.options) }]));
 }
 
@@ -1274,11 +1331,14 @@ export function touchListings(source: string, sourceIds: string[], at: string) {
  * 지운 매물 수를 준다.
  */
 function purgeGoneListings(): number {
+  // 'source IN (...)'은 모든 매물에 맞는 조건이지만, 이것이 있어야 SQLite가 (source, status) 색인으로 사라진 매물만 찾는다.
+  // 없으면 서버를 켤 때마다 큰 매물 표를 처음부터 끝까지 읽어 켜기가 0.5초쯤 늦어진다.
   const ids = (
     db
       .prepare(
         `SELECT l.id FROM listings l LEFT JOIN verdicts v ON v.listing_id = l.id
-         WHERE l.status = 'gone' AND v.listing_id IS NULL AND NOT EXISTS (SELECT 1 FROM contacted c WHERE c.listing_id = l.id)
+         WHERE l.source IN (SELECT DISTINCT source FROM listings) AND l.status = 'gone'
+           AND v.listing_id IS NULL AND NOT EXISTS (SELECT 1 FROM contacted c WHERE c.listing_id = l.id)
            AND NOT EXISTS (SELECT 1 FROM notes n WHERE n.listing_id = l.id)
            AND l.last_seen_at < CASE WHEN l.source = 'courtauction' THEN ? ELSE ? END`,
       )

@@ -1,7 +1,7 @@
 // 대시보드 켜기(윈도우와 맥 공용). 프로젝트 맨 위의 '대시보드 켜기 - 윈도우.cmd'와 '대시보드 켜기 - 맥.command'가 부른다.
 // 1) 이미 켜져 있으면 창만 연다.
 // 2) 처음이거나 다른 컴퓨터(OS)에서 옮겨 온 폴더면 패키지를 새로 깐다(node_modules/.hnw-installed에 어느 컴퓨터용인지 적어 둔다).
-// 3) 화면을 빌드하고 서버를 띄운 뒤 창을 연다. 이 창을 닫으면 대시보드가 꺼진다.
+// 3) 화면 소스가 지난 빌드 뒤로 바뀌었으면 빌드하고(그대로면 건너뛴다), 서버를 띄운 뒤 창을 연다. 이 창을 닫으면 대시보드가 꺼진다.
 // 여는 창: 크롬 새 창 하나에 켜 둔 부동산 사이트(네이버가 첫 탭)와 맨 끝에 대시보드(site-window.mjs). 안 되면 대시보드만 기본 브라우저로.
 // 창만 열고 조회는 하지 않는다. HNW_NO_OPEN=1이거나, data/.hnw-no-open 파일(5분 안에 만든 것, 읽으면 지움)이 있으면 아무 창도 열지 않는다.
 // --check(윈도우 작업 스케줄러의 자동 확인이 붙임): 창은 열지 않고, 대시보드가 답하면 놓친 자동 확인을 돌리게 한다(POST /api/auto-check/missed).
@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildInputs, buildIsCurrent, rememberBuild } from './build-stamp.mjs';
 import { disableQuickEdit } from './quick-edit.mjs';
 import { openSiteWindow } from './site-window.mjs';
 
@@ -126,9 +127,16 @@ if (await alreadyRunning()) {
   fs.writeFileSync(STAMP, HERE);
   setMacIcon();
 
-  console.log('화면을 준비하는 중…');
-  const build = spawnSync(process.execPath, [path.join('node_modules', 'vite', 'bin', 'vite.js'), 'build', '--logLevel', 'warn'], { stdio: 'inherit' });
-  if (build.status !== 0) fail('화면을 만들지 못했습니다. 위 내용을 확인해 주세요.');
+  // 화면 소스가 지난 빌드 뒤로 그대로면 빌드를 건너뛴다(build-stamp.mjs). 바뀌었거나 기록이 없으면 예전처럼 빌드한다.
+  const inputs = buildInputs(ROOT);
+  if (buildIsCurrent(ROOT, inputs)) {
+    console.log('화면은 지난번에 만든 그대로입니다.');
+  } else {
+    console.log('화면을 준비하는 중…');
+    const build = spawnSync(process.execPath, [path.join('node_modules', 'vite', 'bin', 'vite.js'), 'build', '--logLevel', 'warn'], { stdio: 'inherit' });
+    if (build.status !== 0) fail('화면을 만들지 못했습니다. 위 내용을 확인해 주세요.');
+    rememberBuild(ROOT, inputs);
+  }
 
   console.log(`\n대시보드를 켭니다: ${DASHBOARD}`);
   console.log('이 창을 닫으면 대시보드가 꺼집니다. 크롬 확장이 보내는 데이터를 받으려면 켜 두세요.\n');

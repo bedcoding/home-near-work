@@ -32,6 +32,36 @@ export function encodeListings(views: readonly { id: string }[]): ListingsJson {
   return { body, ids: views.map((v) => v.id), offsets };
 }
 
+/**
+ * 행 번호 구간마다 만든 목록 JSON(encodeListings)을 구간 순서대로 이어 하나로 만든다(워커 여럿이 나눠 만든 것).
+ * 결과는 모든 매물을 한 번에 encodeListings한 것과 본문, id 순서, 경계까지 같다.
+ */
+export function joinListings(parts: readonly ListingsJson[]): ListingsJson {
+  const filled = parts.filter((p) => p.ids.length > 0);
+  if (!filled.length) return encodeListings([]);
+  if (filled.length === 1) return filled[0];
+  const count = filled.reduce((n, p) => n + p.ids.length, 0);
+  // 조각마다 여는 괄호와 닫는 괄호를 뺀 안쪽을 쉼표로 잇고 괄호로 감싼다.
+  const size = 2 + filled.reduce((n, p) => n + p.body.length - 2, 0) + (filled.length - 1);
+  const body = Buffer.alloc(size);
+  const offsets = new Uint32Array(count + 1);
+  const ids: string[] = [];
+  body[0] = 0x5b;
+  let at = 1;
+  let i = 0;
+  filled.forEach((p, k) => {
+    if (k > 0) body[at++] = 0x2c;
+    p.body.copy(body, at, 1, p.body.length - 1);
+    // 조각의 경계는 그 조각 본문(여는 괄호가 0번) 기준이라 안쪽이 놓인 자리만큼 옮긴다.
+    for (let j = 0; j < p.ids.length; j++) offsets[i++] = at + p.offsets[j] - 1;
+    for (const id of p.ids) ids.push(id);
+    at += p.body.length - 2;
+  });
+  body[at] = 0x5d;
+  offsets[count] = size;
+  return { body, ids, offsets };
+}
+
 /** 매물 i의 JSON 바이트 */
 const itemOf = (json: ListingsJson, i: number) => json.body.subarray(json.offsets[i], json.offsets[i + 1] - 1);
 const COMMA = Buffer.from(',');

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { chromium, type BrowserContext, type Locator, type Page, type Response } from 'playwright';
+import type { BrowserContext, Locator, Page, Response } from 'playwright';
 import { BROWSER_PROFILE_DIR, RUNS_DIR } from './config.js';
 import { addRequest, addScreenshot, getSetting } from './db.js';
 import { REST_CHOICES, REST_DEFAULT } from '../shared/types.js';
@@ -83,6 +83,8 @@ export class BrowserSession {
       locale: 'ko-KR',
       timezoneId: 'Asia/Seoul',
     };
+    // playwright는 불러오는 데 0.3초쯤 걸려 서버를 켤 때가 아니라 브라우저를 처음 띄울 때 불러온다(대시보드가 빨리 켜지게).
+    const { chromium } = await import('playwright');
     let context: BrowserContext;
     try {
       // 설치된 크롬을 쓰면 브라우저를 따로 내려받지 않아도 된다.

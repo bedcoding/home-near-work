@@ -144,3 +144,47 @@ test('매물 목록은 큰 칸을 빼도 원본 통째로 낸 옵션과 건축�
   assert.equal(views.listingSource('dabang:1'), null);
   assert.equal(views.listingSource('missing:1'), undefined);
 });
+
+test('행 번호 구간마다 만든 목록을 이으면 통째로 만든 것과 같고, 버린 매물과 비슷함은 구간을 넘어 본다', async (t) => {
+  const store = memoryStore(t);
+  fill(store);
+  const near = { lat: 37.5, lng: 127.0, areaM2: 20, floor: 2, buildingType: '원룸' };
+  store.insertListing('dabang:9', listing('dabang', '9', near), 'key-dabang-9', 'sig', 9, null, null, '2026-01-01T00:00:00.000Z');
+  store.insertListing('zigbang:9', listing('zigbang', '9', near), 'key-zigbang-9', 'sig', 9, null, null, '2026-01-01T00:00:00.000Z');
+  store.setVerdict('dabang:9', 'discard');
+  const views = await loadViews(store);
+  const whole = JSON.stringify(views.buildListingViews());
+  const rowids = store.db.prepare('SELECT rowid AS r FROM listings ORDER BY rowid').all().map((r) => r.r);
+  // 경계를 어디에 두어도(빈 구간 포함) 이으면 같다.
+  for (let i = 0; i <= rowids.length; i++) {
+    const cut = i < rowids.length ? rowids[i] : rowids.at(-1) + 1;
+    const parts = [views.buildListingViews({ from: null, to: cut }), views.buildListingViews({ from: cut, to: null })];
+    assert.equal(JSON.stringify(parts.flat()), whole, `경계 ${cut}`);
+  }
+  const later = plain(views.buildListingViews({ from: rowids.at(-1), to: null }));
+  assert.deepEqual(later.map((l) => l.id), ['zigbang:9']);
+  assert.equal(later[0].similarToDiscarded, true, '앞 구간의 버린 매물과 비슷하다');
+  // 나눌 경계: 오름차순이고, 매물이 적으면 나누지 않는다.
+  assert.deepEqual(plain(store.listingSplits(3)), [], '매물이 적으면 나누지 않는다');
+  const cuts = plain(store.listingSplits(3, 1));
+  assert.equal(cuts.length, 2);
+  assert.ok(cuts[0] < cuts[1] && rowids.includes(cuts[0]) && rowids.includes(cuts[1]));
+});
+
+test('경매 매각 결과는 법원경매 매물의 건물 구분 값으로 매물 id를 붙인다(같은 값이면 나중 매물)', async (t) => {
+  const store = memoryStore(t);
+  const at = '2026-01-01T00:00:00.000Z';
+  const court = (id, key) => store.insertListing(id, listing('courtauction', id, { buildingKey: key }), `key-${id}`, 'sig', 9, null, null, at);
+  court('courtauction:1', 'ca-K1');
+  store.insertListing('naver:7', listing('naver', '7', { buildingKey: 'ca-K2' }), 'key-naver-7', 'sig', 9, null, null, at);
+  court('courtauction:2', 'ca-K1');
+  court('courtauction:3', null);
+  const result = (key) => ({
+    key, saleDate: '2026-01-02', court: '예시법원', caseNo: '2026타경1', itemNo: '1', gu: '가상구', dong: '예시동', address: '예시도 가상구 예시동 1', usage: '아파트',
+    kind: 'home', areaM2: 33, lots: 1, failed: 0, appraisal: 10000, minPrice: 8000, amount: 9000, status: '02', lat: null, lng: null, via: 'result', raw: null,
+  });
+  store.saveAuctionResults([result('K1'), result('K2'), result('K3')], at);
+  const views = await loadViews(store);
+  const byKey = new Map(plain(views.buildAuctionResultViews(['가상구'])).map((r) => [r.key, r.listingId]));
+  assert.deepEqual(Object.fromEntries(byKey), { K1: 'courtauction:2', K2: null, K3: null });
+});

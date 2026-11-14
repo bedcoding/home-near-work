@@ -47,6 +47,14 @@ test('구 판정은 매물마다 기억하고, 판정에 쓰는 칸이 바뀌면
   assert.equal(regions.matchesRegion(listing, region), false, '법정동코드가 생기면 그것으로 다시 판정한다');
   const other = { ...region, code: '99999', sigungu: '다른구', name: '예시도 다른구' };
   assert.equal(regions.matchesRegion(row('memo2'), other), false, '구가 다르면 따로 판정한다');
+  // 같은 지역 객체의 칸이 바뀌면 그 지역의 관할 낱말도 다시 만든다.
+  const changing = { ...region };
+  const same = row('memo3');
+  assert.equal(regions.matchesRegion(same, changing), true);
+  Object.assign(changing, { code: '99999', sigungu: '다른구' });
+  assert.equal(regions.matchesRegion(same, changing), false, '바뀐 구로 다시 판정한다');
+  Object.assign(changing, { code: '99123', sigungu: '가상구' });
+  assert.equal(regions.matchesRegion(same, changing), true);
 });
 
 test('list collection regions and station alert circles are independent', () => {
