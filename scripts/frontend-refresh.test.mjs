@@ -108,6 +108,7 @@ test('확장 응답 저장 뒤 지연 파싱이 끝나면 같은 네이버 건�
   h.data.listings = [{ id: 'synthetic-room' }];
   await h.app.poll();
   assert.equal(h.app.listings.value[0].id, 'synthetic-room');
+  assert.deepEqual([...h.app.liveListingIds.value], ['synthetic-room'], '확장 프로그램에서 새로 받아도 지도에서 강조한다');
   assert.equal(h.state.naverCapture.total, 0);
 });
 
@@ -177,6 +178,7 @@ test('조회 중 저장된 매물은 진행 상태를 기다리게 하지 않고
   const h = appHarness(t);
   h.data.listings = [listing('old')];
   await h.mount();
+  assert.equal(h.app.liveListingIds.value.size, 0, '페이지를 열 때 이미 저장된 매물은 강조하지 않는다');
   const initialCalls = h.calls.listings;
   const initialNotices = h.calls.notices;
   let releaseListings;
@@ -206,19 +208,23 @@ test('조회 중 저장된 매물은 진행 상태를 기다리게 하지 않고
   await h.app.poll();
   await settle();
   assert.deepEqual(h.app.listings.value.map(row => row.id), ['old', 'a', 'b']);
-  assert.deepEqual([...h.app.liveListingIds.value], ['b']);
+  assert.deepEqual([...h.app.liveListingIds.value], ['a', 'b'], '다음 수집분이 들어와도 앞에서 받은 매물의 강조를 유지한다');
   h.advance(3999);
   h.state.running = { runId: 42, listingRevision: 3 };
   await h.app.poll();
   assert.equal(h.calls.listings, initialCalls + 2, '다음 저장 신호는 간격이 지날 때까지 합친다');
   assert.equal(h.calls.notices, initialNotices, '조회 중에는 공고와 시세를 함께 받지 않는다');
 
+  h.data.listings = [...h.data.listings, listing('c')];
   h.state.running = null;
   await h.app.poll();
   await settle();
   assert.equal(h.calls.listings, initialCalls + 3, '종료 시에는 대기 중인 변화까지 포함해 다시 받는다');
   assert.equal(h.calls.notices, initialNotices + 1);
-  assert.equal(h.app.liveListingIds.value.size, 0, '조회가 끝나면 임시 표시를 지운다');
+  assert.deepEqual([...h.app.liveListingIds.value], ['a', 'b', 'c'], '조회가 끝나도 마지막 저장분까지 새로고침 전에는 강조한다');
+  h.advance(30_000);
+  await h.app.poll();
+  assert.deepEqual([...h.app.liveListingIds.value], ['a', 'b', 'c']);
 });
 
 /** 화면 계산에 필요한 칸만 채운 가짜 매물(같은 자리, 같은 층, 같은 면적이면 서로 '비슷'하다) */

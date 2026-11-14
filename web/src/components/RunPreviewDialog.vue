@@ -31,6 +31,7 @@ const emit = defineEmits<{
   start: [];
   toggleSource: [source: SourceId, selected: boolean];
   toggleNotices: [selected: boolean];
+  toggleAll: [selected: boolean];
   commonChange: [limits: CollectionPriceLimits | null];
 }>();
 
@@ -42,6 +43,7 @@ const activeCommon = computed(() => commonPricesForRun(props.commonLimits, props
 const invalidCommon = computed(() => props.commonPriceSites.length > 0 && commonFields.some(({ key }) =>
   !(key === 'saleMax' && commonSaleExcluded.value) && invalidAmount(commonDraft.value[key])));
 const hasSelection = computed(() => props.selectedSources.length > 0 || (props.includeNotices && props.noticeCount > 0));
+const allSelected = computed(() => props.selectedSources.length === props.sites.length && (!props.noticeCount || props.includeNotices));
 
 onMounted(() => dialog.value?.showModal());
 onBeforeUnmount(() => dialog.value?.close());
@@ -135,6 +137,10 @@ function sitePriceText(site: PreviewSite): string {
           </fieldset>
           <fieldset class="preview-sites" :disabled="starting">
             <legend>조회 대상</legend>
+            <div class="preview-selection-actions">
+              <button type="button" class="btn btn-sm" :disabled="allSelected" @click="emit('toggleAll', true)">전체 선택</button>
+              <button type="button" class="btn btn-sm" :disabled="!hasSelection" @click="emit('toggleAll', false)">전체 해제</button>
+            </div>
             <label v-for="site in sites" :key="site.source" class="preview-site">
               <span class="preview-site-name"><input type="checkbox" :aria-label="SOURCE_LABEL[site.source]" :checked="selectedSources.includes(site.source)"
                 @change="emit('toggleSource', site.source, ($event.target as HTMLInputElement).checked)" />{{ SOURCE_LABEL[site.source] }}</span>
@@ -183,6 +189,7 @@ function sitePriceText(site: PreviewSite): string {
 .preview-common-summary { font-weight: 600; overflow-wrap: anywhere; }
 .preview-sites { border: 0; padding: 0; margin: 0; min-width: 0; }
 .preview-sites legend { padding: 0 0 4px; font-weight: 700; }
+.preview-selection-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
 .preview-site {
   display: grid; grid-template-columns: minmax(98px, 1fr) minmax(0, 3fr); align-items: baseline; gap: 2px 14px;
   padding: 9px 0; border-bottom: 1px solid var(--line);

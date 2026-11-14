@@ -577,12 +577,21 @@ async function refreshState() {
 /** 매물 목록을 받는 중인 요청 수와, 한 번이라도 다 받았는지(처음에는 0건이 아니라 불러오는 중으로 보인다) */
 const listingsLoading = ref(0);
 const listingsLoaded = ref(false);
+// 이 페이지를 연 뒤 새로 받은 매물은 새로고침할 때까지 지도에서 강조한다.
+const liveListingIds = shallowRef<ReadonlySet<string>>(new Set());
 /** 지난번에 받은 목록 버전부터 바뀐 매물만 받아 가진 목록에 합친다(서버가 그 버전을 모르면 전체를 받는다). */
 const listingsSync = createListingsSync((since) => api.listings(since));
 async function refreshListings() {
   listingsLoading.value += 1;
   try {
-    listings.value = await listingsSync(() => listings.value);
+    const next = await listingsSync(() => listings.value);
+    const previous = listings.value;
+    listings.value = next;
+    if (listingsLoaded.value && previous !== next) {
+      const previousIds = new Set(previous.map(listing => listing.id));
+      const added = next.filter(listing => !previousIds.has(listing.id)).map(listing => listing.id);
+      if (added.length) liveListingIds.value = new Set([...liveListingIds.value, ...added]);
+    }
     listingsLoaded.value = true;
   } finally {
     listingsLoading.value -= 1;
@@ -614,17 +623,8 @@ const refreshData = createRevisionRefresh(async () => {
 
 // 조회 중에는 저장이 확인된 매물 변화분만 받는다. 진행 상태 폴링은 이 응답을 기다리지 않는다.
 const LIVE_LISTINGS_INTERVAL_MS = 4000;
-const LIVE_LISTING_MARK_MS = 6000;
-const emptyLiveListingIds: ReadonlySet<string> = new Set();
-const liveListingIds = shallowRef(emptyLiveListingIds);
 let lastLiveListingsRequestAt = -Infinity;
 let loadedLiveListingsRevision: string | null = null;
-let liveListingMarkTimer: number | undefined;
-function clearLiveListingMarks() {
-  window.clearTimeout(liveListingMarkTimer);
-  liveListingIds.value = emptyLiveListingIds;
-}
-watch(() => running.value?.runId, clearLiveListingMarks);
 
 function refreshLiveListings(progress: NonNullable<AppState['running']>) {
   if (!progress.listingRevision || listingsLoading.value > 0) return;
@@ -632,16 +632,8 @@ function refreshLiveListings(progress: NonNullable<AppState['running']>) {
   const now = Date.now();
   if (revision === loadedLiveListingsRevision || now - lastLiveListingsRequestAt < LIVE_LISTINGS_INTERVAL_MS) return;
   lastLiveListingsRequestAt = now;
-  const previous = listingsLoaded.value ? listings.value : null;
   void refreshListings().then(() => {
     loadedLiveListingsRevision = revision;
-    if (!previous || previous === listings.value || running.value?.runId !== progress.runId) return;
-    const previousIds = new Set(previous.map(listing => listing.id));
-    const added = new Set(listings.value.filter(listing => !previousIds.has(listing.id)).map(listing => listing.id));
-    if (!added.size) return;
-    window.clearTimeout(liveListingMarkTimer);
-    liveListingIds.value = added;
-    liveListingMarkTimer = window.setTimeout(clearLiveListingMarks, LIVE_LISTING_MARK_MS);
   }).catch(() => {
     // 실패한 변화분은 다음 폴링에서 다시 시도한다.
   });
@@ -759,6 +751,13 @@ function toggleRunSource(source: SourceId, selected: boolean) {
 function toggleRunNotices(selected: boolean) {
   const dialog = runPreview.value;
   if (dialog && !dialog.starting) dialog.includeNotices = selected;
+}
+
+function toggleAllRunTargets(selected: boolean) {
+  const dialog = runPreview.value;
+  if (!dialog?.data || dialog.starting) return;
+  dialog.deselectedSources = selected ? [] : dialog.data.sites.map(site => site.source);
+  dialog.includeNotices = selected;
 }
 
 function changeRunCommonPrice(limits: CollectionPriceLimits | null) {
@@ -1184,7 +1183,6 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', onDocClick);
   window.removeEventListener('message', onExtMessage);
   window.clearTimeout(timer);
-  clearLiveListingMarks();
   window.removeEventListener('keydown', onKey);
 });
 
@@ -1393,7 +1391,8 @@ const filterUse = computed<string[] | 'all'>(() => {
     :rental-only="runPreview.data?.rentalOnly ?? false"
     :loading="runPreview.loading" :starting="runPreview.starting" :error="runPreview.error"
     @close="closeRunPreview" @retry="loadRunPreview" @start="confirmRunPreview"
-    @toggle-source="toggleRunSource" @toggle-notices="toggleRunNotices" @common-change="changeRunCommonPrice"
+    @toggle-source="toggleRunSource" @toggle-notices="toggleRunNotices" @toggle-all="toggleAllRunTargets"
+    @common-change="changeRunCommonPrice"
   />
   <p v-if="connectionError" class="error">{{ connectionError }}</p>
   <p v-if="error" class="error">{{ error }}</p>

@@ -11,6 +11,7 @@ import { naverLink } from '../naverPlaces';
 import { looksSeen, markSeen } from '../marks';
 import { rentRate } from '../rentRate';
 import { distanceText, priceAmount, priceText, pyeong } from '../format';
+import { mapPriceChangeLines } from '../mapPriceChange';
 import { addWalkPin, ensureWalk, markDistances, moveWalkPin, pinCount, pinMax, removeWalkPin, renameWalkPin, setPinKind, walkPins, walkState } from '../walk';
 import { WALK_NAME_MAX, type PinKind } from '../../../shared/walk';
 import {
@@ -229,17 +230,25 @@ function spots(): Spot[] {
 
 /** 올리면 보이는 글: 매물마다 가격, 제목 앞부분, 끝에 괄호로 사이트와 내 표시(별로, 문의함, 봤음) */
 function tooltip(g: Group) {
-  const items = g.items;
+  const items = withPriceChangesFirst(g.items);
   const lines = items.slice(0, 6).map((l) => {
     const mark = l.verdict === 'meh' ? ', 별로' : l.contactedAt ? ', 문의함' : looksSeen(l) ? ', 봤음' : '';
     const site = `${SOURCE_LABEL[l.source]}${mark}`;
     const memo = l.note ? ` <span class="tip-note">📝 ${esc(l.note.length > 24 ? `${l.note.slice(0, 24)}…` : l.note)}</span>` : '';
     // 평수는 가격 바로 뒤에 굵게 쓴다(몇 평인지를 가장 먼저 본다).
     const area = l.areaM2 != null ? `, <b>${pyeong(l.areaM2)}평</b>` : '';
-    return `${esc(pricesText(l))}${area}${l.title ? `, ${esc(l.title.slice(0, 24))}` : ''} <span class="tip-site">(${esc(site)})</span>${memo}`;
+    const changes = mapPriceChangeLines(l.priceChange).map(text => `<br><span class="tip-price-change">${esc(text)}</span>`).join('');
+    return `${esc(pricesText(l))}${area}${l.title ? `, ${esc(l.title.slice(0, 24))}` : ''} <span class="tip-site">(${esc(site)})</span>${memo}${changes}`;
   });
   if (items.length > 6) lines.push(`외 ${items.length - 6}건`);
   return (items.length > 1 ? `<strong>${g.spots > 1 ? '이 근처' : '이 자리'} ${items.length}건</strong><br>` : '') + lines.join('<br>');
+}
+
+/** 창에 보이는 건수를 제한하므로 가격이 바뀐 매물을 먼저 보여 준다. */
+function withPriceChangesFirst(items: ListingView[]) {
+  const changed = (l: ListingView) => l.verdict !== 'meh' && !!l.priceChange;
+  const changes = items.filter(changed);
+  return changes.length ? [...changes, ...items.filter(l => !changed(l))] : items;
 }
 
 /** 지도 표시에 쓸 짧은 금액(만원): 1억이 넘으면 '1.5억', 아니면 '9,000' */
@@ -541,14 +550,13 @@ function withSelectedFirst(items: ListingView[]) {
 
 /**
  * 누르면 보이는 창: 맨 위에 건수 머리글(창 안을 스크롤해도 남음), 그 아래 매물마다 카드 하나.
- * 카드에는 왼쪽 사진(popupThumb), 가격(크게, 월세는 낱말 없이)과 오른쪽 끝 평수 상자, 그 아래 '원본 열기', '네이버 지도' 단추만 둔다. 옆에 목록이 있으면 카드를 누를 때
+ * 카드에는 왼쪽 사진(popupThumb), 가격과 변동 내역, 오른쪽 끝 평수 상자, 그 아래 '원본 열기', '네이버 지도' 단추를 둔다. 옆에 목록이 있으면 카드를 누를 때
  * 목록에서 그 매물을 고른다(예전 '목록에서 보기' 단추). 층, 유형, 사이트, 내 표시(봤음, 문의함 등), 메모는 매물 카드와
  * 올리면 보이는 글에 있어서 창에는 쓰지 않는다(가격을 먼저 보게).
- * 고른 매물이 맨 위, 나머지는 싼 순(월세와 전세는 환산 월세), 별로는 맨 아래.
+ * 고른 매물과 가격이 바뀐 매물이 먼저 나오고, 나머지는 싼 순(월세와 전세는 환산 월세), 별로는 맨 아래.
  * 폭은 Leaflet이 줄바꿈 없이 잰 내용 폭에 맞추므로, 가격 줄과 단추 줄은 줄바꿈하지 않게 해서 창이 그 둘 중 긴 쪽에 딱 맞게 한다.
  */
-function popup(g: Group) {
-  const items = withSelectedFirst(g.items);
+function popup(g: Group, items: ListingView[]) {
   const box = document.createElement('div');
   box.className = 'mp';
   if (items.length > 1) box.appendChild(line('mp-head', `${g.spots > 1 ? '이 근처' : '이 자리'} 매물 ${items.length}건`));
@@ -564,9 +572,18 @@ function popup(g: Group) {
     }
     const top = document.createElement('div');
     top.className = 'mp-top';
+    const cost = document.createElement('div');
     const price = document.createElement('strong');
     price.textContent = pricesText(l) || '가격 정보 없음';
-    top.appendChild(price);
+    cost.appendChild(price);
+    const changes = mapPriceChangeLines(l.priceChange);
+    if (changes.length) {
+      const details = document.createElement('div');
+      details.className = 'mp-price-change';
+      for (const text of changes) details.appendChild(line('mp-change-line', text));
+      cost.appendChild(details);
+    }
+    top.appendChild(cost);
     if (l.areaM2 != null) {
       // 평수는 가격 줄 오른쪽 끝에 작은 상자로 둔다(카드마다 같은 자리라 위아래로 훑기 쉽다). 올리면 전용면적(땅은 토지 면적) ㎡.
       const area = line('mp-area', `${pyeong(l.areaM2)}평`);
@@ -1101,8 +1118,8 @@ function drawGroup(layer: L.LayerGroup, g: Group): Drawn {
   (marker as L.Marker).bindTooltip(() => tooltip(g), { direction: 'top' });
   // 누르면 바로 넘어가지 않고 정보 창을 먼저 띄우고, 창에 보인 매물(POPUP_MAX건까지)을 '봤음'으로 남긴다.
   marker.on('click', () => {
-    const items = withSelectedFirst(g.items);
-    popup(g);
+    const items = withSelectedFirst(withPriceChangesFirst(g.items));
+    popup(g, items);
     markSeen(items.slice(0, POPUP_MAX));
     if (props.listMode) emit('reveal', items);
   });
@@ -1502,7 +1519,7 @@ onBeforeUnmount(() => {
       </div>
       <p v-if="pinning" class="pick-note">{{ pinning === 'mark' ? '표시 핀' : '거리 핀' }}을 꽂을 곳을 누르세요 (Esc 취소)</p>
     </div>
-    <!-- 지도 아래: 점 색 네 가지와 '봤음'만 늘 보이고, 나머지 설명(숫자, 가격, 구역, 역, 핀, 정비구역)은 '지도 보는 법' 모달의 탭에 둔다. -->
+    <!-- 기본 점 색과 상태는 범례에, 자세한 설명은 '지도 보는 법'에 둔다. -->
     <div class="under">
       <div class="legend" aria-label="점 색">
         <span><i style="background:#e5484d"></i>신규</span>
@@ -1510,6 +1527,7 @@ onBeforeUnmount(() => {
         <span><i style="background:#c48a0a"></i>관심</span>
         <span><i style="background:#1f5fbf"></i>나머지</span>
         <span title="이 대시보드에서 눌러 본 매물"><i class="seen-dot"></i>봤음</span>
+        <span v-if="liveListingIds?.size" title="새로고침할 때까지 파란 테두리로 표시합니다"><i class="live-dot"></i>이번에 들어온 매물</span>
       </div>
       <InfoModal heading="지도 보는 법" label="지도 보는 법" storage-key="hnw-map-info-tab" :tabs="MAP_TABS" title="점 색, 숫자와 가격, 구역과 역, 핀, 정비구역">
         <template #marks>
@@ -1517,7 +1535,7 @@ onBeforeUnmount(() => {
             <dt><i class="key-dot" style="background:#e5484d"></i></dt>
             <dd><b>신규</b>: 새로 들어온 매물이 있는 자리입니다. 확대해서 가격이 보이면 오른쪽 위에 <em class="nw-sample">NEW</em> 딱지가 붙습니다.</dd>
             <dt><i class="key-dot" style="background:#12825e"></i></dt>
-            <dd><b>가격 변동</b>: 가격이 바뀐 매물이 있는 자리입니다.</dd>
+            <dd><b>가격 변동</b>: 가격이 바뀐 매물이 있는 자리입니다. 표시를 누르면 바뀐 항목의 이전 금액과 현재 금액을 볼 수 있습니다.</dd>
             <dt><i class="key-dot" style="background:#c48a0a"></i></dt>
             <dd><b>관심</b>: 관심 표시한 매물입니다.</dd>
             <dt><i class="key-dot" style="background:#1f5fbf"></i></dt>
@@ -1540,7 +1558,7 @@ onBeforeUnmount(() => {
             <dd>
               <b>묶음</b>: 가격 표시끼리 글자가 가려질 만큼 겹치면 한 표시로 묶고, 별로가 아닌 매물 중 가장 싼 매물의 가격과 건수를 씁니다.
               월세와 전세는 매물 카드의 환산 월세(월세 + 보증금 × 전환율 ÷ 12)로 견줍니다. 가격 옆 숫자가 묶인 매물 수이고, 더 확대하면 풀립니다.
-              누르면 고른 매물이 맨 위, 나머지는 싼 순, 별로는 맨 아래로 뜹니다.
+              누르면 고른 매물과 가격이 바뀐 매물이 먼저 나오고, 나머지는 싼 순으로 뜹니다. 별로는 맨 아래에 나옵니다.
             </dd>
             <dt><b class="price-sample seen-sample">✓ 500/40</b></dt>
             <dd>
@@ -1740,13 +1758,13 @@ onBeforeUnmount(() => {
 }
 :deep(.price span) { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); cursor: pointer; }
 :deep(.live-listing span) {
-  position: absolute; display: block; left: 0; top: 0; border: 2px solid #075bc6;
+  position: absolute; display: block; left: 0; top: 0; border: 3px solid #075bc6;
   border-radius: 32px; box-shadow: 0 0 0 1px #fff; pointer-events: none;
-  transform: translate(-50%, -50%); animation: live-listing-ring 900ms ease-out 2 forwards;
+  transform: translate(-50%, -50%); animation: live-listing-ring 1.6s ease-in-out infinite;
 }
 @keyframes live-listing-ring {
-  from { opacity: 1; transform: translate(-50%, -50%) scale(.9); }
-  to { opacity: 0; transform: translate(-50%, -50%) scale(1.24); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
 }
 @media (prefers-reduced-motion: reduce) {
   :deep(.live-listing span) { animation: none; }
@@ -1769,6 +1787,7 @@ onBeforeUnmount(() => {
 :deep(.price .ck) { font-style: normal; }
 .price-sample.seen-sample { background: #fff; color: #1f5fbf; border-color: #1f5fbf; box-shadow: none; }
 .legend i.seen-dot { background: #fff; box-shadow: inset 0 0 0 2px #1f5fbf; }
+.legend i.live-dot { border: 2px solid #075bc6; }
 .key-dot.meh-dot { display: inline-grid; place-items: center; color: #fff; font: normal 700 9px/1 var(--font); }
 :deep(.tip-site) { color: var(--muted); }
 /* 신규 딱지: 표시 오른쪽 위 모서리에 걸친다. 누르면 아래 표시가 눌리게 한다. */
@@ -1801,8 +1820,9 @@ onBeforeUnmount(() => {
 /* 가격 줄: 왼쪽에 가격, 오른쪽 끝에 평수 상자(줄바꿈하지 않아 창 폭이 이 줄보다 좁아지지 않는다). */
 :deep(.mp-top) { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; white-space: nowrap; }
 :deep(.mp-top strong) { font-size: 15px; font-weight: 800; color: var(--ink); }
+:deep(.mp-price-change) { display: grid; gap: 2px; margin-top: 2px; color: var(--ink-2); font-size: 12px; font-weight: 600; white-space: normal; }
 :deep(.mp-area) {
-  margin-left: auto; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 6px;
+  align-self: flex-start; margin-left: auto; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 6px;
   background: #fff; color: var(--ink-2); font-size: 12px; font-weight: 700; line-height: 20px;
 }
 /* 단추 줄은 줄바꿈하지 않는다(Leaflet이 이 줄 폭에 맞춰 창 폭을 정한다. 단추는 많아야 넷). */
@@ -1814,4 +1834,5 @@ onBeforeUnmount(() => {
 :deep(.mp-more) { color: var(--muted); }
 /* 올리면 보이는 글의 메모 */
 :deep(.tip-note) { color: var(--star); }
+:deep(.tip-price-change) { color: var(--ink-2); font-size: 12px; }
 </style>
