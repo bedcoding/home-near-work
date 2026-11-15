@@ -8,6 +8,7 @@ import {
 } from '../../shared/types';
 import { api } from './api';
 import { commonPricesForRun, loadCommonCollectionPrices, saveCommonCollectionPrices } from './commonCollectionPrices';
+import { loadRunTargetPreferences, saveRunTargetPreferences } from './runTargetPreferences';
 import { createRevisionRefresh } from './refresh';
 import { createListingsSync } from './listingsSync';
 import { isPick, NOTE_MAX, onMarks, picksOnly, touchMarks } from './marks';
@@ -713,7 +714,7 @@ function openRunPreview(scope?: RunScope) {
   runMenu.value = false;
   error.value = null;
   const title = RUN_SCOPES.find(item => item.id === scope)?.label ?? '전체 조회';
-  runPreview.value = { scope, title, data: null, deselectedSources: [], includeNotices: true, commonLimits: loadCommonCollectionPrices(), loading: false, starting: false, error: null, opener };
+  runPreview.value = { scope, title, data: null, ...loadRunTargetPreferences(scope), commonLimits: loadCommonCollectionPrices(), loading: false, starting: false, error: null, opener };
   void loadRunPreview();
 }
 
@@ -746,18 +747,24 @@ function toggleRunSource(source: SourceId, selected: boolean) {
   if (!dialog || dialog.starting) return;
   if (selected) dialog.deselectedSources = dialog.deselectedSources.filter(id => id !== source);
   else if (!dialog.deselectedSources.includes(source)) dialog.deselectedSources.push(source);
+  saveRunTargetPreferences(dialog.scope, dialog);
 }
 
 function toggleRunNotices(selected: boolean) {
   const dialog = runPreview.value;
-  if (dialog && !dialog.starting) dialog.includeNotices = selected;
+  if (!dialog || dialog.starting) return;
+  dialog.includeNotices = selected;
+  saveRunTargetPreferences(dialog.scope, dialog);
 }
 
 function toggleAllRunTargets(selected: boolean) {
   const dialog = runPreview.value;
   if (!dialog?.data || dialog.starting) return;
-  dialog.deselectedSources = selected ? [] : dialog.data.sites.map(site => site.source);
-  dialog.includeNotices = selected;
+  const shownSources = new Set(dialog.data.sites.map(site => site.source));
+  const hiddenDeselections = dialog.deselectedSources.filter(source => !shownSources.has(source));
+  dialog.deselectedSources = selected ? hiddenDeselections : [...hiddenDeselections, ...shownSources];
+  if (dialog.data.noticeCount > 0) dialog.includeNotices = selected;
+  saveRunTargetPreferences(dialog.scope, dialog);
 }
 
 function changeRunCommonPrice(limits: CollectionPriceLimits | null) {
