@@ -24,6 +24,7 @@ const props = defineProps<{
   listing: ListingView;
   areas: Area[];
   selected: boolean;
+  liveCollected?: boolean;
   /** 매각기일별로 묶어 보이는 곳(경매 탭)에서는 카드에 매각기일을 쓰지 않는다. */
   hideSaleDate?: boolean;
   /** 경매 탭: 감정가 × 지역 매각가율로 낸 예상 낙찰가(동이나 구 평균, 서울 평균) */
@@ -284,6 +285,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
           <span class="chip loan-chip"><span v-for="x in loan.lights" :key="x.id" class="loan" :class="x.state"><i class="ld" />{{ x.name }}</span><span v-if="loan.cap" class="loan-cap">주담대 {{ eokText(loan.cap) }}</span></span>
         </CountTooltip>
         <span v-if="selected" class="selection-label">✓ 선택됨</span>
+        <span v-if="liveCollected" class="chip chip-live" title="이 페이지를 연 뒤 새로 받은 매물">새 수집</span>
         <span v-if="l.isNew" class="chip chip-new">신규</span>
         <span v-if="marks.contactedAt" class="chip chip-contact" :title="`${dateTime(marks.contactedAt)}에 문의함으로 표시`">📞 문의함</span>
         <span v-else-if="marks.seen" class="chip chip-viewed" :title="`이 대시보드에서 ${dateTime(l.seenAt!)}에 눌러 봄`">봤음</span>

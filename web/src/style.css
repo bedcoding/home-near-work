@@ -58,6 +58,7 @@ a { color: var(--accent); }
   padding: 2px 9px; border-radius: 6px; font-size: 13px; font-weight: 700; white-space: nowrap;
 }
 .chip-new { background: var(--new); color: #fff; }
+.chip-live { background: #ffde59; color: #16202e; }
 .chip-near { background: var(--accent); color: #fff; }
 .chip-down { background: var(--down-soft); color: var(--down); }
 .chip-up { background: var(--up-soft); color: var(--up); }

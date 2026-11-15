@@ -703,6 +703,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
               <div v-if="r.shown.length" class="list">
                 <ListingCard
                   v-for="e in r.shown" :key="e.listing.id" :listing="e.listing" :areas="areas" :selected="e.listing.id === selectedId"
+                  :live-collected="liveListingIds?.has(e.listing.id)"
                   @select="selectFromList(e.listing)" @open="emit('open', e.listing)" @verdict="(v) => emit('verdict', e.listing, v)"
                   @source="emit('source', e.listing)" @raw="emit('raw', e.listing)" zone-banner
                 />

@@ -307,7 +307,17 @@ function spots(): Spot[] {
   return out;
 }
 
-/** 최저 월세와 전세 매물을 위에 두고, 같은 핀에 있는 나머지 매물도 보여 준다. */
+function listingBadges(l: ListingView) {
+  const live = props.liveListingIds?.has(l.id);
+  if (!live && !l.isNew) return null;
+  const badges = document.createElement('span');
+  badges.className = 'listing-map-badges';
+  if (live) badges.appendChild(line('chip chip-live', '새 수집'));
+  if (l.isNew) badges.appendChild(line('chip chip-new', '신규'));
+  return badges;
+}
+
+/** 최저 월세와 전세 매물 아래에 새 수집, 신규, 나머지 순으로 표시한다. */
 function tooltip(g: Group, pin: L.Layer) {
   const box = document.createElement('div');
   box.className = 'listing-tip';
@@ -324,10 +334,11 @@ function tooltip(g: Group, pin: L.Layer) {
       else previews.set(quote.listing, [text]);
     }
   }
-  for (const l of withPriceChangesFirst(g.items)) {
-    if (!previews.has(l)) previews.set(l, []);
-  }
-
+  const remaining = withPriceChangesFirst(g.items).filter(l => !previews.has(l));
+  const live = props.liveListingIds;
+  for (const l of remaining) if (live?.has(l.id)) previews.set(l, []);
+  for (const l of remaining) if (l.isNew && !previews.has(l)) previews.set(l, []);
+  for (const l of remaining) if (!previews.has(l)) previews.set(l, []);
   for (const [l, prices] of previews) {
     const row = document.createElement(props.listMode ? 'button' : 'div');
     row.className = 'tip-preview';
@@ -348,6 +359,8 @@ function tooltip(g: Group, pin: L.Layer) {
     for (const text of prices.length ? prices : [pricesText(l) || '가격 정보 없음']) {
       details.appendChild(line('tip-price', text));
     }
+    const badges = listingBadges(l);
+    if (badges) details.appendChild(badges);
     const mark = l.verdict === 'meh' ? ', 별로' : l.contactedAt ? ', 문의함' : looksSeen(l) ? ', 봤음' : '';
     const description = [l.areaM2 != null ? `${pyeong(l.areaM2)}평` : '', l.title].filter(Boolean).join(', ');
     if (description) details.appendChild(line('tip-description', description));
@@ -827,6 +840,8 @@ function popup(g: Group, items: ListingView[]) {
     const price = document.createElement('strong');
     price.textContent = pricesText(l) || '가격 정보 없음';
     cost.appendChild(price);
+    const badges = listingBadges(l);
+    if (badges) cost.appendChild(badges);
     const changes = mapPriceChangeLines(l.priceChange ?? l.latestPriceChange ?? null);
     if (changes.length) {
       const details = document.createElement('div');
@@ -1978,7 +1993,7 @@ onBeforeUnmount(() => {
         <template #marks>
           <dl class="keys">
             <dt><i class="key-dot" style="background:#e5484d"></i></dt>
-            <dd><b>신규</b>: 새로 들어온 매물이 있는 자리입니다. 확대해서 가격이 보이면 오른쪽 위에 <em class="nw-sample">NEW</em> 딱지가 붙습니다.</dd>
+            <dd><b>신규</b>: 아직 확인하지 않은 신규 매물이 있는 자리입니다. 확대하면 <em class="nw-sample">NEW</em>가 붙고, 툴팁에서는 해당 매물에 <span class="chip chip-new">신규</span>가 붙습니다.</dd>
             <dt><i class="key-dot" style="background:#12825e"></i></dt>
             <dd><b>가격 변동</b>: 가격이 바뀐 매물이 있는 자리입니다. 표시를 누르면 바뀐 항목의 이전 금액과 현재 금액을 볼 수 있습니다.</dd>
             <dt><i class="key-dot" style="background:#c48a0a"></i></dt>
@@ -2284,6 +2299,8 @@ onBeforeUnmount(() => {
 :deep(.tip-preview .mp-thumb) { flex: 0 0 auto; width: min(112px, 32%); height: auto; aspect-ratio: 4 / 3; }
 :deep(.tip-details) { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr); min-width: 0; }
 :deep(.tip-price) { font-size: 16px; font-weight: 800; color: var(--ink); }
+:deep(.listing-map-badges) { display: flex; flex-wrap: wrap; gap: 4px; margin-block: 2px; }
+:deep(.listing-map-badges .chip) { padding: 1px 6px; font-size: 11px; }
 :deep(.tip-price), :deep(.tip-description), :deep(.tip-site) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 신규 딱지: 표시 오른쪽 위 모서리에 걸친다. 누르면 아래 표시가 눌리게 한다. */
 :deep(.nw), .nw-sample {
