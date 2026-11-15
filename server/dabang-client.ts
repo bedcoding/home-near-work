@@ -164,9 +164,15 @@ export class DabangPagination {
     return { parsed, more: parsed.hasMore && !repeated && consistentLastPage, totalPages: pages };
   }
   result() {
-    if (!this.last) this.issues.add('마지막 페이지까지 확인하지 못함');
-    if (this.total === null || this.ids.size !== this.total) this.issues.add(`표시 총건수 ${this.total ?? '?'}건과 실제 고유 매물 ${this.ids.size}건이 다름`);
-    return { complete: this.issues.size === 0, reason: [...this.issues].join(' · ') || '모든 페이지와 고유 매물 번호 확인',
+    const issues = [...this.issues];
+    if (!this.last) issues.push('마지막 페이지까지 확인하지 못함');
+    if (this.total === null) issues.push('사이트 표시 총건수 미확인');
+    else if (this.ids.size !== this.total) {
+      const difference = Math.abs(this.total - this.ids.size);
+      issues.push(`첫 페이지 표시 ${this.total}건, 고유 응답 ${this.ids.size}건 (응답이 ${difference}건 ${this.ids.size < this.total ? '적음' : '많음'})`);
+    }
+    const reason = issues.length ? [this.last ? '마지막 페이지 수신' : '', ...issues].filter(Boolean).join(', ') : '모든 페이지와 고유 매물 번호 확인';
+    return { complete: issues.length === 0, reason,
       pages: this.pages, totalPages: this.total !== null && this.limit ? Math.max(1, Math.ceil(this.total / this.limit)) : null,
       total: this.total, received: this.ids.size };
   }

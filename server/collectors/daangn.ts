@@ -1,5 +1,5 @@
 import type { Frame, Request, Response } from 'playwright';
-import { parseDaangnFeed } from '../daangn-parse.js';
+import { isEmptyDaangnFeedEnd, parseDaangnFeed } from '../daangn-parse.js';
 import { distanceM } from '../geo.js';
 import { knownStations } from '../station-catalog.js';
 import { BlockedError, type CollectContext, type Collector, type CollectedItem } from './types.js';
@@ -73,6 +73,7 @@ interface FeedState {
   url: URL;
   log: FeedLog;
   shot: string | null;
+  next: { afterPage: number; requests: number; failed: number; http: Set<number>; repeated: boolean } | null;
 }
 
 /** 지역 범위마다 지도 화면을 열고 매물 목록을 최근 순으로 받는다. */
@@ -90,7 +91,7 @@ export async function collectDaangn(ctx: CollectContext, targets: ReturnType<typ
   const mainFrame = page.mainFrame();
   let opening: FeedState | null = null;
   let current: FeedState | null = null;
-  const owners = new WeakMap<Request, FeedState>();
+  const owners = new WeakMap<Request, { state: FeedState; next: FeedState['next'] }>();
   let blocked: number | null = null;
   const pending: Promise<void>[] = [];
   const onNavigation = (frame: Frame) => {
@@ -112,14 +113,21 @@ export async function collectDaangn(ctx: CollectContext, targets: ReturnType<typ
       if (!current) return;
       const url = new URL(request.url());
       if (!/(^|\.)karrotmarket\.com$/.test(url.hostname) || !url.pathname.endsWith('/graphql')) return;
-      owners.set(request, current);
+      const next = current.next;
+      if (next) next.requests++;
+      owners.set(request, { state: current, next });
     } catch {
       // 서비스 워커가 시작한 요청에는 페이지 프레임이 없다.
     }
   };
+  const onRequestFailed = (request: Request) => {
+    const owner = owners.get(request);
+    if (owner?.state === current && owner.next) owner.next.failed++;
+  };
   const onResponse = (r: Response) => {
-    const state = owners.get(r.request());
-    if (!state || state !== current) return;
+    const owner = owners.get(r.request());
+    if (!owner || owner.state !== current) return;
+    const { state, next } = owner;
     pending.push(
       (async () => {
         const status = r.status();
@@ -128,16 +136,30 @@ export async function collectDaangn(ctx: CollectContext, targets: ReturnType<typ
           session.record('daangn', 'data', r.url(), status, '차단 응답');
           return;
         }
-        if (status < 200 || status >= 300) return;
+        if (status < 200 || status >= 300) {
+          next?.http.add(status);
+          return;
+        }
         const body = await r.text().catch(() => '');
         // 당근은 모든 요청이 같은 /graphql 주소라 지도 매물 목록 응답만 고른다.
         if (state !== current || !body.includes('"articleFeed"')) return;
         const read = parseDaangnFeed(body);
         if (read.hasNextPage === null) return;
         const log = state.log;
-        // 같은 페이지를 다시 받으면 한 번만 센다. 빈 마지막 칸은 다른 목록 요청일 수 있어 끝으로 치지 않는다.
+        // 빈 종료 응답은 다음 목록을 내린 뒤 떠난 같은 문서의 요청일 때만 인정한다.
+        if (!read.ids.length && !read.hasNextPage) {
+          if (next && state.next === next && next.afterPage === log.pages && log.pages > 0 && isEmptyDaangnFeedEnd(body)) {
+            log.ended = true;
+            session.record('daangn', 'data', r.url(), status, '빈 마지막 응답으로 목록 종료 확인');
+          }
+          return;
+        }
+        // 같은 페이지를 다시 받으면 한 번만 센다.
         const key = read.endCursor ?? `none:${read.ids.join(',')}`;
-        if (log.cursors.has(key) || (!read.ids.length && !read.hasNextPage)) return;
+        if (log.cursors.has(key)) {
+          if (next) next.repeated = true;
+          return;
+        }
         log.cursors.add(key);
         log.pages += 1;
         log.ended = read.hasNextPage === false;
@@ -197,6 +219,7 @@ export async function collectDaangn(ctx: CollectContext, targets: ReturnType<typ
 
   page.on('framenavigated', onNavigation);
   page.on('request', onRequest);
+  page.on('requestfailed', onRequestFailed);
   page.on('response', onResponse);
   try {
     for (const [i, target] of targets.entries()) {
@@ -211,7 +234,7 @@ export async function collectDaangn(ctx: CollectContext, targets: ReturnType<typ
         pages: 0, cursors: new Set(), ids: new Set(), housingIds: new Set(),
         excluded: new Set(), unreadable: new Set(), invalid: false, ended: false,
       };
-      const state: FeedState = { url: new URL(daangnFeedUrl(station.name, box)), log, shot: null };
+      const state: FeedState = { url: new URL(daangnFeedUrl(station.name, box)), log, shot: null, next: null };
       const where = `${area.name} (${i + 1}/${targets.length})`;
       let problem: string | null = null;
       let retryable = true;
@@ -244,16 +267,26 @@ export async function collectDaangn(ctx: CollectContext, targets: ReturnType<typ
 
         while (!log.ended && !ctx.stopped?.()) {
           const before = log.pages;
-          for (let attempt = 0; attempt < 2 && log.pages === before; attempt += 1) {
+          const next = { afterPage: before, requests: 0, failed: 0, http: new Set<number>(), repeated: false };
+          for (let attempt = 0; attempt < 2 && !log.ended && log.pages === before; attempt += 1) {
             ctx.progress(`당근부동산, ${where}, ${log.pages}쪽에서 주거 ${log.housingIds.size}건 읽음, 다음 목록 대기 중`);
             // 보이는 조회와 자동 조회 모두 같은 간격으로 요청한다.
             await page.waitForTimeout(3000 + Math.floor(Math.random() * 2001));
             await settle();
-            if (ctx.stopped?.() || log.pages > before) break;
+            if (ctx.stopped?.() || log.ended || log.pages > before) break;
+            state.next = next;
             await scrollList();
-            await waitFor(() => log.pages > before, NEXT_WAIT_MS);
+            await waitFor(() => log.ended || log.pages > before, NEXT_WAIT_MS);
           }
-          if (log.pages === before) break;
+          if (!log.ended && log.pages === before) {
+            const { requests, failed, http, repeated } = next;
+            problem = !requests ? '스크롤 뒤 목록 요청이 발생하지 않음'
+              : repeated ? '다음 목록 대신 이미 받은 페이지가 반복됨'
+              : http.size || failed ? `다음 목록 미확인 (스크롤 뒤 HTTP 오류 ${[...http].join(', ') || '없음'}, 네트워크 실패 ${failed}건)`
+              : '스크롤 뒤 요청은 있었으나 다음 목록이나 종료 응답을 확인하지 못함';
+            break;
+          }
+          state.next = null;
         }
       } catch (error) {
         problem = error instanceof Error ? error.message.split('\n')[0] : String(error);
@@ -285,6 +318,7 @@ export async function collectDaangn(ctx: CollectContext, targets: ReturnType<typ
   } finally {
     page.off('framenavigated', onNavigation);
     page.off('request', onRequest);
+    page.off('requestfailed', onRequestFailed);
     current = null;
     page.off('response', onResponse);
     await Promise.allSettled(pending.splice(0));

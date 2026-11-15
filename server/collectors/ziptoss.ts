@@ -30,7 +30,7 @@ function toPrice(raw: any): PriceOption | null {
 }
 
 function normalize(p: any): NormalizedListing | null {
-  if (!p?.id) return null;
+  if ((typeof p?.id !== 'number' && typeof p?.id !== 'string') || !/^\d+$/.test(String(p.id)) || Number(p.id) === 0) return null;
   const b = p.building ?? {};
   const coords = b.point?.coordinates;
   const lat = coords ? toNumber(coords[1]) : null;
@@ -68,7 +68,7 @@ function normalize(p: any): NormalizedListing | null {
   const explain: ExplainRow[] = [
     {
       label: '가격',
-      raw: rawPrices.map((x: any) => `${x.contract} deposit=${x.deposit} monthly=${x.monthly}`).join(' / ') || '없음',
+      raw: rawPrices.map((x: any) => `${x?.contract} deposit=${x?.deposit} monthly=${x?.monthly}`).join(' / ') || '없음',
       value: listing.prices.map(priceText).join(', ') || '없음',
       note: '사이트 값이 이미 만원 단위라 그대로 씀',
     },
@@ -86,16 +86,12 @@ function normalize(p: any): NormalizedListing | null {
   return listing;
 }
 
-/** 지역마다 반경 안(+600m)의 역 페이지를 고른다. 겹치는 역은 한 번만 연다. */
-function stationsFor(areas: Area[]): Station[] {
-  const picked = new Map<string, Station>();
-  for (const area of areas) {
-    const ranked = knownStations().map((s) => ({ s, d: distanceM(area.lat, area.lng, s.lat, s.lng) })).sort((a, b) => a.d - b.d);
-    const near = ranked.filter((x) => x.d <= area.radiusM + 600);
-    const chosen = near.length ? near : ranked.filter((x) => x.d <= 2000).slice(0, 1);
-    for (const { s } of chosen) picked.set(s.name, s);
-  }
-  return [...picked.values()];
+/** 지역마다 반경 안(+600m)의 역 페이지를 고르고, 없으면 2km 안에서 가장 가까운 역을 고른다. */
+function stationsFor(area: Area, catalog: Station[]): Station[] {
+  const ranked = catalog.map((s) => ({ s, d: distanceM(area.lat, area.lng, s.lat, s.lng) })).sort((a, b) => a.d - b.d);
+  const near = ranked.filter((x) => x.d <= area.radiusM + 600);
+  const chosen = near.length ? near : ranked.filter((x) => x.d <= 2000).slice(0, 1);
+  return chosen.map(({ s }) => s);
 }
 
 export const ziptoss: Collector = {
@@ -104,10 +100,13 @@ export const ziptoss: Collector = {
   async collect(ctx) {
     const { session } = ctx;
     const page = session.page;
-    const stations = stationsFor(ctx.areas);
+    const catalog = knownStations();
+    const stationPlans = ctx.areas.map((area) => ({ area, stations: stationsFor(area, catalog) }));
+    const stations = [...new Map(stationPlans.flatMap((plan) => plan.stations.map((station) => [station.name, station] as const))).values()];
+    const stationResults = new Map<string, { ids: string[]; rejected: number }>();
     const items: CollectedItem[] = [];
-    for (const area of ctx.areas) {
-      if (!stations.some((s) => distanceM(area.lat, area.lng, s.lat, s.lng) <= Math.max(area.radiusM + 600, 2000))) {
+    for (const { area, stations: plannedStations } of stationPlans) {
+      if (!plannedStations.length) {
         ctx.partial(`집토스 ${area.name}: 조회할 역을 찾지 못함`);
       }
     }
@@ -118,10 +117,18 @@ export const ziptoss: Collector = {
     );
 
     for (const [i, station] of stations.entries()) {
+      if (ctx.stopped?.()) break;
       if (i > 0) await session.rest();
       const url = `https://ziptoss.com/map/${encodeURIComponent(station.name)}`;
       ctx.progress(`집토스, ${station.name} 주변 (${i + 1}/${stations.length})`);
-      const response = await session.goto('ziptoss', url);
+      let response;
+      try {
+        response = await session.goto('ziptoss', url);
+      } catch {
+        if (ctx.stopped?.()) break;
+        ctx.partial(`집토스 ${station.name}: 페이지를 열지 못함`);
+        continue;
+      }
       const status = response?.status() ?? 0;
       if (status === 403 || status === 429) {
         ctx.partial(`집토스 ${station.name}: 접근 제한(HTTP ${status})으로 조회 중단`, false);
@@ -139,7 +146,7 @@ export const ziptoss: Collector = {
         const el = document.getElementById('__NEXT_DATA__');
         const data = el?.textContent ? JSON.parse(el.textContent) : (window as any).__NEXT_DATA__;
         return data?.props?.pageProps?.properties ?? null;
-      });
+      }).catch(() => null);
       if (!Array.isArray(raws)) {
         ctx.log(`집토스: ${station.name} 페이지에서 매물 데이터를 찾지 못했습니다(화면 구조가 바뀌었을 수 있음)`);
         ctx.partial(`집토스 ${station.name}: 매물 목록을 읽지 못함`);
@@ -148,6 +155,9 @@ export const ziptoss: Collector = {
       session.record('ziptoss', 'data', url, status, `페이지에 담긴 매물 목록 ${raws.length}건 읽음`);
       const pairs = raws.map((raw) => ({ raw, listing: normalize(raw) })).filter((x): x is { raw: any; listing: NormalizedListing } => !!x.listing);
       const listings = pairs.map((x) => x.listing);
+      const rejected = raws.length - listings.length;
+      stationResults.set(station.name, { ids: listings.map((listing) => listing.sourceId), rejected });
+      if (rejected) ctx.partial(`집토스 ${station.name}: 식별값을 읽지 못한 매물 ${rejected}건`);
 
       // 지도가 뜨면 목록을 한 번 더 불러와 카드가 잠깐 회색 로딩 상태가 되므로, 그게 끝나고 글자가 찬 카드가 보일 때까지 기다린다.
       await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
@@ -215,6 +225,22 @@ export const ziptoss: Collector = {
         : `, 그중 ${missing}건은 화면 표에서 찾지 못해 배지를 못 붙임`;
       ctx.log(`집토스: ${station.name} ${listings.length}건 읽음${note}`);
       await session.pause(PAGE_DELAY_MS);
+    }
+    for (const { area, stations: plannedStations } of stationPlans) {
+      const read = plannedStations.flatMap((station) => stationResults.get(station.name) ?? []);
+      const ids = [...new Set(read.flatMap((page) => page.ids))];
+      const rejected = read.reduce((total, page) => total + page.rejected, 0);
+      const reasons: string[] = [];
+      if (!plannedStations.length) reasons.push('조회할 역을 찾지 못함');
+      else if (read.length < plannedStations.length) reasons.push(`목록을 못 읽은 역 페이지 ${plannedStations.length - read.length}곳`);
+      if (rejected) reasons.push(`식별값을 읽지 못한 매물 ${rejected}건`);
+      const complete = reasons.length === 0 && !area.region;
+      if (area.region) reasons.push('역 페이지로 구나 동 전체 범위를 확인할 수 없음');
+      ctx.coverage?.({
+        areaId: area.id, areaName: area.name, category: 'station-pages', label: '역 페이지',
+        pages: read.length, totalPages: plannedStations.length, total: null, received: ids.length, stored: 0,
+        complete, reason: reasons.join(', ') || '예정된 역 페이지의 목록을 모두 읽음',
+      }, ids);
     }
     return items;
   },

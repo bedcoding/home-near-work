@@ -621,7 +621,7 @@ test('Daangn account responses are never stored and identity fields are masked',
   assert.equal(r.api.redact('{"realName":"x","di":"abc","ci":"def","name":"y"}'), '{"realName":"***","di":"***","ci":"***","name":"y"}');
 });
 
-async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePrevious }) {
+async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePrevious, emptyEnd, unsolicitedEnd, stalled, advanceTime }) {
   const { collectDaangn } = await import('../server/collectors/daangn.ts');
   const { url } = daangnCapture([], null, false, 'fixture');
   const pauses = [], actions = [], partial = [], coverage = [];
@@ -640,14 +640,15 @@ async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePreviou
       url: () => url,
       status: () => status,
       text: async () => JSON.stringify({ data: { articleFeed: {
-        edges: [{ node: { article: daangnArticle(id) } }],
-        pageInfo: { endCursor: String(cursor), hasNextPage },
+        edges: id === null ? [] : [{ node: { article: daangnArticle(id) } }],
+        pageInfo: { endCursor: cursor === null ? null : String(cursor), hasNextPage },
       } } }),
     });
   }
   function emitNext() {
     const index = ++pageNumber;
-    reply(startRequest(), (opened - 1) * 1000 + index, index, index < lastPage, index === blockedAt ? 429 : 200);
+    const terminal = emptyEnd && index === lastPage;
+    reply(startRequest(), terminal ? null : (opened - 1) * 1000 + index, terminal ? null : index, index < lastPage, index === blockedAt ? 429 : 200);
   }
   const page = {
     on: (event, handler) => { listeners.set(event, handler); },
@@ -655,6 +656,7 @@ async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePreviou
     mainFrame: () => frame,
     evaluate: async () => ({ x: 20, y: 20 }),
     waitForTimeout: async ms => {
+      advanceTime?.(ms);
       if (ms !== 250) {
         pauses.push(ms);
         if (stopDuringWait) {
@@ -666,6 +668,7 @@ async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePreviou
   };
   const session = {
     page,
+    record() {},
     rest: async () => {},
     goto: async (_source, targetUrl) => {
       opened++;
@@ -678,11 +681,19 @@ async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePreviou
         reply(previousDocumentRequest, 998, 2, false);
       }
       emitNext();
+      if (unsolicitedEnd) reply(startRequest(), null, null, false);
       if (latePrevious && opened === 1) lateRequest = startRequest();
       return { status: () => 200 };
     },
     screenshot: async () => null,
-    wheel: async () => { actions.push(pauses.length); emitNext(); },
+    wheel: async () => {
+      actions.push(pauses.length);
+      if (stalled === 'silent') return;
+      if (stalled === 'failed') listeners.get('requestfailed')(startRequest());
+      else if (stalled === 'http') reply(startRequest(), 2, 2, true, 503);
+      else if (stalled === 'repeated') reply(startRequest(), 1, 1, true);
+      else emitNext();
+    },
   };
   const targets = (blockedAt || latePrevious ? [1, 2] : [1]).map(id => ({
     area: { id, name: `가상동 ${id}` },
@@ -714,6 +725,28 @@ test('map feed accepts a response before navigation returns and rejects late res
   assert.deepEqual(run.items.map(item => item.listing.sourceId), ['1', '1001']);
   assert.equal(run.partial.length, 0);
   assert.notEqual(run.items[0].pageUrl, run.items[1].pageUrl);
+});
+
+test('map feed accepts a blank terminal response after scrolling only', async () => {
+  const run = await collectMapFeed({ lastPage: 3, emptyEnd: true, unsolicitedEnd: true });
+  assert.deepEqual(run.actions, [1, 2]);
+  assert.deepEqual(run.items.map(item => item.listing.sourceId), ['1', '2']);
+  assert.deepEqual(run.coverage.map(row => [row.pages, row.complete, row.reason]), [[2, true, '목록 끝까지 받음']]);
+  assert.deepEqual(run.partial, []);
+});
+
+test('map feed distinguishes silent scrolls, failed requests and repeated pages', async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  for (const [stalled, reason] of [
+    ['silent', /목록 요청이 발생하지 않음/], ['failed', /네트워크 실패 2건/],
+    ['http', /HTTP 오류 503/], ['repeated', /페이지가 반복됨/],
+  ]) {
+    const run = await collectMapFeed({ lastPage: 3, stalled, advanceTime: ms => { now += ms; } });
+    assert.equal(run.items.length, 1);
+    assert.equal(run.coverage[0].complete, false);
+    assert.match(run.coverage[0].reason, reason);
+  }
 });
 
 test('map feed keeps the pages already read when access is limited or the user stops', async () => {

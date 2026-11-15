@@ -161,6 +161,16 @@ export function parseDaangnFeed(body: string): DaangnPage {
   }
 }
 
+/** 빈 종료 응답을 광고만 있거나 잘못 읽은 페이지와 구분한다. */
+export function isEmptyDaangnFeedEnd(body: string): boolean {
+  try {
+    const feed = JSON.parse(body)?.data?.articleFeed;
+    return Array.isArray(feed?.edges) && feed.edges.length === 0 && feed.pageInfo?.hasNextPage === false;
+  } catch {
+    return false;
+  }
+}
+
 /** 한 역의 목록을 처음부터 끝까지 받았는지와 매물별 서버 저장을 대조하는 기록. */
 export interface DaangnLedger {
   stationName: string | null;

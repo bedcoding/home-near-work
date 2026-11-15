@@ -136,15 +136,17 @@ function coverage(area: Area, bounds: any) {
   const mLat = 111320;
   const mLng = 111320 * Math.cos((area.lat * Math.PI) / 180);
   const margins = {
-    north: (latTo - area.lat) * mLat,
-    south: (area.lat - latFrom) * mLat,
-    east: (lngTo - area.lng) * mLng,
-    west: (area.lng - lngFrom) * mLng,
+    북쪽: (latTo - area.lat) * mLat,
+    남쪽: (area.lat - latFrom) * mLat,
+    동쪽: (lngTo - area.lng) * mLng,
+    서쪽: (area.lng - lngFrom) * mLng,
   };
   return {
     heightKm: ((latTo - latFrom) * mLat) / 1000,
     widthKm: ((lngTo - lngFrom) * mLng) / 1000,
-    minMargin: Math.min(...Object.values(margins)),
+    shortages: Object.entries(margins)
+      .filter(([, margin]) => margin < area.radiusM)
+      .map(([direction, margin]) => `${direction} ${Math.ceil(area.radiusM - margin)}m 부족`),
   };
 }
 
@@ -161,6 +163,7 @@ export const peterpanz: Collector = {
     let current = new Map<string, any>();
     let total = 0;
     let pagesLoaded = 0;
+    const receivedPages = new Set<number>();
     let bounds: any = null;
     let firstPageUrl: string | null = null;
     let orderId: string | null = null;
@@ -176,12 +179,14 @@ export const peterpanz: Collector = {
             return;
           }
           const data: any = await r.json().catch(() => null);
-          if (!data || r.status() >= 400 || data.totalCount == null || !Number.isFinite(Number(data.totalCount))) {
+          const count = toNumber(data?.totalCount);
+          if (r.status() >= 400 || count == null || !Number.isSafeInteger(count) || count < 0 || !data.houses || typeof data.houses !== 'object') {
             session.record('peterpanz', 'data', url, r.status(), '응답을 읽지 못함');
             return;
           }
           const pageIndex = Number(new URL(url).searchParams.get('pageIndex') ?? '1');
-          const houses = Object.values(data.houses ?? {}).flatMap((g: any) => Object.values(g ?? {}).flat()) as any[];
+          if (!Number.isInteger(pageIndex) || pageIndex < 1) return;
+          const houses = Object.values(data.houses).flatMap((g: any) => Object.values(g ?? {}).flat()) as any[];
           if (!collecting) {
             session.record('peterpanz', 'data', url, r.status(), `화면 이동 중에 불러온 목록 ${houses.length}건(전체 ${data.totalCount ?? '?'}건), 저장 안 함`);
             return;
@@ -189,14 +194,16 @@ export const peterpanz: Collector = {
           if (pageIndex === 1) {
             // 지도가 옮겨질 때마다 1쪽부터 다시 불러오므로 새로 시작한다.
             current = new Map();
-            total = Number(data.totalCount ?? 0);
+            total = count;
             bounds = data.debug?.search ?? null;
             pagesLoaded = 0;
+            receivedPages.clear();
             firstPageUrl = url;
             orderId = data.orderId != null ? String(data.orderId) : null;
           }
           for (const h of houses) if (h?.hidx) current.set(String(h.hidx), h);
           pagesLoaded = Math.max(pagesLoaded, pageIndex);
+          receivedPages.add(pageIndex);
           session.record('peterpanz', 'data', url, r.status(), `목록 ${pageIndex}쪽 ${houses.length}건 (전체 ${data.totalCount ?? '?'}건)`);
         })(),
       );
@@ -215,9 +222,17 @@ export const peterpanz: Collector = {
         for (const cat of CATEGORIES) {
           current = new Map();
           total = 0;
+          pagesLoaded = 0;
+          receivedPages.clear();
           bounds = null;
           firstPageUrl = null;
           orderId = null;
+          const scope = { areaId: area.id, areaName: area.name, category: cat.path, label: cat.label, stored: 0 };
+          const issues: string[] = [];
+          const reportIssue = (reason: string, retry?: boolean) => {
+            issues.push(reason);
+            ctx.partial(`피터팬 ${area.name} ${cat.label}: ${reason}`, retry);
+          };
 
           // 1) 역 위치로 지도를 연다.
           collecting = true;
@@ -237,7 +252,9 @@ export const peterpanz: Collector = {
           }
           if (!openedNear(area, bounds, zoom)) {
             // 엉뚱한 범위(서울 전체 등)의 목록은 읽지 않는다. 다 돈 것으로 치지 않아 안 보인 매물을 사라짐으로 두지도 않는다.
-            ctx.partial(`피터팬 ${area.name} ${cat.label}: 지도가 역 근처로 열리지 않음`);
+            const reason = '지도가 역 근처로 열리지 않음';
+            reportIssue(reason);
+            ctx.coverage?.({ ...scope, pages: 0, totalPages: null, total: null, received: 0, complete: false, reason }, []);
             collecting = false;
             continue;
           }
@@ -259,17 +276,6 @@ export const peterpanz: Collector = {
             await session.pause(1200);
           }
           await settle();
-
-          const cover = coverage(area, bounds);
-          if (cover) {
-            ctx.log(`피터팬: ${area.name} ${cat.label} 지도 범위 남북 ${cover.heightKm.toFixed(1)}km × 동서 ${cover.widthKm.toFixed(1)}km, 목록 전체 ${total}건`);
-            if (cover.minMargin < area.radiusM) {
-              ctx.log(`피터팬: 지도 범위가 반경 ${area.radiusM}m를 다 덮지 못합니다(가장 짧은 쪽 ${Math.round(cover.minMargin)}m)`);
-              ctx.partial(`피터팬 ${area.name} ${cat.label}: 지도 범위가 설정 반경을 덮지 못함`, false);
-            }
-          } else {
-            ctx.partial(`피터팬 ${area.name} ${cat.label}: 지도 조회 범위를 확인하지 못함`);
-          }
 
           // 3) 목록을 휠로 내려 끝까지 불러온다. 새로 읽힌 카드는 차례로 칠한다.
           const listBox = await page.locator('div.list__wrapper').boundingBox();
@@ -315,26 +321,46 @@ export const peterpanz: Collector = {
                 return { status: r.status, json: type.includes('json') ? await r.json() : null };
               }, next.toString());
               if (res.status === 403 || res.status === 429) throw new BlockedError(`피터팬이 요청을 막았습니다(HTTP ${res.status}). 우회하지 않고 멈춥니다.`);
-              if (res.status >= 400 || !res.json || res.json.houses == null) {
-                ctx.partial(`피터팬 ${area.name} ${cat.label}: ${pageIndex}쪽 응답을 읽지 못함`);
+              if (res.status >= 400 || !res.json?.houses || typeof res.json.houses !== 'object') {
+                reportIssue(`${pageIndex}쪽 응답을 읽지 못함`);
                 break;
               }
               const houses = Object.values(res.json?.houses ?? {}).flatMap((g: any) => Object.values(g ?? {}).flat()) as any[];
               for (const h of houses) if (h?.hidx) current.set(String(h.hidx), h);
-              pagesLoaded = pageIndex;
+              pagesLoaded = Math.max(pagesLoaded, pageIndex);
+              receivedPages.add(pageIndex);
               session.record('peterpanz', 'data', next.toString(), res.status, `휠로 안 불러와져 이어 받은 목록 ${pageIndex}쪽 ${houses.length}건`);
               await session.pause(1500);
             }
           }
+          await settle();
+          collecting = false;
+
+          const cover = coverage(area, bounds);
+          if (cover) {
+            ctx.log(`피터팬: ${area.name} ${cat.label} 지도 범위 남북 ${cover.heightKm.toFixed(1)}km × 동서 ${cover.widthKm.toFixed(1)}km, 목록 전체 ${total}건`);
+            if (cover.shortages.length) reportIssue(`반경 ${area.radiusM}m 중 ${cover.shortages.join(', ')}`, false);
+          } else {
+            reportIssue('지도 조회 범위를 확인하지 못함');
+          }
+
+          const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+          const confirmedPages = [...receivedPages].filter(pageIndex => pageIndex <= totalPages).length;
+          if (confirmedPages < totalPages) reportIssue(`목록 ${totalPages}쪽 중 ${confirmedPages}쪽만 확인`);
           ctx.log(`피터팬: ${area.name} ${cat.label} 목록 ${total}건 중 ${current.size}건 읽음`);
-          if (current.size < total) ctx.partial(`피터팬 ${area.name} ${cat.label}: 전체 ${total}건 중 ${current.size}건만 읽음`);
+          if (current.size !== total) reportIssue(`목록 전체 ${total}건, 고유 매물 ${current.size}건 수신`);
 
           const shot = await session.screenshot('peterpanz', `${area.name}-${cat.label}`);
+          const ids: string[] = [];
           for (const raw of current.values()) {
             const listing = normalize(raw);
-            if (listing) items.push({ listing, raw, pageUrl: page.url(), screenshot: shot });
+            if (listing) {
+              ids.push(listing.sourceId);
+              items.push({ listing, raw, pageUrl: page.url(), screenshot: shot });
+            }
           }
-          collecting = false;
+          ctx.coverage?.({ ...scope, pages: confirmedPages, totalPages, total, received: ids.length,
+            complete: !issues.length, reason: issues.join(', ') || `설정 반경 ${area.radiusM}m의 지도 목록 확인` }, ids);
           await session.pause(PAGE_DELAY_MS);
         }
       }

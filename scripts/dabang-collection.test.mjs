@@ -97,6 +97,7 @@ test('a last page, duplicate responses, missing rows or changing totals cannot f
   const missing = new DabangPagination();
   missing.accept(body(1, 2, [101]), 1, 'apt');
   assert.equal(missing.result().complete, false);
+  assert.match(missing.result().reason, /마지막 페이지 수신, 첫 페이지 표시 2건, 고유 응답 1건 \(응답이 1건 적음\)/);
   const changed = new DabangPagination();
   changed.accept(body(1, 3, [101, 102]), 1, 'apt');
   changed.accept(body(2, 4, [103, 104]), 2, 'apt');
