@@ -6,6 +6,7 @@ import ts from 'typescript';
 import * as format from '../shared/format.ts';
 import * as geo from '../shared/geo.ts';
 import * as types from '../server/collectors/types.ts';
+import * as peterpanzCoverage from '../server/peterpanz-coverage.ts';
 
 function loadCollector(id, overrides = {}) {
   const code = ts.transpileModule(fs.readFileSync(new URL(`../server/collectors/${id}.ts`, import.meta.url), 'utf8'), {
@@ -13,7 +14,7 @@ function loadCollector(id, overrides = {}) {
   }).outputText;
   const dependencies = {
     '../config.js': { PAGE_DELAY_MS: 0 }, '../geo.js': geo,
-    './types.js': types, '../../shared/format.js': format, ...overrides,
+    './types.js': types, '../../shared/format.js': format, '../peterpanz-coverage.js': peterpanzCoverage, ...overrides,
   };
   const context = { exports: {}, URL, require: id => dependencies[id] };
   vm.runInNewContext(code, context);
@@ -52,12 +53,12 @@ test('a blocked station stops the provider and keeps the earlier station results
 });
 
 function simulatedPage(emit, status = 403) {
-  let listener;
+  const listeners = new Map();
   let navigation = '';
   const opened = [];
   const page = {
-    on(_event, handler) { listener = handler; },
-    off(_event, handler) { assert.equal(handler, listener); listener = undefined; },
+    on(event, handler) { listeners.set(event, handler); },
+    off(event, handler) { assert.equal(handler, listeners.get(event)); listeners.delete(event); },
     url: () => navigation,
     waitForResponse: async () => null,
     locator: () => ({ first: () => ({ isVisible: async () => false }), boundingBox: async () => null }),
@@ -70,11 +71,13 @@ function simulatedPage(emit, status = 403) {
     api.hostname = api.hostname.replace(/^(www\.)?/, 'api.');
     emit((path, body) => {
       const address = new URL(path, api);
-      listener({ url: () => address.href, status: () => 200, json: async () => body });
+      const request = { url: () => address.href };
+      listeners.get('request')?.(request);
+      listeners.get('response')({ request: () => request, url: request.url, status: () => 200, json: async () => body });
     });
     return { status: () => 200 };
   };
-  return { page, goto, opened, listening: () => !!listener };
+  return { page, goto, opened, listening: () => listeners.size > 0 };
 }
 
 test('a blocked map category keeps the completed category and detaches its response listener', async () => {

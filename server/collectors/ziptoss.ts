@@ -1,7 +1,8 @@
+import type { Request, Response } from 'playwright';
 import { PAGE_DELAY_MS } from '../config.js';
 import { distanceM } from '../geo.js';
 import { knownStations } from '../station-catalog.js';
-import { toNumber, type Collector, type CollectedItem } from './types.js';
+import { toNumber, type CollectContext, type Collector, type CollectedItem } from './types.js';
 import { floorText, money, priceText, yesNo } from '../../shared/format.js';
 import type { Area, DealType, ExplainRow, NormalizedListing, PriceOption, Station } from '../../shared/types.js';
 
@@ -94,6 +95,153 @@ function stationsFor(area: Area, catalog: Station[]): Station[] {
   return chosen.map(({ s }) => s);
 }
 
+const MAP_ORIGIN = 'https://ziptoss.com';
+const MAP_ZOOM = 16;
+const MAP_PAGE_SIZE = 50;
+const MAP_PAGE_LIMIT = 4;
+const MAP_SIDE_LIMIT_M = 5000;
+
+/** 공개 지도에서 브라우저가 시작한 목록 요청만 읽는다. */
+async function collectMapWindow(ctx: CollectContext, area: Area) {
+  const { session } = ctx;
+  const page = session.page;
+  const mainFrame = page.mainFrame();
+  const uiUrl = new URL('/', MAP_ORIGIN);
+  uiUrl.searchParams.set('zoom', String(MAP_ZOOM));
+  uiUrl.searchParams.set('lat', String(area.lat));
+  uiUrl.searchParams.set('lng', String(area.lng));
+  const items = new Map<string, CollectedItem>();
+  const requests = new WeakMap<Request, { number: number; scope: string; widthM: number; heightM: number }>();
+  let scope: string | null = null;
+  let mapSize = '';
+  let pages = 0;
+  let rejected = 0;
+  let blocked: number | null = null;
+  let shortPage = false;
+  let repeated = false;
+  let failure: string | null = null;
+  let active = true;
+  const stopped = () => blocked !== null || ctx.stopped?.();
+
+  const onRequest = (request: Request) => {
+    if (stopped() || request.resourceType() !== 'xhr' || request.method() !== 'GET') return;
+    const url = new URL(request.url());
+    if (url.origin !== MAP_ORIGIN || url.pathname !== '/api/zp/search') return;
+    try { if (request.frame() !== mainFrame) return; } catch { return; }
+    const q = url.searchParams;
+    const number = Number(q.get('page'));
+    if (!Number.isInteger(number) || number < 1 || number > MAP_PAGE_LIMIT || !(Number(q.get('zoom')) > 0)) return;
+    const [south, north, west, east, lat, lng] = ['minLat', 'maxLat', 'minLng', 'maxLng', 'lat', 'lng'].map(key => toNumber(q.get(key)));
+    if (south == null || north == null || west == null || east == null || lat == null || lng == null) return;
+    if (south > area.lat || north < area.lat || west > area.lng || east < area.lng || distanceM(area.lat, area.lng, lat, lng) > 200) return;
+    // 요청의 검색 축척은 화면 주소의 줌 값과 다르다. 지도 경계의 실제 길이로 확인한다.
+    const widthM = distanceM(lat, west, lat, east);
+    const heightM = distanceM(south, lng, north, lng);
+    if (widthM <= 0 || widthM > MAP_SIDE_LIMIT_M || heightM <= 0 || heightM > MAP_SIDE_LIMIT_M) return;
+    q.delete('page');
+    q.sort();
+    requests.set(request, { number, scope: q.toString(), widthM, heightM });
+  };
+  const onResponse = async (response: Response) => {
+    const request = requests.get(response.request());
+    if (!request || stopped() || (scope !== null && request.scope !== scope)) return;
+    const status = response.status();
+    if (status === 403 || status === 429) {
+      blocked = status;
+      session.record('ziptoss', 'data', response.url(), status, '지도 목록 접근 제한');
+      return;
+    }
+    if (request.number !== pages + 1) return;
+    if (status < 200 || status >= 300) {
+      failure = `${request.number}쪽 HTTP ${status}`;
+      return;
+    }
+    const body: unknown = await response.json().catch(() => null);
+    if (!active || stopped() || request.number !== pages + 1 || (scope !== null && request.scope !== scope)) return;
+    if (!Array.isArray(body)) {
+      failure = `${request.number}쪽 목록을 읽지 못함`;
+      return;
+    }
+    let added = 0;
+    for (const raw of body) {
+      const listing = raw?.building && Array.isArray(raw.prices) ? normalize(raw) : null;
+      if (!listing) {
+        rejected++;
+        continue;
+      }
+      if (!items.has(listing.sourceId)) added++;
+      items.set(listing.sourceId, { raw, listing, pageUrl: uiUrl.href, screenshot: null });
+    }
+    if (scope === null) {
+      scope = request.scope;
+      mapSize = `지도 동서 ${(request.widthM / 1000).toFixed(1)}km, 남북 ${(request.heightM / 1000).toFixed(1)}km`;
+    }
+    pages = request.number;
+    failure = null;
+    repeated = body.length >= MAP_PAGE_SIZE && added === 0;
+    shortPage = body.length < MAP_PAGE_SIZE;
+    session.record('ziptoss', 'data', response.url(), status, `지도 목록 ${pages}쪽, 받은 ${body.length}건, 이전 쪽과 겹치지 않는 매물 ${added}건`);
+  };
+  const waitForPage = async (previous: number, timeout: number) => {
+    for (let elapsed = 0; elapsed < timeout && !stopped() && !failure && pages === previous; elapsed += 250) {
+      await page.waitForTimeout(250);
+    }
+  };
+
+  page.on('request', onRequest);
+  page.on('response', onResponse);
+  try {
+    ctx.progress(`집토스, ${area.name} 중심 지도 목록 추가 확인`);
+    const status = (await session.goto('ziptoss', uiUrl.href))?.status() ?? 0;
+    if (status === 403 || status === 429) blocked = status;
+    else if (status >= 400) failure = `지도 열기 HTTP ${status}`;
+    await waitForPage(0, 7000);
+    if (!pages && !failure) failure = '중심 좌표가 포함된 첫 지도 목록을 확인하지 못함';
+
+    while (pages < MAP_PAGE_LIMIT && !shortPage && !repeated && !failure && !stopped()) {
+      const before = pages;
+      ctx.progress(`집토스, ${area.name} 중심 지도 ${pages}쪽, 다음 목록 확인 중`);
+      const viewport = page.viewportSize();
+      const box = await page.locator('aside .scrollbar-container').boundingBox({ timeout: 2000 }).catch(() => null);
+      if (!box || !viewport) {
+        failure = '지도 옆 목록을 찾지 못함';
+        break;
+      }
+      const x = Math.round(box.x + box.width / 2);
+      const y = Math.round(Math.min(box.y + box.height * 0.63, viewport.height - 90));
+      for (let attempt = 0; attempt < 2 && !stopped() && !failure && pages === before; attempt++) {
+        if (stopped()) break;
+        await session.wheel(x, y, -700);
+        await page.waitForTimeout(300);
+        if (stopped() || pages > before) break;
+        await session.wheel(x, y, 22000);
+        await waitForPage(before, 3200);
+      }
+      if (pages === before && !failure) failure = `${before + 1}쪽 응답을 확인하지 못함`;
+    }
+  } catch {
+    if (!stopped()) failure = '지도 목록을 여는 중 오류가 발생함';
+  } finally {
+    active = false;
+    page.off('request', onRequest);
+    page.off('response', onResponse);
+  }
+
+  const outcome = blocked !== null ? `접근 제한(HTTP ${blocked})으로 중단`
+    : ctx.stopped?.() ? '조회 중단'
+    : failure ?? (repeated ? '고유 매물이 늘지 않는 목록을 받아 중단'
+      : shortPage ? '50건 미만인 페이지를 받았고 목록 끝 표시는 미확인' : `예정한 ${MAP_PAGE_LIMIT}쪽까지 확인`);
+  const reason = [outcome, mapSize, rejected ? `형식이 맞지 않는 매물 ${rejected}건` : '', '구 전체 범위 미확인'].filter(Boolean).join(', ');
+  ctx.log(`집토스 ${area.name} 중심 지도: ${pages}쪽에서 고유 매물 ${items.size}건, ${reason}`);
+  if (blocked !== null) ctx.partial(`집토스 ${area.name} 중심 지도: ${outcome}`, false);
+  else if (!ctx.stopped?.() && (failure || repeated || rejected)) ctx.partial(`집토스 ${area.name} 중심 지도: ${reason}`, false);
+  ctx.coverage?.({
+    areaId: area.id, areaName: area.name, category: 'map-window', label: '중심 지도',
+    pages, totalPages: null, total: null, received: items.size, stored: 0, complete: false, reason,
+  }, [...items.keys()]);
+  return { items: [...items.values()], blocked: blocked !== null };
+}
+
 export const ziptoss: Collector = {
   id: 'ziptoss',
   label: '집토스',
@@ -105,6 +253,7 @@ export const ziptoss: Collector = {
     const stations = [...new Map(stationPlans.flatMap((plan) => plan.stations.map((station) => [station.name, station] as const))).values()];
     const stationResults = new Map<string, { ids: string[]; rejected: number }>();
     const items: CollectedItem[] = [];
+    let blocked = false;
     for (const { area, stations: plannedStations } of stationPlans) {
       if (!plannedStations.length) {
         ctx.partial(`집토스 ${area.name}: 조회할 역을 찾지 못함`);
@@ -131,6 +280,7 @@ export const ziptoss: Collector = {
       }
       const status = response?.status() ?? 0;
       if (status === 403 || status === 429) {
+        blocked = true;
         ctx.partial(`집토스 ${station.name}: 접근 제한(HTTP ${status})으로 조회 중단`, false);
         break;
       }
@@ -241,6 +391,20 @@ export const ziptoss: Collector = {
         pages: read.length, totalPages: plannedStations.length, total: null, received: ids.length, stored: 0,
         complete, reason: reasons.join(', ') || '예정된 역 페이지의 목록을 모두 읽음',
       }, ids);
+    }
+    const seen = new Set(items.map(({ listing }) => listing.sourceId));
+    for (const area of ctx.areas) {
+      if (blocked || ctx.stopped?.()) break;
+      if (area.region?.kind !== 'gu') continue;
+      try { await session.rest(); } catch { break; }
+      if (ctx.stopped?.()) break;
+      const supplemental = await collectMapWindow(ctx, area);
+      for (const item of supplemental.items) {
+        if (seen.has(item.listing.sourceId)) continue;
+        seen.add(item.listing.sourceId);
+        items.push(item);
+      }
+      blocked = supplemental.blocked;
     }
     return items;
   },

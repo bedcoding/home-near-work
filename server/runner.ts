@@ -3,6 +3,7 @@ import { BrowserSession, restSeconds, type BadgeTone } from './browser.js';
 import { gusFor, nearNamesFor } from './collectors/gus.js';
 import { COLLECTORS } from './collectors/index.js';
 import { NOTICE_COLLECTORS, type NoticeCollector } from './collectors/notices.js';
+import { PETERPANZ_CATEGORIES } from './collectors/peterpanz.js';
 import { BlockedError, type CollectContext, type CollectedItem, type Collector } from './collectors/types.js';
 import { runCollectionPriceLimits } from './collection-price-limits.js';
 import { COLLECT_MARGIN_M } from './config.js';
@@ -522,7 +523,8 @@ async function execute(
         // 기본 탭은 닫으면 안 되므로 tab에는 따로 연 탭만 둔다(아래 finally가 tab만 닫는다).
         tab = collector.noTab ? null : await rootSession.fork();
         items = await collector.collect(makeCtx(tab ?? rootSession, { progress, missed, coverage, publishListings }));
-        if (areas.some((area) => area.region) && ['ziptoss', 'peterpanz'].includes(collector.id)) {
+        if (areas.some(({ id, region }) => region && (collector.id === 'ziptoss' || collector.id === 'peterpanz' &&
+          (region.kind !== 'gu' || PETERPANZ_CATEGORIES.some(category => !coverage.get(`${id}:${category.path}`)?.row.complete))))) {
           missed.push('역과 지도 범위의 목록을 확인했습니다. 선택한 구나 동 전체는 확인하지 못했습니다');
         }
         if (state.stopping) {
