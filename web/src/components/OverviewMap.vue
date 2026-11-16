@@ -312,7 +312,11 @@ function listingBadges(l: ListingView) {
   if (!live && !l.isNew) return null;
   const badges = document.createElement('span');
   badges.className = 'listing-map-badges';
-  if (live) badges.appendChild(line('chip chip-live', '새 수집'));
+  if (live) {
+    const chip = line('chip chip-live', '새 수집');
+    chip.dataset.liveListingId = l.id;
+    badges.appendChild(chip);
+  }
   if (l.isNew) badges.appendChild(line('chip chip-new', '신규'));
   return badges;
 }
@@ -1535,44 +1539,47 @@ function drawLiveListings() {
   if (!map || !liveLayer) return;
   if (!props.liveListingIds?.size && !liveMarkers.size) return;
   const bounds = map.getBounds();
-  const groups = new Set<Group>();
-  const keep = new Set<string>();
-  let visible = 0;
+  const counts = new Map<string, number>();
   for (const id of props.liveListingIds ?? []) {
     const group = groupOf.get(id);
-    if (!group) continue;
-    const drawnGroup = drawn.get(group.key);
-    if (!drawnGroup) continue;
-    if (bounds.contains([group.lat, group.lng])) visible += 1;
-    if (groups.has(group)) continue;
-    groups.add(group);
-    keep.add(id);
+    if (group) counts.set(group.key, (counts.get(group.key) ?? 0) + 1);
+  }
 
-    let marker = liveMarkers.get(id);
+  let visible = 0;
+  for (const [key, count] of counts) {
+    const drawnGroup = drawn.get(key);
+    if (!drawnGroup) continue;
+    const { lat, lng } = drawnGroup.group;
+    if (bounds.contains([lat, lng])) visible += count;
+
+    let marker = liveMarkers.get(key);
     if (!marker) {
-      marker = L.marker([group.lat, group.lng], {
+      marker = L.marker([lat, lng], {
         pane: 'live-listings', keyboard: false, interactive: false,
         icon: L.divIcon({
-          className: 'live-listing', html: '<span class="live-ring"><span class="live-badge">새 수집</span></span>',
+          className: 'live-listing', html: '<span class="live-ring"><span class="live-badge"></span></span>',
           iconSize: [0, 0], iconAnchor: [0, 0],
         }),
       }).addTo(liveLayer);
-      liveMarkers.set(id, marker);
+      liveMarkers.set(key, marker);
       marker.getElement()?.setAttribute('aria-hidden', 'true');
-    } else if (!marker.getLatLng().equals([group.lat, group.lng])) {
-      marker.setLatLng([group.lat, group.lng]);
+    } else if (!marker.getLatLng().equals([lat, lng])) {
+      marker.setLatLng([lat, lng]);
     }
     const price = drawnGroup.marker instanceof L.Marker ? drawnGroup.marker.getElement()?.firstElementChild : null;
     const ring = marker.getElement()?.firstElementChild as HTMLElement | null;
     if (ring) {
       ring.style.width = `${price ? price.clientWidth + 12 : 34}px`;
       ring.style.height = `${price ? price.clientHeight + 12 : 34}px`;
+      const badge = ring.firstElementChild;
+      const label = `새 수집 ${count.toLocaleString('ko-KR')}건`;
+      if (badge && badge.textContent !== label) badge.textContent = label;
     }
   }
-  for (const [id, marker] of liveMarkers) {
-    if (keep.has(id)) continue;
+  for (const [key, marker] of liveMarkers) {
+    if (counts.has(key) && drawn.has(key)) continue;
     liveLayer.removeLayer(marker);
-    liveMarkers.delete(id);
+    liveMarkers.delete(key);
   }
   visibleLiveCount.value = visible;
 }
@@ -1886,7 +1893,15 @@ watch(
 );
 // 환산 월세 전환율이 바뀌면(매물이나 기준금리가 바뀌어 카드 값이 바뀔 때) 대표 가격과 묶음 안 순서를 다시 낸다.
 watch(currentRate, () => drawDots(false));
-watch(() => props.liveListingIds, drawLiveListings);
+watch(() => props.liveListingIds, (ids) => {
+  drawLiveListings();
+  // 열려 있는 툴팁과 팝업도 자정이 지나면 전날의 배지를 지운다.
+  for (const overlay of [hoveredListingPin?.getTooltip()?.getElement(), listingPopup?.getElement()]) {
+    for (const chip of overlay?.querySelectorAll<HTMLElement>('[data-live-listing-id]') ?? []) {
+      if (!ids?.has(chip.dataset.liveListingId!)) chip.remove();
+    }
+  }
+});
 watch(
   () => props.areas,
   () => {
@@ -1985,8 +2000,8 @@ onBeforeUnmount(() => {
         <span><i style="background:#c48a0a"></i>관심</span>
         <span><i style="background:#1f5fbf"></i>나머지</span>
         <span title="이 대시보드에서 눌러 본 매물"><i class="seen-dot"></i>봤음</span>
-        <span v-if="liveListingIds?.size" title="이번에 받은 매물 중 현재 필터와 지도 범위에 맞는 매물만 강조합니다. 새로고침하면 강조가 지워집니다.">
-          <i class="live-dot"></i>{{ visibleLiveCount ? `이번에 들어온 매물 ${visibleLiveCount}건 표시 중` : `이번에 들어온 매물 ${liveListingIds.size}건, 현재 지도에는 0건` }}
+        <span v-if="liveListingIds?.size" title="한국 시간으로 오늘 처음 수집한 매물 중 현재 필터와 지도 범위에 맞는 매물을 강조합니다.">
+          <i class="live-dot"></i>{{ visibleLiveCount ? `오늘 수집 ${visibleLiveCount}건 표시 중` : `오늘 수집 ${liveListingIds.size}건, 현재 지도에는 0건` }}
         </span>
       </div>
       <InfoModal heading="지도 보는 법" label="지도 보는 법" storage-key="hnw-map-info-tab" :tabs="MAP_TABS" title="점 색, 숫자와 가격, 구역과 역, 지하철 노선, 핀, 정비구역">

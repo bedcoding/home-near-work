@@ -105,7 +105,7 @@ test('확장 응답 저장 뒤 지연 파싱이 끝나면 같은 네이버 건�
   await h.app.poll();
   assert.equal(h.app.listings.value.length, 0);
   h.state.dataRevision = 'session-a:3'; // 다른 사이트의 지연 파싱 저장 완료
-  h.data.listings = [{ id: 'synthetic-room' }];
+  h.data.listings = [listing('synthetic-room', { firstSeenAt: TODAY_KST })];
   await h.app.poll();
   assert.equal(h.app.listings.value[0].id, 'synthetic-room');
   assert.deepEqual([...h.app.liveListingIds.value], ['synthetic-room'], '확장 프로그램에서 새로 받아도 지도에서 강조한다');
@@ -178,12 +178,12 @@ test('조회 중 저장된 매물은 진행 상태를 기다리게 하지 않고
   const h = appHarness(t);
   h.data.listings = [listing('old')];
   await h.mount();
-  assert.equal(h.app.liveListingIds.value.size, 0, '페이지를 열 때 이미 저장된 매물은 강조하지 않는다');
+  assert.equal(h.app.liveListingIds.value.size, 0, '이전 날짜에 처음 받은 매물은 강조하지 않는다');
   const initialCalls = h.calls.listings;
   const initialNotices = h.calls.notices;
   let releaseListings;
   h.data.waitForListings = new Promise(resolve => { releaseListings = resolve; });
-  h.data.listings = [listing('old', { title: '새 제목' }), listing('a')];
+  h.data.listings = [listing('old', { title: '새 제목', lastSeenAt: TODAY_KST }), listing('a', { firstSeenAt: TODAY_KST })];
   h.state.running = { runId: 42, listingRevision: 1 };
   await h.app.poll();
   assert.equal(h.calls.pollInterval, 1000, '매물 응답이 늦어도 진행 상태는 1초 뒤에 확인한다');
@@ -204,7 +204,7 @@ test('조회 중 저장된 매물은 진행 상태를 기다리게 하지 않고
   await h.app.poll();
   assert.equal(h.calls.listings, initialCalls + 1, '로그에만 새 기록이 있으면 매물을 요청하지 않는다');
   h.state.running = { runId: 42, listingRevision: 2 };
-  h.data.listings = [...h.data.listings, listing('b')];
+  h.data.listings = [...h.data.listings, listing('b', { firstSeenAt: TODAY_KST })];
   await h.app.poll();
   await settle();
   assert.deepEqual(h.app.listings.value.map(row => row.id), ['old', 'a', 'b']);
@@ -215,18 +215,37 @@ test('조회 중 저장된 매물은 진행 상태를 기다리게 하지 않고
   assert.equal(h.calls.listings, initialCalls + 2, '다음 저장 신호는 간격이 지날 때까지 합친다');
   assert.equal(h.calls.notices, initialNotices, '조회 중에는 공고와 시세를 함께 받지 않는다');
 
-  h.data.listings = [...h.data.listings, listing('c')];
+  h.data.listings = [...h.data.listings, listing('c', { firstSeenAt: TODAY_KST })];
   h.state.running = null;
   await h.app.poll();
   await settle();
   assert.equal(h.calls.listings, initialCalls + 3, '종료 시에는 대기 중인 변화까지 포함해 다시 받는다');
   assert.equal(h.calls.notices, initialNotices + 1);
-  assert.deepEqual([...h.app.liveListingIds.value], ['a', 'b', 'c'], '조회가 끝나도 마지막 저장분까지 새로고침 전에는 강조한다');
+  assert.deepEqual([...h.app.liveListingIds.value], ['a', 'b', 'c'], '조회가 끝나도 오늘 받은 마지막 저장분까지 강조한다');
   h.advance(30_000);
   await h.app.poll();
   assert.deepEqual([...h.app.liveListingIds.value], ['a', 'b', 'c']);
 });
 
+test('첫 목록부터 오늘 수집만 복원하고 한국 자정을 넘으면 목록 갱신 없이 전날 강조를 지운다', async (t) => {
+  const h = appHarness(t);
+  h.data.listings = [
+    listing('yesterday', { firstSeenAt: '2026-11-12T14:59:59.999Z', lastSeenAt: TODAY_KST }),
+    listing('today-at-midnight', { firstSeenAt: TODAY_KST, isNew: false }),
+    listing('today-after-midnight', { firstSeenAt: '2026-11-13T00:10:00+09:00' }),
+    listing('next-midnight', { firstSeenAt: '2026-11-13T15:00:00.000Z' }),
+    listing('invalid-date', { firstSeenAt: '' }),
+  ];
+  await h.mount();
+  assert.deepEqual([...h.app.liveListingIds.value], ['today-at-midnight', 'today-after-midnight']);
+  const initialCalls = h.calls.listings;
+  h.advance(6 * 60 * 60 * 1000);
+  await h.app.poll();
+  assert.equal(h.calls.listings, initialCalls);
+  assert.deepEqual([...h.app.liveListingIds.value], ['next-midnight']);
+});
+
+const TODAY_KST = '2026-11-12T15:00:00.000Z';
 /** 화면 계산에 필요한 칸만 채운 가짜 매물(같은 자리, 같은 층, 같은 면적이면 서로 '비슷'하다) */
 const listing = (id, extra = {}) => ({
   id, source: 'naver', status: 'active', verdict: null, verdictReason: null, relistedOf: null, isNew: true, priceChange: null, seenAt: null,

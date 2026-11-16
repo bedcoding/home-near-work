@@ -572,27 +572,38 @@ const hiddenCount = computed(() => {
   return 0;
 });
 
-async function refreshState() {
-  state.value = await api.state();
-}
 /** 매물 목록을 받는 중인 요청 수와, 한 번이라도 다 받았는지(처음에는 0건이 아니라 불러오는 중으로 보인다) */
 const listingsLoading = ref(0);
 const listingsLoaded = ref(false);
-// 이 페이지를 연 뒤 새로 받은 매물은 새로고침할 때까지 지도에서 강조한다.
-const liveListingIds = shallowRef<ReadonlySet<string>>(new Set());
+const DAY_MS = 24 * 60 * 60 * 1000;
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+function koreaDayStart() {
+  return Math.floor((Date.now() + KST_OFFSET_MS) / DAY_MS) * DAY_MS - KST_OFFSET_MS;
+}
+const collectedDayStart = ref(koreaDayStart());
+// 최초 수집 시각을 기준으로 새로고침 뒤에도 오늘 매물을 강조한다.
+const liveListingIds = computed(() => {
+  const start = collectedDayStart.value;
+  const end = start + DAY_MS;
+  const ids = new Set<string>();
+  for (const listing of homes.value) {
+    const firstSeen = Date.parse(listing.firstSeenAt);
+    if (firstSeen >= start && firstSeen < end) ids.add(listing.id);
+  }
+  return ids;
+});
+
+async function refreshState() {
+  collectedDayStart.value = koreaDayStart();
+  state.value = await api.state();
+}
 /** 지난번에 받은 목록 버전부터 바뀐 매물만 받아 가진 목록에 합친다(서버가 그 버전을 모르면 전체를 받는다). */
 const listingsSync = createListingsSync((since) => api.listings(since));
 async function refreshListings() {
   listingsLoading.value += 1;
   try {
-    const next = await listingsSync(() => listings.value);
-    const previous = listings.value;
-    listings.value = next;
-    if (listingsLoaded.value && previous !== next) {
-      const previousIds = new Set(previous.map(listing => listing.id));
-      const added = next.filter(listing => !previousIds.has(listing.id)).map(listing => listing.id);
-      if (added.length) liveListingIds.value = new Set([...liveListingIds.value, ...added]);
-    }
+    listings.value = await listingsSync(() => listings.value);
+    collectedDayStart.value = koreaDayStart();
     listingsLoaded.value = true;
   } finally {
     listingsLoading.value -= 1;
