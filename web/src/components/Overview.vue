@@ -759,8 +759,9 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 /* 사이트 단추 여덟 개가 보통 폭에서 한 줄에 들도록 간격과 안쪽 여백을 조금 줄인다(작업 공간 디자인의 단추 여백보다 우선). */
 .band-body .platforms { gap: 4px; }
 .platforms .platform { gap: 4px; padding-inline: 7px; }
-/* 사이트 단추의 신규(빨강)와 가격 변동(초록) 숫자. 색은 가격대 줄의 칩과 같다. */
-.platform .platform-news { display: inline-flex; gap: 2px; }
+/* 사이트 단추의 신규(빨강)와 가격 변동(초록) 숫자. 색은 가격대 줄의 칩과 같고, 전체 건수와 한 덩어리로 보이지 않게 조금 띄운다. */
+/* 숫자 묶음은 CountTooltip(뿌리가 둘인 부품)이 그려서 이 파일의 범위 스타일이 닿지 않으므로 :deep으로 고른다. */
+.platform :deep(.platform-news) { display: inline-flex; gap: 2px; margin-left: 3px; }
 .tick {
   min-width: 16px; padding: 1px 4px; border-radius: 4px; text-align: center;
   font-size: 11px; font-weight: 700; line-height: 1.45; font-variant-numeric: tabular-nums;
