@@ -137,6 +137,8 @@ watch(
 );
 
 const SOURCES = Object.keys(SOURCE_LABEL) as SourceId[];
+/** 가격대의 사이트 단추에서만 줄여 쓰는 이름(단추 여덟 개가 한 줄에 들게). 화면 읽기 프로그램에는 원래 이름을 읽어 준다. */
+const SHORT_LABEL: Partial<Record<SourceId, string>> = { daangn: '당근' };
 
 /** 가격대 줄의 매물 하나. 전월세 카드에서 월세와 전세를 다 내놓은 매물은 월세 가격대와 전세 가격대에 하나씩 든다. */
 interface Entry {
@@ -379,7 +381,7 @@ function rowOf(band: Band, entries: Entry[], open: Record<string, Pick>, hidden:
   }
   const platforms = SOURCES.flatMap((s) => {
     const list = bySource.get(s);
-    return list ? [{ id: s, label: SOURCE_LABEL[s], ...counts(list) }] : [];
+    return list ? [{ id: s, label: SOURCE_LABEL[s], short: SHORT_LABEL[s] ?? SOURCE_LABEL[s], ...counts(list) }] : [];
   });
   const bd = bandDeal(deal.value, band.id);
   const deposits = bd && isRent(bd) ? entries.map((e) => e.option.deposit).filter((v): v is number => v != null) : [];
@@ -477,6 +479,14 @@ function toggleBand(r: Row) {
   else open[r.band.id] = r.platforms.length === 1 ? r.platforms[0].id : '';
   listMoves.value++;
 }
+
+/** 사이트 단추의 신규와 가격 변동 설명(단추에는 숫자만 보이고, 올리면 이 글이 뜬다) */
+type PlatformCount = { label: string; total: number; news: number; changed: number };
+const platformNews = (p: PlatformCount) =>
+  [p.news ? `신규 ${p.news}건` : '', p.changed ? `가격 변동 ${p.changed}건` : ''].filter(Boolean).join('\n');
+/** 화면 읽기 프로그램이 읽을 단추 이름(숫자만으로는 무엇인지 모르므로 이름을 붙여 읽는다) */
+const platformLabel = (p: PlatformCount) =>
+  [`${p.label} ${p.total}건`, p.news ? `신규 ${p.news}건` : '', p.changed ? `가격 변동 ${p.changed}건` : ''].filter(Boolean).join(', ');
 
 function pickPlatform(r: Row, p: SourceId | 'all') {
   openMap()[r.band.id] = r.pick === p ? '' : p;
@@ -599,6 +609,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
             @source="emit('source', l)" @raw="emit('raw', l)" zone-banner
           />
         </section>
+        <p v-if="!visible.length" class="picked-empty">지도에서 매물을 누르면 여기에 카드가 뜹니다</p>
         <div class="bands" @dragend="onDragEnd">
           <div
             v-for="r in rows" :key="r.band.id" class="band"
@@ -632,13 +643,22 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 
             <div v-if="r.isOpen" class="band-body">
               <div class="platforms">
-                <button v-if="r.platforms.length > 1" class="platform" :class="{ on: r.pick === 'all' }" @click="pickPlatform(r, 'all')">
-                  모든 사이트 <span class="num">{{ r.total }}</span>
+                <button
+                  v-if="r.platforms.length > 1" class="platform" :class="{ on: r.pick === 'all' }" :aria-label="`모든 사이트 ${r.total}건`"
+                  @click="pickPlatform(r, 'all')"
+                >
+                  전체 <span class="num">{{ r.total }}</span>
                 </button>
-                <button v-for="p in r.platforms" :key="p.id" class="platform" :class="{ on: r.pick === p.id }" @click="pickPlatform(r, p.id)">
-                  {{ p.label }} <span class="num">{{ p.total }}</span>
-                  <span v-if="p.news" class="chip chip-new">신규 {{ p.news }}</span>
-                  <span v-if="p.changed" class="chip chip-down">변동 {{ p.changed }}</span>
+                <!-- 신규와 가격 변동은 숫자만 가격대 줄의 칩과 같은 색으로 쓰고, 올리면 무슨 수인지 뜬다(글자까지 쓰면 줄이 넘쳤다). -->
+                <button
+                  v-for="p in r.platforms" :key="p.id" class="platform" :class="{ on: r.pick === p.id }" :aria-label="platformLabel(p)"
+                  @click="pickPlatform(r, p.id)"
+                >
+                  {{ p.short }} <span class="num">{{ p.total }}</span>
+                  <CountTooltip v-if="p.news || p.changed" class="platform-news" :focusable="false" :text="platformNews(p)">
+                    <span v-if="p.news" class="tick tick-new">{{ p.news }}</span>
+                    <span v-if="p.changed" class="tick tick-down">{{ p.changed }}</span>
+                  </CountTooltip>
                 </button>
               </div>
             </div>
@@ -736,6 +756,17 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 .platform:hover { border-color: var(--ink-2); }
 .platform.on { background: var(--ink); border-color: var(--ink); color: #fff; }
 .platform .num { font-weight: 600; opacity: .8; }
+/* 사이트 단추 여덟 개가 보통 폭에서 한 줄에 들도록 간격과 안쪽 여백을 조금 줄인다(작업 공간 디자인의 단추 여백보다 우선). */
+.band-body .platforms { gap: 4px; }
+.platforms .platform { gap: 4px; padding-inline: 7px; }
+/* 사이트 단추의 신규(빨강)와 가격 변동(초록) 숫자. 색은 가격대 줄의 칩과 같다. */
+.platform .platform-news { display: inline-flex; gap: 2px; }
+.tick {
+  min-width: 16px; padding: 1px 4px; border-radius: 4px; text-align: center;
+  font-size: 11px; font-weight: 700; line-height: 1.45; font-variant-numeric: tabular-nums;
+}
+.tick-new { background: var(--new-soft); color: var(--new); }
+.tick-down { background: var(--down-soft); color: var(--down); }
 /* 지도에서 고른 매물 카드 한 장(가격대 줄 위) */
 .picked { display: grid; gap: 8px; container-type: inline-size; }
 .picked-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -745,5 +776,10 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
   background: var(--surface); font: 600 13px var(--font); color: var(--ink-2); cursor: pointer;
 }
 .picked-close:hover { border-color: var(--ink-2); }
+/* 아직 고른 매물이 없을 때 카드가 뜰 자리 */
+.picked-empty {
+  margin: 0; padding: 14px 16px; border: 1px dashed var(--line-strong); border-radius: 12px;
+  font-size: 14px; color: var(--muted); text-align: center;
+}
 .empty { padding: 32px 0; text-align: center; }
 </style>

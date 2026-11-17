@@ -863,7 +863,8 @@ function popup(g: Group, items: ListingView[]) {
     card.appendChild(top);
     if (props.listMode) {
       card.classList.add('go');
-      card.title = '누르면 목록에서 이 매물을 봅니다';
+      // 매물 탭은 목록 대신 왼쪽에 고른 매물 카드 한 장만 띄운다(Overview.vue).
+      card.title = props.viewKey === 'overview' ? '누르면 왼쪽에 이 매물 카드를 띄웁니다' : '누르면 목록에서 이 매물을 봅니다';
       card.addEventListener('click', () => {
         if (props.viewKey !== 'overview') map?.closePopup();
         big.value = false;
@@ -2006,6 +2007,10 @@ onBeforeUnmount(() => {
       </div>
       <InfoModal heading="지도 보는 법" label="지도 보는 법" storage-key="hnw-map-info-tab" :tabs="MAP_TABS" title="점 색, 숫자와 가격, 구역과 역, 지하철 노선, 핀, 정비구역">
         <template #marks>
+          <p v-if="viewKey === 'overview'" class="info-text">
+            매물 탭은 가격대 매물을 카드로 늘어놓지 않고, 지도에서 누른 매물 카드 한 장만 왼쪽에 보여 줍니다.
+            카드 수천 장을 한꺼번에 띄우면 지도 끌기와 스크롤이 느려지기 때문입니다.
+          </p>
           <dl class="keys">
             <dt><i class="key-dot" style="background:#e5484d"></i></dt>
             <dd><b>신규</b>: 아직 확인하지 않은 신규 매물이 있는 자리입니다. 확대하면 <em class="nw-sample">NEW</em>가 붙고, 툴팁에서는 해당 매물에 <span class="chip chip-new">신규</span>가 붙습니다.</dd>
