@@ -2264,21 +2264,14 @@ onBeforeUnmount(() => {
   border-radius: 32px; box-shadow: 0 0 0 2px #16202e; pointer-events: none;
   transform: translate(-50%, -50%);
 }
-:deep(.live-ring::after) {
-  content: ''; position: absolute; inset: -5px; border: 3px solid #ffde59; border-radius: inherit;
-  animation: live-listing-ring 1.8s ease-out infinite;
-}
+/*
+ * 고리는 움직이지 않게 둔다. 예전에는 고리마다 퍼지는 애니메이션을 끝없이 돌렸는데, 새 수집이 수백 건이면
+ * 브라우저가 매 프레임 그 고리를 모두 다시 합치느라 지도 끌기와 툴팁 휠 스크롤이 한참 늦게 반응했다.
+ */
 :deep(.live-badge) {
   position: absolute; top: 100%; right: -4px; z-index: 1; padding: 0 4px; border: 1px solid #16202e;
   border-radius: 5px; background: #ffde59; color: #16202e; white-space: nowrap;
   font: 800 10px/1.35 var(--font);
-}
-@keyframes live-listing-ring {
-  from { opacity: .95; transform: scale(1); }
-  to { opacity: 0; transform: scale(1.32); }
-}
-@media (prefers-reduced-motion: reduce) {
-  :deep(.live-ring::after) { display: none; }
 }
 :deep(.price-body > b) {
   display: inline-grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px;
