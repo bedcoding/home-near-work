@@ -15,7 +15,6 @@ import OverviewMap from './OverviewMap.vue';
 import SplitHandle from './SplitHandle.vue';
 import { mapShareStyle } from '../mapWidth';
 import { rememberNaverPlaces } from '../naverPlaces';
-import { walkPins, walkTimes } from '../walk';
 
 const props = defineProps<{
   listings: ListingView[];
@@ -138,7 +137,6 @@ watch(
 );
 
 const SOURCES = Object.keys(SOURCE_LABEL) as SourceId[];
-const hasNews = (l: ListingView) => l.isNew || !!l.priceChange;
 
 /** 가격대 줄의 매물 하나. 전월세 카드에서 월세와 전세를 다 내놓은 매물은 월세 가격대와 전세 가격대에 하나씩 든다. */
 interface Entry {
@@ -336,54 +334,6 @@ watch(
 );
 defineExpose({ pickDeal });
 
-/** 목록 순서: 빈 글자면 가격순, 거리 핀 id면 그 핀까지 걷는 거리가 가까운 순(localStorage 'hnw-overview-sort') */
-const SORT_KEY = 'hnw-overview-sort';
-const sortPin = ref(readSortPin());
-function readSortPin() {
-  try {
-    return localStorage.getItem(SORT_KEY) ?? '';
-  } catch {
-    return '';
-  }
-}
-watch(sortPin, (id) => {
-  try {
-    localStorage.setItem(SORT_KEY, id);
-  } catch {
-    // 저장소를 못 쓰면 이번 화면에서만 쓴다.
-  }
-});
-/** 거리순으로 고를 수 있는 핀(거리 핀만) */
-const distancePins = computed(() => walkPins.value.filter((p) => p.kind !== 'mark'));
-/** 지금 거리순으로 보는 핀 id(고른 핀을 뺐으면 null, 가격순) */
-const sortPinId = computed(() => distancePins.value.find((p) => p.id === sortPin.value)?.id ?? null);
-
-/** 별로로 표시한 매물은 맨 뒤 */
-const byMeh = (a: ListingView, b: ListingView) => Number(a.verdict === 'meh') - Number(b.verdict === 'meh');
-
-/**
- * 가격대 안 순서. 별로는 맨 뒤. 가격순이면 새 소식이 먼저, 그다음 싼 순서(전월세는 환산 월세 → 보증금).
- * 거리순(pinId)이면 고른 핀에 가까운 순서(못 잰 매물은 뒤), 같으면 가격순.
- * 핀까지 거리는 정렬 전에 매물마다 한 번만 읽어 둔다(견줄 때마다 읽으면 반응형 값을 수십만 번 읽게 된다).
- */
-function entryOrder(pinId: string | null, entries: Entry[]) {
-  const meters = pinId
-    ? new Map(entries.map((e) => [e.listing.id, walkTimes(e.listing.id).find((w) => w.pin.id === pinId)?.meters ?? Infinity]))
-    : null;
-  const byPin = (a: ListingView, b: ListingView) => {
-    if (!meters) return 0;
-    const d = meters.get(a.id)! - meters.get(b.id)!;
-    return Number.isNaN(d) ? 0 : d;
-  };
-  return (a: Entry, b: Entry) =>
-    byMeh(a.listing, b.listing) ||
-    byPin(a.listing, b.listing) ||
-    Number(hasNews(b.listing)) - Number(hasNews(a.listing)) ||
-    (a.value ?? Infinity) - (b.value ?? Infinity) ||
-    (a.option.deposit ?? Infinity) - (b.option.deposit ?? Infinity) ||
-    b.listing.firstSeenAt.localeCompare(a.listing.firstSeenAt);
-}
-
 /** 왼쪽 필터에서 지역 칸만 남긴 것(가격, 매물 유형, 면적, 층, 검색어를 뺌). 가격대마다 필터로 가린 수를 셀 때 쓴다. */
 const looseFilters = computed<Filters>(() => {
   const f = filtersNow.value;
@@ -408,12 +358,10 @@ const rows = computed(() => {
   }
   const defs = new Map(bandsFor(d).map((b) => [b.id, b]));
   const open = saved.open[d] ?? {};
-  const pinId = sortPinId.value;
+  // 가격대 안 매물은 늘어놓지 않는다. 펼친 가격대는 지도에 진하게 보일 매물만 정하고, 카드는 지도에서 고른 매물 한 장만 띄운다.
   return orderFor(d, saved.order[d])
     .map((id) => {
-      const list = groups.get(id) ?? [];
-      // 접힌 가격대는 건수만 보이므로 늘어놓지 않는다(펼친 가격대만 목록과 지도에 이 순서로 쓰인다).
-      const entries = open[id] !== undefined ? list.sort(entryOrder(pinId, list)) : list;
+      const entries = groups.get(id) ?? [];
       return rowOf(defs.get(id)!, entries, open, Math.max(0, (looseByBand.value.get(id) ?? 0) - entries.length));
     })
     .filter((r) => r.band.id !== 'unknown' || r.total > 0);
@@ -453,23 +401,23 @@ function rowOf(band: Band, entries: Entry[], open: Record<string, Pick>, hidden:
 
 // 맨 위 '새 소식' 줄은 뺐다. 보는 가격대만 펼쳐 보므로, 새 매물은 가격대마다 붙은 신규와 가격 변동 표시로 본다.
 
-/** 펼쳐 보이는 매물(화면 순서, 여러 가격대에 같이 보이는 매물은 한 번만) */
-const visible = computed(() => {
-  const ids = new Set<string>();
-  const out: ListingView[] = [];
-  for (const r of rows.value) {
-    for (const e of r.shown) {
-      if (ids.has(e.listing.id)) continue;
-      ids.add(e.listing.id);
-      out.push(e.listing);
-    }
-  }
-  return out;
+/**
+ * 지도에서 고른 매물 번호. 왼쪽에는 이 매물 카드 한 장만 띄운다. 예전에는 펼친 가격대의 매물을 카드로 모두 늘어놓았는데,
+ * 수천 장이 되면 문서가 너무 길어져 화면을 한 번 그릴 때마다 40ms 넘게 걸리고, 지도 끌기와 툴팁 스크롤까지 늦어졌다.
+ */
+const pickedId = ref<string | null>(null);
+/** 고른 매물(변화분을 받으면 새 객체로 바뀌므로 번호로 찾는다). 매물이 빠지면 카드도 내린다. */
+const picked = computed(() => (pickedId.value ? props.listings.find((l) => l.id === pickedId.value) ?? null : null));
+// 거래 유형을 바꾸면 지도도 그 거래 유형 매물로 바뀌므로 고른 카드를 내린다.
+watch(deal, () => {
+  pickedId.value = null;
 });
+/** 키보드 단축키(x 버림, s 관심, Enter 원본 열기)가 다룰 매물: 고른 매물 하나 */
+const visible = computed(() => (picked.value ? [picked.value] : []));
 /**
  * 지도에 진하게 보일 매물: 펼친 가격대마다 고른 사이트의 매물, 사이트를 아직 안 골랐으면 그 가격대 매물 전부.
  * 그래서 '월세 50만원 이하'와 '전세 1억 이하'처럼 가격대 여러 개를 펼치기만 해도 지도에서 같이 본다.
- * 목록 카드는 지금처럼 사이트를 고른 뒤에 그린다(한 가격대에 수천 건이면 카드를 다 그리기 느려서).
+ * 가격대 매물을 카드로 늘어놓지는 않는다(카드는 지도에서 고른 매물 한 장만).
  */
 const mapStrong = computed(() => {
   const ids = new Set<string>();
@@ -484,9 +432,9 @@ const mapStrong = computed(() => {
   }
   return out;
 });
-/** 목록 쪽에서 가격대를 펼치거나 접고 사이트를 고른 횟수. 지도에서 누른 매물을 보이게 펼칠 때는 늘리지 않는다. */
+/** 목록 쪽에서 가격대를 펼치거나 접고 사이트를 고른 횟수 */
 const listMoves = ref(0);
-/** 지도를 매물에 다시 맞추는 기준: 거래 유형, 목록 쪽에서 바꾼 펼침, 고른 지역. 매물만 바뀌거나 지도에서 누른 매물을 펼치면 지도는 보던 그대로 둔다. */
+/** 지도를 매물에 다시 맞추는 기준: 거래 유형, 목록 쪽에서 바꾼 펼침, 고른 지역. 매물만 바뀌거나 지도에서 매물을 고르면 지도는 보던 그대로 둔다. */
 const mapFitKey = computed(() => `${deal.value}|${listMoves.value}|${props.filters.areaIds.join(',')}`);
 /** 지도: 펼친 목록이 없으면 고른 거래 유형의 매물을 작게 보여 준다. */
 const mapBackground = computed(() => uniq(byDeal.value.get(deal.value) ?? []).map((e) => e.listing));
@@ -537,25 +485,14 @@ function pickPlatform(r: Row, p: SourceId | 'all') {
 
 
 /**
- * 지도에서 누른 매물(같은 자리 매물들)이 목록에 보이게 그 가격대를 펼치고 사이트를 고른 뒤, focus(없으면 첫 매물)를 고른다.
- * 한 가격대에 사이트가 여럿 걸리거나 이미 '모든 사이트'면 모든 사이트로 둔다. 다른 가격대의 펼침은 그대로 둔다.
+ * 지도에서 누른 매물을 왼쪽 카드로 띄우고 고른다. 가격대 펼침과 고른 사이트는 바꾸지 않는다(지도의 진한 매물이 그대로다).
+ * 카드가 바뀐 뒤(visible을 알린 뒤)에 고르기를 알려야 App이 그 매물을 찾는다.
  */
-async function reveal(items: ListingView[], focus: ListingView = items[0]) {
-  const entries = byDeal.value.get(deal.value) ?? [];
-  const need = new Map<string, Set<SourceId>>();
-  for (const l of items) {
-    const e = entries.find((x) => x.listing.id === l.id);
-    if (!e) continue;
-    const id = bandIdOf(deal.value, e.option);
-    need.set(id, (need.get(id) ?? new Set()).add(l.source));
-  }
-  const open = openMap();
-  for (const [id, sources] of need) {
-    if (open[id] === 'all' || (sources.size === 1 && sources.has(open[id] as SourceId))) continue;
-    open[id] = sources.size === 1 ? [...sources][0] : 'all';
-  }
+async function pick(listing: ListingView | undefined) {
+  if (!listing) return;
+  pickedId.value = listing.id;
   await nextTick();
-  if (focus) emit('select', focus);
+  emit('select', listing);
 }
 
 const depositText = (d: { min: number; max: number }) => (d.min === d.max ? money(d.min) : `${money(d.min)}~${money(d.max)}`);
@@ -651,6 +588,17 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 
     <div class="ov-split">
       <div class="ov-bands">
+        <section v-for="l in visible" :key="l.id" class="picked" aria-label="지도에서 고른 매물">
+          <div class="picked-head">
+            <span class="picked-title">지도에서 고른 매물</span>
+            <button type="button" class="picked-close" @click="pickedId = null">닫기</button>
+          </div>
+          <ListingCard
+            :listing="l" :areas="areas" :selected="l.id === selectedId" :live-collected="liveListingIds?.has(l.id)"
+            @select="selectFromList(l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
+            @source="emit('source', l)" @raw="emit('raw', l)" zone-banner
+          />
+        </section>
         <div class="bands" @dragend="onDragEnd">
           <div
             v-for="r in rows" :key="r.band.id" class="band"
@@ -692,21 +640,6 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
                   <span v-if="p.news" class="chip chip-new">신규 {{ p.news }}</span>
                   <span v-if="p.changed" class="chip chip-down">변동 {{ p.changed }}</span>
                 </button>
-                <div v-if="distancePins.length && r.shown.length > 1" class="sort" role="group" aria-label="목록 순서">
-                  <button class="sort-btn" :class="{ on: !sortPinId }" :aria-pressed="!sortPinId" title="새 소식 먼저, 그다음 싼 순서" @click="sortPin = ''">가격순</button>
-                  <button
-                    v-for="p in distancePins" :key="p.id" class="sort-btn" :class="{ on: sortPinId === p.id }" :aria-pressed="sortPinId === p.id"
-                    :title="`${p.name}까지 걷는 거리가 가까운 순서(거리를 못 잰 매물은 뒤)`" @click="sortPin = p.id"
-                  >{{ p.name }} 가까운 순</button>
-                </div>
-              </div>
-              <div v-if="r.shown.length" class="list">
-                <ListingCard
-                  v-for="e in r.shown" :key="e.listing.id" :listing="e.listing" :areas="areas" :selected="e.listing.id === selectedId"
-                  :live-collected="liveListingIds?.has(e.listing.id)"
-                  @select="selectFromList(e.listing)" @open="emit('open', e.listing)" @verdict="(v) => emit('verdict', e.listing, v)"
-                  @source="emit('source', e.listing)" @raw="emit('raw', e.listing)" zone-banner
-                />
               </div>
             </div>
           </div>
@@ -718,7 +651,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
           ref="mapView"
           :listings="mapStrong" :background="mapBackground" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="mapFitKey" view-key="overview"
           :live-listing-ids="liveListingIds" :rental-options="mapRentalOptions"
-          @select="(l) => reveal([l])" @reveal="reveal" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
+          @select="pick" @reveal="(items) => pick(items[0])" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />
       </aside>
@@ -731,13 +664,6 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 .ov-controls { display: contents; }
 .small { font-size: 13px; }
 
-.sort { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-left: auto; }
-.sort-btn {
-  min-height: 30px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px;
-  background: var(--surface); font: 600 13px var(--font); color: var(--ink-2); cursor: pointer;
-}
-.sort-btn:hover { border-color: var(--ink-2); }
-.sort-btn.on { background: var(--ink); border-color: var(--ink); color: #fff; }
 .deals { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
 .deal {
   display: grid; gap: 2px; justify-items: start; align-content: start;
@@ -810,6 +736,14 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 .platform:hover { border-color: var(--ink-2); }
 .platform.on { background: var(--ink); border-color: var(--ink); color: #fff; }
 .platform .num { font-weight: 600; opacity: .8; }
-.list { display: grid; gap: 8px; container-type: inline-size; }
+/* 지도에서 고른 매물 카드 한 장(가격대 줄 위) */
+.picked { display: grid; gap: 8px; container-type: inline-size; }
+.picked-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.picked-title { font-size: 14px; font-weight: 700; color: var(--ink-2); }
+.picked-close {
+  min-height: 30px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--surface); font: 600 13px var(--font); color: var(--ink-2); cursor: pointer;
+}
+.picked-close:hover { border-color: var(--ink-2); }
 .empty { padding: 32px 0; text-align: center; }
 </style>
