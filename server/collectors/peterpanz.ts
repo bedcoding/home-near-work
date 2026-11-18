@@ -51,9 +51,11 @@ export function openedNear(area: Area, raw: unknown, zoom: number) {
 const PAGE_SIZE = 50;
 const MAX_PAGES = 30;
 const MAX_DISTRICT_VIEWS = 3;
+// 아파트 화면은 목록을 /houses/area/apt/agency/pc 로 부른다.
+const LIST_PATHS = new Set(['/houses/area', '/houses/area/pc', '/houses/area/apt/agency/pc']);
 function listUrl(value: string): URL | null {
   const url = new URL(value);
-  return url.origin === 'https://api.peterpanz.com' && (url.pathname === '/houses/area' || url.pathname === '/houses/area/pc') ? url : null;
+  return url.origin === 'https://api.peterpanz.com' && LIST_PATHS.has(url.pathname) ? url : null;
 }
 const firstPage = (r: Response) => listUrl(r.url())?.searchParams.get('pageIndex') === '1';
 
