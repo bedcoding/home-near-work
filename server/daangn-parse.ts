@@ -7,11 +7,20 @@ import type { ExplainRow, NormalizedListing, PriceOption } from '../shared/types
  */
 const HOMES: Record<string, { buildingType: string | null; roomLabel: string }> = {
   ONE_ROOM: { buildingType: null, roomLabel: '원룸' },
+  // 목록 조건(salesTypes)의 ONE_ROOM은 매물에서는 오픈형과 분리형 두 코드로 온다.
+  OPEN_ONE_ROOM: { buildingType: null, roomLabel: '오픈형 원룸' },
+  SPLIT_ONE_ROOM: { buildingType: null, roomLabel: '분리형 원룸' },
   TWO_ROOM: { buildingType: null, roomLabel: '투룸 이상' },
   OFFICETEL: { buildingType: '오피스텔', roomLabel: '오피스텔' },
   APART: { buildingType: '아파트', roomLabel: '아파트' },
   HOUSE: { buildingType: '주택', roomLabel: '주택' },
 };
+
+/**
+ * 지도 화면 주소의 af 조건에 넣는 주거 종류. 사이트의 종류별 화면(원룸, 빌라, 오피스텔, 아파트, 주택)이 쓰는 값이다.
+ * 이 조건을 걸면 상가, 사무실 같은 비주거가 목록에서 빠져 읽을 페이지가 줄어든다.
+ */
+export const DAANGN_HOME_SALES_TYPES = ['ONE_ROOM', 'TWO_ROOM', 'OFFICETEL', 'APART', 'HOUSE'] as const;
 
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
 const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
@@ -100,6 +109,8 @@ export interface DaangnPage {
   items: { listing: NormalizedListing; raw: unknown }[];
   /** 비주거라 저장하지 않은 매물 번호 */
   excludedIds: string[];
+  /** 저장하지 않은 매물의 종류 코드(번호별). 주거 조건을 걸었는데도 빠지는 종류가 있으면 모르는 주거 코드일 수 있어 남긴다. */
+  excludedTypes: Record<string, string>;
   /** 주거용인데 좌표가 없는 등 읽지 못한 매물 번호 */
   unreadableIds: string[];
   hasNextPage: boolean | null;
@@ -107,7 +118,7 @@ export interface DaangnPage {
 }
 
 export function parseDaangnArticles(body: string): DaangnPage {
-  const empty: DaangnPage = { valid: false, ids: [], items: [], excludedIds: [], unreadableIds: [], hasNextPage: null, endCursor: null };
+  const empty: DaangnPage = { valid: false, ids: [], items: [], excludedIds: [], excludedTypes: {}, unreadableIds: [], hasNextPage: null, endCursor: null };
   try {
     const conn = JSON.parse(body)?.data?.subwayStationArticleConnection;
     if (!conn || !Array.isArray(conn.edges) || typeof conn.pageInfo?.hasNextPage !== 'boolean') return empty;
@@ -117,8 +128,9 @@ export function parseDaangnArticles(body: string): DaangnPage {
       const id = articleId(a);
       if (!a || !id) { page.valid = false; continue; }
       page.ids.push(id);
-      const home = HOMES[String((a.salesTypeV3 as { type?: unknown } | undefined)?.type ?? '')];
-      if (!home) { page.excludedIds.push(id); continue; }
+      const type = String((a.salesTypeV3 as { type?: unknown } | undefined)?.type ?? '');
+      const home = HOMES[type];
+      if (!home) { page.excludedIds.push(id); page.excludedTypes[id] = type; continue; }
       const listing = toListing(a, id, home);
       if (listing) page.items.push({ listing, raw: a });
       else page.unreadableIds.push(id);
@@ -134,7 +146,7 @@ export function parseDaangnArticles(body: string): DaangnPage {
  * 매물 모양은 역 근처 목록과 같다. 광고 칸(article 없이 advertisement만 있는 칸)은 매물이 아니라 건너뛴다.
  */
 export function parseDaangnFeed(body: string): DaangnPage {
-  const empty: DaangnPage = { valid: false, ids: [], items: [], excludedIds: [], unreadableIds: [], hasNextPage: null, endCursor: null };
+  const empty: DaangnPage = { valid: false, ids: [], items: [], excludedIds: [], excludedTypes: {}, unreadableIds: [], hasNextPage: null, endCursor: null };
   try {
     const feed = JSON.parse(body)?.data?.articleFeed;
     if (!feed || !Array.isArray(feed.edges) || typeof feed.pageInfo?.hasNextPage !== 'boolean') return empty;
@@ -149,8 +161,9 @@ export function parseDaangnFeed(body: string): DaangnPage {
       const id = articleId(a);
       if (!id) { page.valid = false; continue; }
       page.ids.push(id);
-      const home = HOMES[String((a.salesTypeV3 as { type?: unknown } | undefined)?.type ?? '')];
-      if (!home) { page.excludedIds.push(id); continue; }
+      const type = String((a.salesTypeV3 as { type?: unknown } | undefined)?.type ?? '');
+      const home = HOMES[type];
+      if (!home) { page.excludedIds.push(id); page.excludedTypes[id] = type; continue; }
       const listing = toListing(a, id, home);
       if (listing) page.items.push({ listing, raw: a });
       else page.unreadableIds.push(id);

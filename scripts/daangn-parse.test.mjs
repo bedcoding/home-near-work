@@ -95,3 +95,18 @@ test('지도 매물 목록(articleFeed)도 주거용만 바꾸고, 광고 칸은
   assert.equal(parseDaangnFeed(feed([{ type: 'ARTICLE', article: null }], false, null)).valid, false, '광고도 매물도 아닌 칸은 못 읽은 것으로 본다');
   assert.equal(parseDaangnFeed('{"data":{"count":3}}').hasNextPage, null);
 });
+
+test('원룸은 매물에서 오픈형과 분리형 코드로 와도 주거용으로 저장한다', async () => {
+  const { parseDaangnFeed } = await import('../server/daangn-parse.ts');
+  const nodes = [article(301, 'OPEN_ONE_ROOM', MONTH), article(302, 'SPLIT_ONE_ROOM', MONTH), article(303, 'OFFICE', MONTH)];
+  const feed = parseDaangnFeed(JSON.stringify({ data: { articleFeed: {
+    edges: nodes.map((a) => ({ node: { type: 'ARTICLE', article: a } })), pageInfo: { endCursor: 'next', hasNextPage: true } } } }));
+  const station = parseDaangnArticles(body(nodes, true, 'next'));
+  for (const page of [feed, station]) {
+    assert.equal(page.valid, true);
+    assert.deepEqual(page.excludedIds, ['303'], '원룸 두 코드는 비주거로 빼지 않는다');
+    assert.deepEqual(page.excludedTypes, { 303: 'OFFICE' }, '뺀 매물은 종류 코드를 남긴다');
+    assert.deepEqual(page.items.map((i) => [i.listing.sourceId, i.listing.roomLabel, i.listing.buildingType]),
+      [['301', '오픈형 원룸', null], ['302', '분리형 원룸', null]]);
+  }
+});

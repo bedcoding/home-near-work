@@ -1,5 +1,5 @@
 import type { Frame, Request, Response } from 'playwright';
-import { isEmptyDaangnFeedEnd, parseDaangnFeed } from '../daangn-parse.js';
+import { DAANGN_HOME_SALES_TYPES, isEmptyDaangnFeedEnd, parseDaangnFeed } from '../daangn-parse.js';
 import { distanceM } from '../geo.js';
 import { knownStations } from '../station-catalog.js';
 import { BlockedError, type CollectContext, type Collector, type CollectedItem } from './types.js';
@@ -8,12 +8,19 @@ import type { Area, Station } from '../../shared/types.js';
 
 // 당근부동산: 지도 화면을 지역 범위(region_bounds)로 열면 왼쪽에 그 범위의 '매물' 목록(articleFeed, 최근 순 20건씩)이 뜬다.
 // 화면이 스스로 불러오는 목록 응답을 옆에서 읽고, 목록 칸을 내려 다음 페이지를 불러오게 한다(목록 응답 주소에는 직접 요청하지 않는다).
-// 상가, 사무실, 건물 같은 비주거 매물은 저장하지 않는다(daangn-parse.ts).
+// 주소의 af 조건으로 주거 종류만 목록에 오게 하고, 그래도 온 비주거 매물은 저장하지 않는다(daangn-parse.ts).
 // 지도 목록에 더 받을 페이지가 있으면 계속 읽는다. 안 보인 매물은 오래 못 보면 정리한다(retainMissing, STALE_SOURCES).
 
 /** 첫 목록과 다음 페이지 응답을 기다리는 시간 */
 const FIRST_WAIT_MS = 15000;
 const NEXT_WAIT_MS = 8000;
+
+/** 제외한 매물을 종류 코드별로 센 글. 모르는 주거 코드가 섞였는지 로그에서 바로 보이게 한다. */
+function excludedTypeSummary(excluded: Map<string, string>): string {
+  const counts = new Map<string, number>();
+  for (const type of excluded.values()) counts.set(type || '종류 없음', (counts.get(type || '종류 없음') ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1]).map(([type, count]) => `${type} ${count}`).join(', ');
+}
 
 /** 당근 역 화면 주소의 역 이름: '예시역'처럼 끝의 '역'을 뺀다(사이트 바로 가기와 같은 규칙). */
 export const daangnStationPath = (name: string) => name.replace(/역$/, '');
@@ -28,10 +35,15 @@ export function daangnBox(area: Pick<Area, 'lat' | 'lng' | 'radiusM'>): DaangnBo
   return { south: area.lat - dLat, west: area.lng - dLng, north: area.lat + dLat, east: area.lng + dLng, zoom };
 }
 
-/** 지역 범위의 지도 화면 주소. 화면 길은 가까운 역 화면을 쓰고, 보이는 범위는 region_bounds로 정한다. */
+/**
+ * 지역 범위의 지도 화면 주소. 화면 길은 가까운 역 화면을 쓰고, 보이는 범위는 region_bounds로 정한다.
+ * af는 사이트의 종류별 화면이 스스로 붙이는 목록 조건으로, 주거 종류만 걸어 비주거를 읽느라 쓰는 요청을 없앤다.
+ */
 export function daangnFeedUrl(stationName: string, box: DaangnBox): string {
   const bounds = [box.south, box.west, box.north, box.east].map((v) => v.toFixed(5)).concat(String(box.zoom)).join(',');
-  return `https://realty.daangn.com/map/subway/${encodeURIComponent(daangnStationPath(stationName))}?region_bounds=${encodeURIComponent(bounds)}`;
+  const filter = JSON.stringify({ salesTypes: DAANGN_HOME_SALES_TYPES });
+  return `https://realty.daangn.com/map/subway/${encodeURIComponent(daangnStationPath(stationName))}` +
+    `?region_bounds=${encodeURIComponent(bounds)}&af=${encodeURIComponent(filter)}`;
 }
 
 /**
@@ -63,7 +75,8 @@ interface FeedLog {
   cursors: Set<string>;
   ids: Set<string>;
   housingIds: Set<string>;
-  excluded: Set<string>;
+  /** 저장하지 않은 매물 번호와 그 종류 코드 */
+  excluded: Map<string, string>;
   unreadable: Set<string>;
   invalid: boolean;
   ended: boolean;
@@ -165,7 +178,7 @@ export async function collectDaangn(ctx: CollectContext, targets: ReturnType<typ
         log.ended = read.hasNextPage === false;
         log.invalid ||= !read.valid;
         for (const id of read.ids) log.ids.add(id);
-        for (const id of read.excludedIds) log.excluded.add(id);
+        for (const id of read.excludedIds) log.excluded.set(id, read.excludedTypes[id] ?? '');
         for (const id of read.unreadableIds) log.unreadable.add(id);
         const received = ctx.publishListings ? new Map<string, CollectedItem>() : null;
         for (const i of read.items) {
@@ -232,7 +245,7 @@ export async function collectDaangn(ctx: CollectContext, targets: ReturnType<typ
       }
       const log: FeedLog = {
         pages: 0, cursors: new Set(), ids: new Set(), housingIds: new Set(),
-        excluded: new Set(), unreadable: new Set(), invalid: false, ended: false,
+        excluded: new Map(), unreadable: new Set(), invalid: false, ended: false,
       };
       const state: FeedState = { url: new URL(daangnFeedUrl(station.name, box)), log, shot: null, next: null };
       const where = `${area.name} (${i + 1}/${targets.length})`;
@@ -311,7 +324,7 @@ export async function collectDaangn(ctx: CollectContext, targets: ReturnType<typ
         }, [...log.housingIds]);
         ctx.log(
           `당근부동산: ${area.name} 매물 목록 ${log.pages}쪽, 매물 ${log.ids.size}건 중 주거 ${log.housingIds.size}건, ${reason}` +
-            `${log.excluded.size ? `, 비주거 ${log.excluded.size}건 제외` : ''}${log.unreadable.size ? `, 읽지 못한 주거 매물 ${log.unreadable.size}건` : ''}`,
+            `${log.excluded.size ? `, 주거로 알지 못한 종류 ${log.excluded.size}건 제외(${excludedTypeSummary(log.excluded)})` : ''}${log.unreadable.size ? `, 읽지 못한 주거 매물 ${log.unreadable.size}건` : ''}`,
         );
       }
     }

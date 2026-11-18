@@ -134,6 +134,7 @@ test('당근: 수집용 지역마다 반경 네모 범위로 지도 매물 목�
   const url = new URL(daangnFeedUrl('가상역', box));
   assert.equal(decodeURIComponent(url.pathname), '/map/subway/가상', '역 화면 주소는 끝의 역을 뺀 이름');
   assert.deepEqual(url.searchParams.get('region_bounds').split(',').map((v) => Math.round(Number(v) * 1000) / 1000), [34.991, 127.989, 35.009, 128.011, 15]);
+  assert.deepEqual(JSON.parse(url.searchParams.get('af')), { salesTypes: ['ONE_ROOM', 'TWO_ROOM', 'OFFICETEL', 'APART', 'HOUSE'] }, '목록에는 주거 종류만 오게 조건을 건다');
 
   const st = (name, lat, lng) => ({ name, lat, lng });
   const gu = { id: 1, name: '가상 구', lat: 35, lng: 128, radiusM: 3000, enabled: true, purpose: 'collection', region: { kind: 'gu', code: '99999', name: '가상 구' } };
