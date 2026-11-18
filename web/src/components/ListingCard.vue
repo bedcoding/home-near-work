@@ -285,7 +285,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
           <span class="chip loan-chip"><span v-for="x in loan.lights" :key="x.id" class="loan" :class="x.state"><i class="ld" />{{ x.name }}</span><span v-if="loan.cap" class="loan-cap">주담대 {{ eokText(loan.cap) }}</span></span>
         </CountTooltip>
         <span v-if="selected" class="selection-label">✓ 선택됨</span>
-        <span v-if="liveCollected" class="chip chip-live" title="한국 시간으로 오늘 처음 수집한 매물">새 수집</span>
+        <span v-if="liveCollected" class="chip chip-live" title="처음 수집한 지 24시간이 안 된 매물">새 수집</span>
         <span v-if="l.isNew" class="chip chip-new">신규</span>
         <span v-if="marks.contactedAt" class="chip chip-contact" :title="`${dateTime(marks.contactedAt)}에 문의함으로 표시`">📞 문의함</span>
         <span v-else-if="marks.seen" class="chip chip-viewed" :title="`이 대시보드에서 ${dateTime(l.seenAt!)}에 눌러 봄`">봤음</span>

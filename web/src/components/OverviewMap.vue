@@ -1896,7 +1896,7 @@ watch(
 watch(currentRate, () => drawDots(false));
 watch(() => props.liveListingIds, (ids) => {
   drawLiveListings();
-  // 열려 있는 툴팁과 팝업도 자정이 지나면 전날의 배지를 지운다.
+  // 열려 있는 툴팁과 팝업도 수집한 지 24시간이 지난 매물의 배지를 지운다.
   for (const overlay of [hoveredListingPin?.getTooltip()?.getElement(), listingPopup?.getElement()]) {
     for (const chip of overlay?.querySelectorAll<HTMLElement>('[data-live-listing-id]') ?? []) {
       if (!ids?.has(chip.dataset.liveListingId!)) chip.remove();
@@ -2001,8 +2001,8 @@ onBeforeUnmount(() => {
         <span><i style="background:#c48a0a"></i>관심</span>
         <span><i style="background:#1f5fbf"></i>나머지</span>
         <span title="이 대시보드에서 눌러 본 매물"><i class="seen-dot"></i>봤음</span>
-        <span v-if="liveListingIds?.size" title="한국 시간으로 오늘 처음 수집한 매물 중 현재 필터와 지도 범위에 맞는 매물을 강조합니다.">
-          <i class="live-dot"></i>{{ visibleLiveCount ? `오늘 수집 ${visibleLiveCount}건 표시 중` : `오늘 수집 ${liveListingIds.size}건, 현재 지도에는 0건` }}
+        <span v-if="liveListingIds?.size" title="처음 수집한 지 24시간이 안 된 매물 중 현재 필터와 지도 범위에 맞는 매물을 강조합니다.">
+          <i class="live-dot"></i>{{ visibleLiveCount ? `최근 24시간 수집 ${visibleLiveCount}건 표시 중` : `최근 24시간 수집 ${liveListingIds.size}건, 현재 지도에는 0건` }}
         </span>
       </div>
       <InfoModal heading="지도 보는 법" label="지도 보는 법" storage-key="hnw-map-info-tab" :tabs="MAP_TABS" title="점 색, 숫자와 가격, 구역과 역, 지하철 노선, 핀, 정비구역">

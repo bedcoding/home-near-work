@@ -576,25 +576,27 @@ const hiddenCount = computed(() => {
 const listingsLoading = ref(0);
 const listingsLoaded = ref(false);
 const DAY_MS = 24 * 60 * 60 * 1000;
-const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
-function koreaDayStart() {
-  return Math.floor((Date.now() + KST_OFFSET_MS) / DAY_MS) * DAY_MS - KST_OFFSET_MS;
+const MINUTE_MS = 60 * 1000;
+/**
+ * '새 수집'으로 치는 기준 시각: 지금부터 24시간 전. 날짜로 끊으면 밤늦게 모은 매물의 표시가 자정에 한꺼번에 사라진다.
+ * 분 단위로 끊어, 폴링할 때마다 기준이 바뀌어 매물 전체를 다시 훑고 지도 고리를 다시 그리지 않게 한다.
+ */
+function collectedCutoff() {
+  return Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS - DAY_MS;
 }
-const collectedDayStart = ref(koreaDayStart());
-// 최초 수집 시각을 기준으로 새로고침 뒤에도 오늘 매물을 강조한다.
+const collectedSince = ref(collectedCutoff());
+// 최초 수집 시각을 기준으로 새로고침 뒤에도 처음 수집한 지 24시간이 안 된 매물을 강조한다.
 const liveListingIds = computed(() => {
-  const start = collectedDayStart.value;
-  const end = start + DAY_MS;
+  const since = collectedSince.value;
   const ids = new Set<string>();
   for (const listing of homes.value) {
-    const firstSeen = Date.parse(listing.firstSeenAt);
-    if (firstSeen >= start && firstSeen < end) ids.add(listing.id);
+    if (Date.parse(listing.firstSeenAt) >= since) ids.add(listing.id);
   }
   return ids;
 });
 
 async function refreshState() {
-  collectedDayStart.value = koreaDayStart();
+  collectedSince.value = collectedCutoff();
   state.value = await api.state();
 }
 /** 지난번에 받은 목록 버전부터 바뀐 매물만 받아 가진 목록에 합친다(서버가 그 버전을 모르면 전체를 받는다). */
@@ -603,7 +605,7 @@ async function refreshListings() {
   listingsLoading.value += 1;
   try {
     listings.value = await listingsSync(() => listings.value);
-    collectedDayStart.value = koreaDayStart();
+    collectedSince.value = collectedCutoff();
     listingsLoaded.value = true;
   } finally {
     listingsLoading.value -= 1;
