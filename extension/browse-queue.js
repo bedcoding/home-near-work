@@ -6,9 +6,10 @@ const HNW_BROWSE = (() => {
   const AUTO_REPORT = 'hnw-browse-auto-report';
   const AUTO_STARTED = 'hnw-browse-auto-started';
   const ALARM = 'hnw-browse';
-  // 당근부동산은 대시보드 서버의 '조회하기'가 모으므로 순차 조회에서 다루지 않는다.
   const SITES = ['naver', 'dabang', 'zigbang', 'kbland', 'hogangnono'];
-  const LISTINGS = ['naver', 'dabang', 'zigbang'];
+  const LISTINGS = ['naver', 'dabang', 'zigbang', 'daangn'];
+  const DAANGN_GENERAL_ONLY = '당근부동산은 일반 조회에서 수집합니다.';
+  const DAANGN_SCROLL_DELAY_MS = 10000;
   let serial = Promise.resolve();
   let timer;
   let timerAt = 0;
@@ -106,6 +107,44 @@ const HNW_BROWSE = (() => {
     // Persist the deadline so alarms and worker recovery cannot skip the wait.
     job.naverNextAt=Date.now()+job.naverDelayMs;
   }
+  function paceDaangnPage(job, page) {
+    if (!page || job.daangnDelayPage === page) return;
+    job.daangnDelayPage = page;
+    job.daangnNextAt = Date.now() + DAANGN_SCROLL_DELAY_MS;
+  }
+  function rememberDaangnPage(job, capture) {
+    const projected = HNW_DAANGN_CAPTURE.requestTemplate(capture.requestBody);
+    if (!projected) return;
+    const decoded = JSON.parse(projected);
+    const template = JSON.stringify({ ...decoded, variables: { ...decoded.variables, after: null } });
+    const request = JSON.parse(capture.requestBody).variables;
+    const feed = JSON.parse(capture.body).data.articleFeed;
+    const ledger = job.daangnLedger ||= { pages: 0, ids: [], seen: [], cursors: [], next: null, ended: false };
+    const ids = feed.edges.map(edge => edge?.node?.article?.originalId).filter(id => typeof id === 'string' && /^[1-9]\d{0,19}$/.test(id));
+    const signature = JSON.stringify([request.after, feed.pageInfo.endCursor, feed.pageInfo.hasNextPage, ids]);
+    if (job.daangnTemplate && job.daangnTemplate !== template) {
+      job.blocked = '당근 지도 목록의 조회 조건이 바뀌어 이어받기를 멈췄습니다.';
+      return;
+    }
+    if (ledger.seen.includes(signature)) return;
+    if (ledger.ended || request.after !== ledger.next) {
+      job.blocked = ledger.pages ? '당근 목록의 페이지 순서가 바뀌어 이어받기를 멈췄습니다.' : '당근 목록의 첫 페이지를 확인하지 못했습니다. 새 조회가 필요합니다.';
+      return;
+    }
+    const next = feed.pageInfo.endCursor;
+    if (feed.pageInfo.hasNextPage && (typeof next !== 'string' || !next || ledger.cursors.includes(next))) {
+      job.blocked = '당근의 다음 페이지 정보가 없거나 반복되어 이어받기를 멈췄습니다.';
+      return;
+    }
+    job.daangnTemplate ||= template;
+    ledger.seen.push(signature);
+    ledger.pages++;
+    ledger.ids = [...new Set([...ledger.ids, ...ids])];
+    ledger.next = next;
+    ledger.ended = !feed.pageInfo.hasNextPage;
+    if (typeof next === 'string') ledger.cursors.push(next);
+    if (job.daangnAwaiting?.cursor === request.after) job.daangnAwaiting = null;
+  }
   function isDashboard(sender) {
     try {
       const u = new URL(sender.url || sender.tab?.url);
@@ -119,6 +158,10 @@ const HNW_BROWSE = (() => {
     try {
       const a = new URL(expected), b = new URL(actual);
       if (a.origin !== b.origin || a.pathname.replace(/\/$/, '') !== b.pathname.replace(/\/$/, '')) return false;
+      if (a.hostname === 'realty.daangn.com') {
+        const bounds = a.searchParams.get('region_bounds');
+        return !!bounds && b.searchParams.getAll('region_bounds').length === 1 && b.searchParams.get('region_bounds') === bounds;
+      }
       if (a.hostname.endsWith('dabangapp.com') && a.searchParams.get('search_type') === 'region') {
         return b.searchParams.getAll('search_type').length === 1 && b.searchParams.get('search_type') === 'region' &&
           b.searchParams.getAll('search_id').length === 1 && a.searchParams.get('search_id') === b.searchParams.get('search_id');
@@ -177,23 +220,35 @@ const HNW_BROWSE = (() => {
       if (c.site === 'naver') return /\/(?:articleClusters|boundedArticles|clusteredArticles|legalDivisionArticleList)\/?$/.test(u.pathname);
       if (c.site === 'dabang') return u.pathname.includes('/room-list/');
       if (c.site === 'zigbang') return /\/items\/(list|subways\/[^/]+\/onerooms)$/.test(u.pathname) || u.pathname.endsWith('/common/subway/all');
+      if (c.site === 'daangn') {
+        if (u.href !== 'https://realty.kr.karrotmarket.com/graphql') return false;
+        if (c.status === 403 || c.status === 429) return true;
+        const feed = JSON.parse(c.body)?.data?.articleFeed;
+        return c.status >= 200 && c.status < 300 && Array.isArray(feed?.edges) && typeof feed.pageInfo?.hasNextPage === 'boolean';
+      }
       if (c.site === 'kbland') return u.pathname.endsWith('/stutCdFilter/count');
       if (c.site === 'hogangnono') return u.pathname.includes('/api/apt/');
       return false;
     } catch { return false; }
   }
+  function siteAvailable(toggles, id, automatic) {
+    // 이미 저장된 수동 당근 작업은 일반 탭 설정과 관계없이 이어서 마친다.
+    return (!automatic && id === 'daangn') || hnwEnabled(toggles, HNW_SITES.find((site) => site.id === id));
+  }
   async function jobsFor(areas, chosen, runId, automatic = false, naverContext = null) {
     const got = await chrome.storage.local.get(['sites', 'hnw-stations']);
-    const selected = SITES.filter((id) => chosen.includes(id) && hnwEnabled(got.sites, HNW_SITES.find((s) => s.id === id)));
-    if (!selected.length) throw new Error('확장에서 켜 둔 사이트 중 조회할 곳을 골라 주세요.');
+    const selected = SITES.filter((id) => chosen.includes(id) && siteAvailable(got.sites, id, automatic));
+    if (!selected.length) throw new Error('조회할 수 있는 사이트를 하나 이상 골라 주세요.');
     if (automatic && chosen.some((id) => !selected.includes(id))) throw new Error('예약한 사이트가 확장에서 꺼져 있습니다. 사이트를 켠 뒤 다시 실행해 주세요.');
+    const hadDaangn = chosen.includes('daangn');
     const unique = new Map();
     for (const input of areas) {
       const area = areaFrom(input);
       if (!area || area.radiusM <= 0 || area.radiusM > 50000) throw new Error('지역 위치와 반경을 확인해 주세요.');
-      // 네이버는 구나 동 전체를, 다른 사이트는 역 지역을 맡는다. 대시보드는 둘을 한 순회에 함께 보낼 수 있다.
-      const areaSites=selected.filter(site=>input.region ? site==='naver' : site!=='naver');
-      if(!areaSites.length)throw new Error(automatic ? '선택한 사이트와 예약 지역의 범위가 다릅니다.' : '네이버는 구나 동 지역을, 다른 사이트는 역 지역을 조회합니다. 지역과 사이트 선택을 확인해 주세요.');
+      const areaSites = selected.filter(site => input.region ? site === 'naver' : site !== 'naver');
+      // 이전 대시보드가 당근과 함께 보낸 지역 중 남은 사이트에서 조회할 수 없는 곳은 건너뛴다.
+      if (!areaSites.length && hadDaangn) continue;
+      if (!areaSites.length) throw new Error(automatic ? '선택한 사이트와 예약 지역의 범위가 다릅니다.' : '선택한 사이트가 조회할 수 있는 지역을 골라 주세요.');
       area.browseSites=areaSites;
       area.dabangRegions = dabangRegions(input.dabangRegions);
       if (areaSites.includes('naver') && (!input.region || input.purpose === 'alert' || !['gu','dong'].includes(input.region.kind))) throw new Error('네이버는 수집할 구나 동을 선택해 주세요.');
@@ -216,7 +271,8 @@ const HNW_BROWSE = (() => {
     }
     const jobs = [];
     for (const area of unique.values()) {
-      for (const generated of hnwSiteLinks(area, got['hnw-stations']).filter((l) => area.browseSites.includes(l.id))) {
+      const links = hnwSiteLinks(area, got['hnw-stations']).filter(l => area.browseSites.includes(l.id));
+      for (const generated of links) {
         const link = automatic && generated.id === 'zigbang' ? { ...generated, url: area.zigbangStation.url } : generated;
         if (link.id === 'naver' && area.naverScope) {
           if (!area.naverContext) throw new Error('현재 네이버 필터를 읽지 못했습니다. 무필터 수집은 시작하지 않았습니다.');
@@ -235,6 +291,7 @@ const HNW_BROWSE = (() => {
           url: link.url, status: ready ? 'pending' : 'needs-input', note: ready ? '대기 중' : '이 지역의 역이나 단지 바로가기 정보가 없습니다. 사이트에서 지역을 한 번 검색한 뒤 미확인 재시도를 눌러 주세요.' });
       }
     }
+    if (!jobs.length && hadDaangn) throw new Error(`${DAANGN_GENERAL_ONLY} 순차 조회할 사이트와 지역을 골라 주세요.`);
     return jobs;
   }
   async function refreshHints() {
@@ -290,9 +347,16 @@ const HNW_BROWSE = (() => {
       const job = state?.jobs.find((j) => j.id === message.browseJobId);
       if (!job || job.status !== 'running' || job !== state.jobs[state.index] || sender.tab?.id !== state.tabId || sender.frameId !== 0 || message.documentToken !== job.documentToken ||
           (job.documentId && sender.documentId !== job.documentId)) return true;
-      const c = message.capture;
+      const c = job.daangnScope ? HNW_DAANGN_CAPTURE.capture(message.capture, true) : message.capture;
       if (!c || c.site !== job.site || !samePage(job.url, c.pageUrl) || typeof c.body !== 'string' || c.body.length > 2000000) return true;
       if (!usefulCapture(c)) return true;
+      if (job.daangnScope && [403, 429].includes(c.status)) {
+        job.daangnAccessDenied = true;
+        job.blocked = job.note = `당근이 요청을 거절해 조회를 멈췄습니다(HTTP ${c.status}).`;
+        phase(state, 'error', job.note, 'error');
+        await save(state); schedule(0); return true;
+      }
+      if (job.daangnScope && job.blocked) return true;
       if (job.naverScope?.filter) {
         if (!HNW_NAVER_LEDGER.endpoint(c.url)) return true;
         let matches = false;
@@ -311,8 +375,9 @@ const HNW_BROWSE = (() => {
         return true;
       }
       const batchId = crypto.randomUUID();
-      await chrome.storage.local.set({ [`${OUTBOX}${Date.now()}:${batchId}`]: { jobId: job.id, batchId, captures: [c], ...(job.scope ? { scope: job.scope } : {}), ...(job.naverScope ? { naverScope: job.naverScope } : {}) } });
+      await chrome.storage.local.set({ [`${OUTBOX}${Date.now()}:${batchId}`]: { jobId: job.id, batchId, captures: [c], ...(job.scope ? { scope: job.scope } : {}), ...(job.naverScope ? { naverScope: job.naverScope } : {}), ...(job.daangnScope ? { daangnScope: job.daangnScope } : {}) } });
       job.lastCaptureAt = Date.now();
+      if (job.daangnScope) rememberDaangnPage(job, c);
       if (job.naverScope && HNW_NAVER_LEDGER.endpoint(c.url)) {
         job.naverCursorLedger ||= HNW_NAVER_LEDGER.create(job.naverScope);
         HNW_NAVER_LEDGER.accept(job.naverCursorLedger, c);
@@ -348,6 +413,7 @@ const HNW_BROWSE = (() => {
       if (job) {
         job.receipt = receipt;
         if (job.naverScope && !job.naverCursorLedger?.ended) paceNaverPage(job,receipt.naverCoverage?.pages || job.naverCursorLedger?.pages);
+        if (job.daangnTemplate && receipt.daangnCoverage?.pages === job.daangnLedger?.pages) paceDaangnPage(job, receipt.daangnCoverage.pages);
       }
       record(state, 'saved', job, { responses: receipt.responses, listings: receipt.listings });
       await save(state);
@@ -364,6 +430,72 @@ const HNW_BROWSE = (() => {
     phase(state, 'waiting', note);
     state.index += 1;
     await save(state);
+  }
+  async function finishDaangnBlocked(state, job) {
+    for (const remaining of state.jobs.slice(state.index + 1)) {
+      if (remaining.site === 'daangn' && remaining.status === 'pending') {
+        remaining.status = 'needs-input';
+        remaining.note = '당근에서 접근이 제한돼 이 지역은 열지 않았습니다.';
+      }
+    }
+    await finishJob(state, job.receipt?.daangnCoverage?.pages > 0 ? 'partial' : 'needs-input', job.blocked);
+  }
+  async function daangnNextPage(state, job) {
+    const ledger = job.daangnLedger;
+    if (!job.daangnTemplate || !ledger?.pages) return false;
+    const stored = job.receipt?.daangnCoverage;
+    if (ledger.ended) {
+      if (!job.captureGap && stored?.complete && samePage(job.url, stored.scopeUrl) &&
+          stored.pages === ledger.pages && stored.received === ledger.ids.length) {
+        await finishJob(state, 'complete', `당근 지도 목록 ${stored.pages}쪽에서 주거 매물 ${stored.stored}건의 서버 저장을 확인했습니다.`);
+      } else {
+        job.completionWaitAt ||= Date.now();
+        if (Date.now() - job.completionWaitAt >= 15000) await finishJob(state, 'partial', '당근의 마지막 응답을 받았지만 전체 페이지와 서버 저장 확인이 일치하지 않습니다. 받은 매물은 저장했습니다.');
+        else { job.note = '당근의 마지막 목록과 서버 저장을 대조하고 있습니다.'; phase(state, 'saving', job.note); await save(state); }
+      }
+      schedule(); return true;
+    }
+    if (job.daangnAwaiting) {
+      if (Date.now() - job.daangnAwaiting.at >= 20000) await finishJob(state, 'partial', '당근의 다음 페이지 수신과 저장을 확인하지 못했습니다. 받은 매물은 저장했습니다.');
+      else { job.note = `${ledger.pages}쪽 저장 확인, 다음 목록 응답을 기다리는 중`; phase(state, 'waiting', job.note); await save(state); }
+      schedule(); return true;
+    }
+    if (stored?.pages !== ledger.pages) {
+      job.completionWaitAt ||= Date.now();
+      if (Date.now() - job.completionWaitAt >= 15000) await finishJob(state, 'partial', '당근 목록의 서버 저장을 확인하지 못해 이어받기를 멈췄습니다.');
+      else { job.note = '당근 목록의 서버 저장을 기다립니다.'; phase(state, 'saving', job.note); await save(state); }
+      schedule(); return true;
+    }
+    job.completionWaitAt = 0;
+    paceDaangnPage(job, ledger.pages);
+    const remaining = job.daangnNextAt - Date.now();
+    if (remaining > 0) {
+      job.note = `${ledger.pages}쪽 저장 확인, 다음 목록까지 10초 대기`;
+      phase(state, 'waiting', job.note); await save(state); schedule(remaining); return true;
+    }
+    const body = HNW_DAANGN_CAPTURE.nextRequest(job.daangnTemplate, ledger.next);
+    if (!body) {
+      await finishJob(state, 'partial', '당근의 다음 지도 목록 요청을 확인하지 못했습니다. 받은 매물은 저장했습니다.');
+      schedule(); return true;
+    }
+    job.daangnAwaiting = { at: Date.now(), cursor: ledger.next };
+    job.actions++; job.lastActionAt = Date.now(); job.idle = 0;
+    job.note = `${ledger.pages}쪽 저장 확인, ${ledger.pages + 1}쪽 요청 중`;
+    phase(state, 'exploring', job.note); record(state, 'action', job, { actions: job.actions }); await save(state);
+    let response;
+    try {
+      const executed = await Promise.race([chrome.scripting.executeScript({
+        target: { tabId: state.tabId, ...(job.documentId ? { documentIds: [job.documentId] } : { frameIds: [0] }) },
+        world: 'MAIN', func: hnwFetchDaangnPage, args: [body, job.url],
+      }), new Promise(resolve => setTimeout(() => resolve(null), 20000))]);
+      response = executed?.[0]?.result;
+    } catch { response = { error: 'request-failed' }; }
+    if (!response || response.error || !Number.isInteger(response.status) || response.status < 200 || response.status >= 300 || !response.json) {
+      job.daangnAccessDenied = [403, 429].includes(response?.status) || response?.error === 'page-security-check';
+      job.blocked = response?.error === 'page-security-check' ? '당근 화면에 보안 확인 또는 로그인이 필요해 자동 요청을 중단했습니다.'
+        : response?.status ? `당근의 다음 목록 요청이 HTTP ${response.status}로 응답해 이어받기를 멈췄습니다.` : '당근의 다음 지도 목록 요청을 실행하지 못했습니다.';
+    }
+    await save(state); schedule(); return true;
   }
   async function naverNextPage(state, job) {
     const ledger = job.naverCursorLedger;
@@ -436,7 +568,7 @@ const HNW_BROWSE = (() => {
     }
     const job = state.jobs[state.index];
     const toggles = (await chrome.storage.local.get('sites')).sites;
-    if (!hnwEnabled(toggles, HNW_SITES.find((s) => s.id === job.site))) {
+    if (!siteAvailable(toggles, job.site, !!state.automaticRequestId)) {
       await finishJob(state, 'needs-input', '확장에서 이 사이트를 꺼서 건너뛰었습니다.'); schedule(); return;
     }
     if (job.status === 'pending') {
@@ -466,7 +598,9 @@ const HNW_BROWSE = (() => {
     }
     const age = Date.now() - job.startedAt;
     if (job.blocked) {
-      await finishJob(state, 'needs-input', job.blocked); schedule(); return;
+      if (job.daangnScope && job.daangnAccessDenied) await finishDaangnBlocked(state, job);
+      else await finishJob(state, job.daangnScope && job.receipt?.responses ? 'partial' : 'needs-input', job.blocked);
+      schedule(); return;
     }
     if (tab.status === 'loading' || !job.documentToken) {
       if (age > 45000) await finishJob(state, 'failed', '45초 안에 지역 페이지와 확장 연결을 확인하지 못했습니다.');
@@ -485,8 +619,16 @@ const HNW_BROWSE = (() => {
     }
     const scopedDabang = job.site === 'dabang' && job.scope?.kind === 'dabang-region';
     const stationZigbang = job.site === 'zigbang' && !!zigbangStation(job.url);
-    const bounded = job.naverScope ? age >= 14400000 || job.actions >= 10000 : scopedDabang || stationZigbang ? age >= 1800000 || job.actions >= 2000 : age >= 120000 || job.actions >= 40;
+    const bounded = job.naverScope || job.daangnScope ? age >= 14400000 || job.actions >= 10000 : scopedDabang || stationZigbang ? age >= 1800000 || job.actions >= 2000 : age >= 120000 || job.actions >= 40;
     if (!bounded && job.naverScope && await naverNextPage(state, job)) return;
+    if (!bounded && job.daangnScope && await daangnNextPage(state, job)) return;
+    if (!bounded && job.daangnScope) {
+      const remaining = DAANGN_SCROLL_DELAY_MS - (Date.now() - Math.max(job.lastActionAt, job.lastCaptureAt, job.loadedAt));
+      if (remaining > 0) {
+        phase(state, 'waiting', '당근의 다음 목록 확인 전에 쉽니다.');
+        await save(state); schedule(remaining); return;
+      }
+    }
     // 마지막 스크롤/클릭 직후 이동하면 아직 도착하지 않은 목록을 잃을 수 있다.
     // 한도에서는 추가 조작을 멈추고 응답을 최대 15초 더 기다린다.
     if (bounded) {
@@ -504,7 +646,7 @@ const HNW_BROWSE = (() => {
       phase(state, 'exploring', '목록을 확인하고 필요한 스크롤 또는 펼치기를 요청합니다.');
       await save(state);
       result = await Promise.race([
-        chrome.tabs.sendMessage(state.tabId, { type: 'browse-step', jobId: job.id, site: job.site, ...(job.scope ? { scope: job.scope } : {}), ...(job.naverScope ? { naverScope: job.naverScope } : {}) }, job.documentId ? { documentId: job.documentId } : { frameId: 0 }),
+        chrome.tabs.sendMessage(state.tabId, { type: 'browse-step', jobId: job.id, site: job.site, ...(job.scope ? { scope: job.scope } : {}), ...(job.naverScope ? { naverScope: job.naverScope } : {}), ...(job.daangnScope ? { daangnScope: job.daangnScope } : {}) }, job.documentId ? { documentId: job.documentId } : { frameId: 0 }),
         new Promise((resolve) => setTimeout(() => resolve(null), 5000)),
       ]);
     } catch { result = null; }
@@ -512,6 +654,21 @@ const HNW_BROWSE = (() => {
       await finishJob(state, 'failed', '페이지 탐색 스크립트가 답하지 않습니다. 확장과 페이지를 새로고침해 주세요.'); schedule(); return;
     }
     job.note = String(result.note || '응답 확인 중').slice(0, 300);
+    if (job.daangnScope && result.kind === 'complete') {
+      const stored = job.receipt?.daangnCoverage;
+      if (!job.captureGap && stored?.complete === true && samePage(job.url, stored.scopeUrl)) {
+        await finishJob(state, 'complete', `당근 지도 목록 ${stored.pages}쪽에서 주거 매물 ${stored.stored}건의 서버 저장을 확인했습니다.`);
+        schedule(); return;
+      }
+      job.completionWaitAt ||= Date.now();
+      if (Date.now() - job.completionWaitAt >= 15000) {
+        const saved = stored ? `서버에서 주거 매물 ${stored.stored}건의 저장을 확인했습니다.` : '서버 저장을 확인하지 못했습니다.';
+        await finishJob(state, stored ? 'partial' : 'failed', `마지막 응답을 받았지만 전체 페이지가 이어졌는지 확인하지 못했습니다. ${saved}`);
+        schedule(); return;
+      }
+      result = { kind: 'idle', waiting: true };
+      job.note = '당근의 마지막 목록과 서버 저장을 대조하고 있습니다.';
+    }
     if (job.naverScope && result.kind === 'complete') {
       const page = result.naverCoverage, stored = job.receipt?.naverCoverage;
       if (!job.captureGap && page?.complete && stored?.complete && page.code === job.naverScope.code && stored.code === page.code && page.total === stored.total && page.received === stored.stored && page.pages === stored.pages) {
@@ -543,7 +700,9 @@ const HNW_BROWSE = (() => {
       job.note = '역 1km 목록의 상세정보를 확인했습니다. 서버의 매물별 저장·범위 제외 확인을 기다립니다.';
     }
     if (result.kind === 'blocked') {
-      await finishJob(state, 'needs-input', job.note); schedule(); return;
+      if (job.daangnScope) { job.blocked = job.note; await finishDaangnBlocked(state, job); }
+      else await finishJob(state, 'needs-input', job.note);
+      schedule(); return;
     }
     if (result.kind === 'action') {
       job.actions += 1; job.lastActionAt = Date.now(); job.idle = 0;
@@ -591,6 +750,9 @@ const HNW_BROWSE = (() => {
       if (!Array.isArray(message.areas) || !message.areas.length || message.areas.length > 100) throw new Error('조회할 지역을 1~100곳 골라 주세요.');
       const id = automaticRequestId || crypto.randomUUID();
       const chosen = Array.isArray(message.sites) ? message.sites : ['naver', 'dabang', 'zigbang'];
+      if (chosen.includes('daangn') && !SITES.some(site => chosen.includes(site))) {
+        throw new Error(DAANGN_GENERAL_ONLY);
+      }
       if (state?.automaticRequestId && state.status === 'paused') {
         replacedReport = automaticReport(state, 'failed');
       }
@@ -623,6 +785,8 @@ const HNW_BROWSE = (() => {
       if (state.jobs.some(job=>job.site==='naver'&&!job.naverScope?.filter)) throw new Error('이전 조회에는 필터가 저장되지 않았습니다. 현재 필터로 새 수집을 시작해 주세요.');
       if (message.command === 'retry') {
         if ((await keys()).length) throw new Error('보관된 응답부터 이어하기로 저장해 주세요.');
+        const retryable = state.jobs.filter(job => ['failed', 'partial', 'needs-input'].includes(job.status));
+        if (retryable.length && retryable.every(job => job.site === 'daangn')) throw new Error(DAANGN_GENERAL_ONLY);
         await refreshHints();
         // 수동 재시도는 새 조회다. 이전 예약 회차의 저장 확인을 재사용하지 않는다.
         if (state.automaticRequestId) {
@@ -631,8 +795,8 @@ const HNW_BROWSE = (() => {
           state.id = crypto.randomUUID();
         }
         const got = await chrome.storage.local.get('hnw-stations');
-        for (const job of state.jobs) {
-          if (!['failed', 'partial', 'needs-input'].includes(job.status)) continue;
+        for (const job of retryable) {
+          if (job.site === 'daangn') continue;
           const link = job.naverScope ? { id: 'naver', url: job.url } : job.scope ? { id: 'dabang', url: job.scope.url } : hnwSiteLinks(job.area, got['hnw-stations']).find((l) => l.id === job.site);
           if (!link || !hasRegion(link)) continue;
           Object.assign(job, { id: crypto.randomUUID(), url: link.url, status: 'pending', note: '재시도 대기', receipt: undefined, received: 0,
@@ -643,10 +807,11 @@ const HNW_BROWSE = (() => {
       }
       // Reloading a region starts a new vendor seed. Preserve completed regions,
       // but never mix the resumed region's new pages into its old cursor ledger.
-      if (message.command === 'resume' && state.jobs.some(job => job.status === 'running' && job.naverScope)) {
+      if (message.command === 'resume' && state.jobs.some(job => job.status === 'running' && (job.naverScope || job.daangnScope))) {
         if (!(await flushOutbox(state))) throw new Error('보관 중인 응답을 먼저 저장하고 다시 이어하기를 눌러 주세요.');
-        for (const job of state.jobs) if (job.status === 'running' && job.naverScope) {
+        for (const job of state.jobs) if (job.status === 'running' && (job.naverScope || job.daangnScope)) {
           Object.assign(job, { id: crypto.randomUUID(), receipt: undefined, received: 0, captureGap: false, completionWaitAt: 0, waitNote: null, naverCursorLedger: null, naverTemplate: null, naverAwaiting: null, naverListAt: 0,
+            daangnLedger: null, daangnTemplate: null, daangnAwaiting: null, daangnDelayPage: 0, daangnNextAt: 0, daangnAccessDenied: false,
             naverDelayPage: 0, naverDelayMs: 0, naverNextAt: 0 });
         }
       }

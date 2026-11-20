@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { priceText } from '../shared/format.js';
 import type { ExplainRow, NormalizedListing, PriceOption } from '../shared/types.js';
 
@@ -184,6 +185,73 @@ export function isEmptyDaangnFeedEnd(body: string): boolean {
   }
 }
 
+function daangnMapPageUrl(value: unknown): URL | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    return url.origin === 'https://realty.daangn.com' && !url.username && !url.password && /^\/map(?:\/subway\/[^/]+)?\/?$/.test(url.pathname) ? url : null;
+  } catch { return null; }
+}
+
+export function isDaangnListingCapture(pageUrl: unknown, responseUrl: unknown): boolean {
+  if (!daangnMapPageUrl(pageUrl) || typeof responseUrl !== 'string') return false;
+  try {
+    const url = new URL(responseUrl);
+    return !url.username && !url.password && `${url.origin}${url.pathname}` === 'https://realty.kr.karrotmarket.com/graphql';
+  } catch { return false; }
+}
+
+/** Preserve only fields the public listing parsers use, including pagination and advertisement evidence. */
+export function publicDaangnListingBody(body: string, mapOnly = false, keepMapCursor = true): string | null {
+  const fields = (value: Record<string, unknown> | null | undefined, names: string[]) => Object.fromEntries(names.flatMap(name => {
+    const v = value?.[name];
+    return v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? [[name, v]] : [];
+  }));
+  try {
+    const response = JSON.parse(body);
+    if (response?.errors?.length) return null;
+    const data = response?.data;
+    const key = data?.articleFeed ? 'articleFeed' : mapOnly ? null : 'subwayStationArticleConnection';
+    if (!key) return null;
+    const list = data?.[key];
+    if (!Array.isArray(list?.edges) || typeof list.pageInfo?.hasNextPage !== 'boolean') return null;
+    const edges = list.edges.map((edge: { node?: any }) => {
+      const a = edge?.node?.article;
+      if (!a || typeof a !== 'object') return edge?.node?.advertisement ? { node: { advertisement: true } } : {};
+      return { node: { article: {
+        ...fields(a, ['originalId', 'buildingName', 'isHideAddress', 'floor', 'topFloor', 'area']),
+        ...(a.isHideAddress === true ? {} : fields(a, ['addressInfo'])),
+        salesTypeV3: fields(a.salesTypeV3, ['type']), publicCoordinate: fields(a.publicCoordinate, ['lat', 'lon']),
+        region: fields(a.region, ['name', 'name2', 'name3']),
+        trades: Array.isArray(a.trades) ? a.trades.map((trade: Record<string, unknown>) => fields(trade, ['type', 'deposit', 'monthlyPay', 'price'])) : [],
+        images: Array.isArray(a.images) ? a.images.slice(0, 1).map((image: Record<string, unknown>) => fields(image, ['thumbnail'])) : [],
+      } } };
+    });
+    const pageInfo = fields(list.pageInfo, key === 'articleFeed' && !keepMapCursor ? ['hasNextPage'] : ['hasNextPage', 'endCursor']);
+    return JSON.stringify({ data: { [key]: { edges, pageInfo } } });
+  } catch { return null; }
+}
+
+export interface DaangnMapScope { kind: 'daangn-map'; url: string }
+
+export function daangnMapScopeUrl(value: unknown): string | null {
+  const url = daangnMapPageUrl(value);
+  if (!url || !daangnStationName(url.href)) return null;
+  const bounds = url.searchParams.getAll('region_bounds');
+  const parts = bounds[0]?.split(',') ?? [];
+  if (bounds.length !== 1 || parts.length !== 5 || parts.some(part => !/^-?\d{1,3}(?:\.\d{1,8})?$/.test(part))) return null;
+  const [south, west, north, east, zoom] = parts.map(Number);
+  if (!(south >= -90 && south < north && north <= 90 && west >= -180 && west < east && east <= 180
+    && Number.isInteger(zoom) && zoom >= 1 && zoom <= 22)) return null;
+  return `${url.origin}${url.pathname.replace(/\/$/, '')}?region_bounds=${encodeURIComponent(bounds[0])}`;
+}
+
+export function normalizeDaangnMapScope(value: unknown): DaangnMapScope | null {
+  const input = value as Partial<DaangnMapScope> | null;
+  const url = input?.kind === 'daangn-map' ? daangnMapScopeUrl(input.url) : null;
+  return url ? { kind: 'daangn-map', url } : null;
+}
+
 /** 한 역의 목록을 처음부터 끝까지 받았는지와 매물별 서버 저장을 대조하는 기록. */
 export interface DaangnLedger {
   stationName: string | null;
@@ -197,6 +265,7 @@ export interface DaangnLedger {
 }
 export interface DaangnCoverage {
   stationPoiId: string | null;
+  scopeUrl?: string;
   pages: number;
   received: number;
   stored: number;
@@ -204,6 +273,11 @@ export interface DaangnCoverage {
   unreadable: number;
   complete: boolean;
   reason: string;
+}
+
+export interface DaangnMapLedger extends Omit<DaangnLedger, 'stationName' | 'stationPoiId'> {
+  scopeUrl: string;
+  seenPages: string[];
 }
 
 /** `/map/subway/<역 이름>` 화면의 역 이름. 다른 화면이면 null. */
@@ -220,6 +294,41 @@ export function daangnStationName(pageUrl: string | null | undefined): string | 
 
 export function createDaangnLedger(stationName: string | null): DaangnLedger {
   return { stationName, stationPoiId: null, filter: null, pages: 0, cursor: null, ended: false, articles: {} };
+}
+
+export function createDaangnMapLedger(scope: DaangnMapScope): DaangnMapLedger {
+  return { scopeUrl: scope.url, seenPages: [], filter: null, pages: 0, cursor: null, ended: false, articles: {} };
+}
+
+const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+
+function daangnMapRequest(body: string | null | undefined): { after: string | null; filter: string } | null {
+  try {
+    const v = JSON.parse(body ?? '')?.variables;
+    if (!v || !Object.hasOwn(v, 'after') || v.after !== null && (typeof v.after !== 'string' || !v.after || v.after.length > 1024)) return null;
+    return { after: v.after === null ? null : digest(v.after), filter: digest(JSON.stringify(v.propertyFilter ?? null)) };
+  } catch { return null; }
+}
+
+export function acceptDaangnMapPage(ledger: DaangnMapLedger, page: DaangnPage, body: string | null | undefined) {
+  if (!page.valid) ledger.invalid ||= 'unreadable-list';
+  const request = daangnMapRequest(body);
+  if (request && ledger.filter !== null && ledger.filter !== request.filter) ledger.invalid ||= 'query-changed';
+  const signature = digest(JSON.stringify([page.ids, page.endCursor, page.hasNextPage]));
+  if (ledger.seenPages.includes(signature)) return;
+  ledger.seenPages.push(signature);
+  if (!request) ledger.invalid ||= 'missing-request';
+  else {
+    ledger.filter ??= request.filter;
+    if (ledger.ended || (ledger.pages > 0 && ledger.cursor === null) || request.after !== ledger.cursor) ledger.invalid ||= 'list-changed';
+  }
+  ledger.pages++;
+  ledger.cursor = page.endCursor === null ? null : digest(page.endCursor);
+  if (page.hasNextPage === true && ledger.cursor === null) ledger.invalid ||= 'list-changed';
+  ledger.ended = page.hasNextPage === false;
+  for (const id of page.excludedIds) ledger.articles[id] = 'excluded';
+  for (const id of page.unreadableIds) ledger.articles[id] = 'unreadable';
+  for (const { listing } of page.items) if (ledger.articles[listing.sourceId] !== 'stored') ledger.articles[listing.sourceId] = 'pending';
 }
 
 /** 목록 응답 하나를 기록한다. 역이나 조건이 바뀌거나 페이지 순서가 이어지지 않으면 완료로 인정하지 않는다. */
@@ -248,12 +357,13 @@ export function acceptDaangnPage(ledger: DaangnLedger, capture: { pageUrl?: stri
   return page;
 }
 
-export function daangnCoverage(ledger: DaangnLedger): DaangnCoverage {
+export function daangnCoverage(ledger: DaangnLedger | DaangnMapLedger): DaangnCoverage {
   const states = Object.values(ledger.articles);
   const stored = states.filter((s) => s === 'stored').length;
   const excluded = states.filter((s) => s === 'excluded').length;
   const unreadable = states.filter((s) => s === 'unreadable').length;
   const pending = states.filter((s) => s === 'pending').length;
   const reason = ledger.invalid ?? (!ledger.pages ? 'missing-list' : !ledger.ended ? 'more-pages' : unreadable ? 'unreadable-articles' : pending ? 'unverified-storage' : 'complete');
-  return { stationPoiId: ledger.stationPoiId, pages: ledger.pages, received: states.length, stored, excluded, unreadable, complete: reason === 'complete', reason };
+  return { ...('scopeUrl' in ledger ? { stationPoiId: null, scopeUrl: ledger.scopeUrl } : { stationPoiId: ledger.stationPoiId }),
+    pages: ledger.pages, received: states.length, stored, excluded, unreadable, complete: reason === 'complete', reason };
 }

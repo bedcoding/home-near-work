@@ -1,5 +1,5 @@
 // 확장 백그라운드.
-// - 팝업에서 켠 사이트에만 사이트 안 스크립트(hook.js, bridge.js, naver.js)를 등록한다.
+// - 팝업에서 켠 사이트와 이전 당근 순차 조회에 필요한 지도 스크립트를 등록한다.
 // - 사이트 화면이 받은 응답을 모아 로컬 대시보드 서버로 보낸다. 아이콘 숫자는 대시보드가 받은 수(빨간 !는 못 보냄).
 //   대시보드가 꺼져 있으면 매물 목록 응답은 확장 저장소에 남겨 두었다가, 대시보드가 켜지면 보낸다.
 // - 지역(역 반경): 팝업, 지도에서 바꾼 목록을 확장에 두고, 대시보드가 켜져 있으면 서로 맞춘다(나중에 바꾼 쪽을 따름).
@@ -7,7 +7,7 @@
 // - '한 번에 열기': 팝업, 대시보드에서 누르면 켜 둔 사이트를 새 창 하나에 연다.
 // - 공고 사이트에서 직접 받은 첨부 파일의 위치를 대시보드에 알린다(대시보드가 파일을 읽음).
 
-importScripts('sites.js', 'areas.js', 'naver-ledger.js', 'vendor/lz-string.js', 'naver-context.js', 'naver-fetch.js', 'browse-queue.js', 'browse-auto.js');
+importScripts('sites.js', 'areas.js', 'daangn-capture.js', 'naver-ledger.js', 'vendor/lz-string.js', 'naver-context.js', 'naver-fetch.js', 'browse-queue.js', 'browse-auto.js');
 
 const SERVER = 'http://127.0.0.1:8787';
 const BATCH = 20;
@@ -18,16 +18,16 @@ let queue = [];
 let flushing = false;
 let sendingPending = false;
 
-// ---------- 켠 사이트에만 스크립트 등록 ----------
+// ---------- 사이트 스크립트 등록 ----------
 
 async function registerSiteScripts() {
   const { sites: toggles = {} } = await chrome.storage.local.get('sites');
-  const matches = HNW_SITES.filter((s) => hnwEnabled(toggles, s)).flatMap((s) => s.matches);
+  const matches = HNW_SITES.filter((s) => s.id === 'daangn' || hnwEnabled(toggles, s)).flatMap((s) => s.matches);
   const existing = await chrome.scripting.getRegisteredContentScripts();
   if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: existing.map((s) => s.id) });
-  if (!matches.length) return;
   await chrome.scripting.registerContentScripts([
-    { id: 'hnw-hook', matches, js: ['hook.js'], runAt: 'document_start', world: 'MAIN', persistAcrossSessions: true },
+    { id: 'hnw-hook', matches, js: ['daangn-capture.js', 'hook.js'], runAt: 'document_start', world: 'MAIN', persistAcrossSessions: true },
+    // Chrome can skip a resource in MAIN when the same file is also injected in the isolated world.
     { id: 'hnw-bridge', matches, js: ['sites.js', 'areas.js', 'naver-ledger.js', 'bridge.js', 'naver.js', 'browse-page.js'], runAt: 'document_start', persistAcrossSessions: true },
   ]);
 }
@@ -68,6 +68,8 @@ async function showTotal(total) {
 function isListing(capture) {
   try {
     const pathname = new URL(capture.url).pathname.replace(/\/$/, '');
+    if (capture.site === 'daangn') return capture.status >= 200 && capture.status < 300 && capture.url === HNW_DAANGN_CAPTURE.graphql
+      && !!HNW_DAANGN_CAPTURE.page(capture.pageUrl) && !!HNW_DAANGN_CAPTURE.body(capture.body);
     if (capture.site === 'dabang') return pathname.includes('/room-list/');
     if (capture.site === 'zigbang') return /\/items\/(list|subways\/[^/]+\/onerooms)$/.test(pathname);
     return (!capture.site || capture.site === 'naver') && /\/(?:boundedArticles|clusteredArticles|legalDivisionArticleList)$/.test(pathname);
@@ -163,6 +165,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
   if (message.type === 'auto-snapshot') {
+    if (message.snapshot?.site === 'daangn') return;
     void postJson('/api/naver/snapshot', message.snapshot).catch(() => {});
     return;
   }
@@ -179,6 +182,15 @@ async function captureOutsideBrowse(capture, sender) {
   // 전용 탭이 새로고침되거나 일시 중단되어 문서 연결이 없어도 일반 수집으로 섞이지 않게 한다.
   // 소유 여부 확인에 실패하면 전송하지 않는다. 다른 일반 탭의 수집에는 영향을 주지 않는다.
   if (await HNW_BROWSE.ownsTab(sender.tab?.id)) return { ok: false, reason: 'unbound-browse' };
+  if (capture?.site === 'daangn') {
+    // 순차 조회와 별도로 일반 당근 탭 수집은 팝업에서 켠 경우에만 허용한다.
+    const { sites: toggles } = await chrome.storage.local.get('sites');
+    if (!hnwEnabled(toggles, HNW_SITES.find((site) => site.id === 'daangn'))) return { ok: false, reason: 'passive-capture-disabled' };
+    capture = HNW_DAANGN_CAPTURE.capture(capture);
+    if (!capture || HNW_DAANGN_CAPTURE.page(sender.url) === null) return { ok: false, reason: 'unsupported-capture' };
+    // 일반 탐색은 이어 받을 위치의 검증을 요구하지 않는다.
+    capture.requestBody = null;
+  }
   const pageUrl = capture && capture.pageUrl;
   if (typeof pageUrl === 'string' && pageUrl.startsWith('https://fin.land.naver.com/map')) {
     void chrome.storage.local.set({ lastNaverUrl: pageUrl });
@@ -362,8 +374,15 @@ async function start() {
 
 chrome.runtime.onInstalled.addListener(() => void start());
 chrome.runtime.onStartup.addListener(() => void start());
+// 압축해제 확장이 다시 불러와질 때 설치 이벤트 없이 워커만 시작될 수 있다.
+async function removeLegacyBridgeParser() {
+  const [bridge] = await chrome.scripting.getRegisteredContentScripts({ ids: ['hnw-bridge'] });
+  if (bridge?.js?.includes('daangn-capture.js')) {
+    await chrome.scripting.updateContentScripts([{ id: bridge.id, js: bridge.js.filter(file => file !== 'daangn-capture.js') }]);
+  }
+}
 // 서비스 워커가 뜰 때마다(새 버전으로 다시 불러온 직후 포함) 버전을 바로 알린다. 대시보드가 이것으로 확장이 최신인지 안다.
-void checkVersion();
+void removeLegacyBridgeParser().catch(() => {}).then(checkVersion);
 // 업그레이드 직후와 서비스 워커 재개 때도 예약 요청을 확인한다.
 void ensureAutoBrowseAlarm().catch(() => {});
 void HNW_AUTO_BROWSE.poll().catch(() => {});

@@ -1,7 +1,11 @@
 // 페이지 쪽(MAIN world)에서 돈다. 부동산 사이트 화면이 받은 JSON 응답을 복사해 bridge.js로 넘긴다.
-// 확장 팝업에서 켠 사이트에만 들어간다(background.js가 등록).
+// 확장 팝업에서 켠 사이트와 이전 순차 조회의 당근 지도에 등록한다.
 (() => {
   if (window.__hnwHook) return;
+  const host = location.hostname;
+  const daangn = host === 'realty.daangn.com';
+  const daangnCapture = daangn && typeof HNW_DAANGN_CAPTURE !== 'undefined' ? HNW_DAANGN_CAPTURE : null;
+  if (daangn && !daangnCapture) return;
   window.__hnwHook = true;
 
   // 로그인, 개인 정보, 로그 요청은 읽지 않는다.
@@ -13,11 +17,12 @@
     try { const parsed=new URL(url,location.href); if(parsed.origin==='https://fin.land.naver.com' && /\/article\/legalDivisionArticleList\/?$/.test(parsed.pathname)) window.postMessage({__hnw:'naver-list-request',url:parsed.href,...meta},location.origin); } catch { /* Ignore unrelated requests. */ }
   };
   // 그 사이트의 데이터 주소만 읽는다. 네이버는 부동산(land.naver.com)만.
-  const host = location.hostname;
   const base = /(^|\.)land\.naver\.com$/.test(host) ? 'land.naver.com' : host.split('.').slice(-2).join('.');
+  const denied = status => daangn && (status === 403 || status === 429);
 
   const wanted = (url) => {
     try {
+      if (daangn) return daangnCapture.endpoint(url) && !!daangnCapture.page(location.href);
       const u = new URL(url, location.href);
       return (u.hostname === base || u.hostname.endsWith(`.${base}`)) && !SKIP.test(u.pathname);
     } catch {
@@ -26,6 +31,22 @@
   };
 
   const post = (url, method, status, requestBody, body, meta = {}) => {
+    if (daangn) {
+      const requestPageUrl = daangnCapture.page(meta.requestPageUrl);
+      if (!requestPageUrl || !daangnCapture.endpoint(url)) return;
+      if (denied(status)) {
+        window.postMessage({ __hnw: 'capture', url: daangnCapture.graphql, method, status,
+          requestBody: null, body: '', requestPageUrl, requestOrder: meta.requestOrder }, location.origin);
+        return;
+      }
+      if (status < 200 || status >= 300) return;
+      body = daangnCapture.body(body);
+      requestBody = daangnCapture.requestBody(requestBody, String(method).toUpperCase() === 'GET' ? url : null);
+      // 추천 영역도 articleFeed를 쓴다. 페이지 커서가 있는 매물 요청만 추적한다.
+      if (!requestBody) return;
+      url = daangnCapture.graphql;
+      meta = { requestPageUrl, requestOrder: meta.requestOrder };
+    }
     if (typeof body !== 'string' || !body || body.length > MAX_BODY) return;
     window.postMessage(
       {
@@ -62,6 +83,7 @@
         started(url,meta);
         promise
           .then((res) => {
+            if (denied(res.status)) { post(res.url || url, method, res.status, null, '', meta); return; }
             if (!(res.headers.get('content-type') || '').includes('json')) return;
             Promise.all([requestBody, res.clone().text()])
               .then(([request, body]) => post(res.url || url, method, res.status, request, body, meta))
@@ -88,6 +110,7 @@
       started(info.url,meta);
       this.addEventListener('load', () => {
         try {
+          if (denied(this.status)) { post(this.responseURL || info.url, info.method, this.status, null, '', meta); return; }
           if (!(this.getResponseHeader('content-type') || '').includes('json')) return;
           const body =
             this.responseType === '' || this.responseType === 'text'

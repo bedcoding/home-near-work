@@ -45,7 +45,7 @@ function worker({ storageFails = false } = {}) {
     }
   };
   vm.runInContext(source('background.js'), context, { filename: 'background.js' });
-  assert.deepEqual(imported, ['sites.js', 'areas.js', 'naver-ledger.js', 'vendor/lz-string.js', 'naver-context.js', 'naver-fetch.js', 'browse-queue.js', 'browse-auto.js']);
+  assert.deepEqual(imported, ['sites.js', 'areas.js', 'daangn-capture.js', 'naver-ledger.js', 'vendor/lz-string.js', 'naver-context.js', 'naver-fetch.js', 'browse-queue.js', 'browse-auto.js']);
   assert.equal(listeners.length, 1);
   return (sender = dashboard) => new Promise((resolve, reject) => {
     try {

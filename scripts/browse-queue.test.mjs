@@ -79,7 +79,7 @@ test('예약 수동 재시도도 이전 보고와 새 실행 상태를 함께 �
 function harness(initial = {}) {
   const saved = copy(initial), tabs = new Map(), timers = new Map(), handlers = {};
   const posts = [], navigations = [], receipts = new Map(), batches = new Set(), alarms = [], writes = [], requests = [], naverLedgers = new Map();
-  let requestResult = {status:200,json:true}, naverStorage = false, filterSnapshot = snapshot();
+  let requestResult = {status:200,json:true}, naverStorage = false, daangnCoverage = null, filterSnapshot = snapshot();
   let random=0.5,storeDelay=0;
   const math=Object.create(Math);math.random=()=>random;
   let sourceTabs=[{id:99,url:filterSnapshot.pageUrl,title:'Synthetic map'}],activeTab=sourceTabs[0];
@@ -127,13 +127,14 @@ function harness(initial = {}) {
         for(const capture of payload.captures)api.accept(ledger,capture);
         receipt.naverCoverage=api.coverage(ledger,ledger.ids.length);
       }
+      if (daangnCoverage && payload.daangnScope) receipt.daangnCoverage = { scopeUrl: payload.daangnScope.url, ...daangnCoverage };
       if (loseAck) { loseAck = false; throw new Error('ack lost'); }
       now+=storeDelay;
       return { receipt: copy(receipt) };
     },
   });
   const areaFrom = source('background.js').match(/function areaFrom\(input\) \{[\s\S]*?\n\}/)[0];
-  vm.runInContext(`${source('sites.js')}\n${source('areas.js')}\n${source('naver-ledger.js')}\n${source('vendor/lz-string.js')}\n${source('naver-context.js')}\n${source('naver-fetch.js')}\n${areaFrom}\n${source('browse-queue.js')}\nglobalThis.api = HNW_BROWSE;`, context);
+  vm.runInContext(`${source('sites.js')}\n${source('areas.js')}\n${source('daangn-capture.js')}\n${source('naver-ledger.js')}\n${source('vendor/lz-string.js')}\n${source('naver-context.js')}\n${source('naver-fetch.js')}\n${areaFrom}\n${source('browse-queue.js')}\nglobalThis.api = HNW_BROWSE;`, context);
   const api = context.api;
   const command = async (command, extra = {}) => api.message({ type: 'browse-command', command, ...extra }, DASH);
   const start = async (sites = ['dabang'], areas = [AREA]) => { await command('start', { sites, areas }); await api.tick(); };
@@ -152,11 +153,102 @@ function harness(initial = {}) {
     setHints: (fn) => { getHints = fn; },
     windows: () => windowCount, pageCalls: () => pageCalls, pending: () => Object.keys(saved).filter((k) => k.startsWith(PREFIX)),
     requests, setRequestResult: value => {requestResult=value;}, setNaverStorage: value => {naverStorage=value;},
+    setDaangnCoverage: value => { daangnCoverage = value; },
     setFilter: value => {filterSnapshot=value;sourceTabs[0].url=value?.pageUrl || 'https://fin.land.naver.com/map';if(activeTab.id===sourceTabs[0].id)activeTab=sourceTabs[0];},
     setSourceTabs: value => {sourceTabs=value;},setActiveTab: value=>{activeTab=value;},filterReads,sourceReads,
     setRandom:value=>{random=value;},setStoreDelay:value=>{storeDelay=value;},now:()=>now,
   };
 }
+
+const DAANGN_AREA = { ...AREA, region: { kind: 'gu', code: '99123', name: '예시구' }, purpose: 'collection' };
+const DAANGN_API = 'https://realty.kr.karrotmarket.com/graphql';
+function legacyDaangnJob(index = 0) {
+  const url = `https://realty.daangn.com/map/subway/synthetic-${index}?region_bounds=35.09%2C128.09%2C35.11%2C128.11%2C15`;
+  return { id: `legacy-run:${index}`, site: 'daangn', siteName: '당근부동산', area: DAANGN_AREA, areaName: DAANGN_AREA.name,
+    url, daangnScope: { kind: 'daangn-map', url }, status: 'pending', note: '대기 중' };
+}
+function legacyDaangnHarness(jobs = [legacyDaangnJob()], status = 'running') {
+  return harness({ sites: { daangn: false }, [KEY]: { id: 'legacy-run', status, jobs,
+    phase: status === 'running' ? 'opening' : 'done', index: status === 'running' ? 0 : jobs.length,
+    createdAt: 99000, updatedAt: 99000, tabId: null, logs: [] } });
+}
+
+async function captureDaangn(h, { status = 200, mapUrl } = {}) {
+  const job = h.saved[KEY].jobs[h.saved[KEY].index];
+  return h.capture({ capture: { site: 'daangn', pageUrl: mapUrl ?? job.url, url: DAANGN_API, status,
+    body: status === 200 ? JSON.stringify({ data: { articleFeed: { edges: [], pageInfo: { hasNextPage: false } }, viewer: { private: 'discard' } } }) : '',
+    requestBody: status === 200 ? JSON.stringify({ variables: { after: null } }) : null,
+  } });
+}
+
+test('a saved Daangn tour still opens its district map and waits 10 seconds after receipt', async () => {
+  const h = legacyDaangnHarness();
+  await h.api.tick();
+  const job = h.saved[KEY].jobs[0];
+  assert.equal(job.daangnScope.kind, 'daangn-map');
+  assert.equal(new URL(job.url).hostname, 'realty.daangn.com');
+  await h.bind();
+  const wrong = new URL(job.url);
+  wrong.searchParams.set('region_bounds', '0,0,1,1,13');
+  await captureDaangn(h, { mapUrl: wrong.href });
+  assert.equal(h.pending().length, 0);
+  h.setDaangnCoverage({ pages: 1, received: 1, stored: 1, complete: false });
+  await captureDaangn(h);
+  h.setResult({ kind: 'action', note: '스크롤' });
+  h.advance(9999); await h.api.tick();
+  assert.equal(h.pageCalls(), 0);
+  const sent = h.posts.find(post => post.path === '/api/browse/capture').payload;
+  assert.equal(sent.daangnScope.url, job.url);
+  assert.doesNotMatch(sent.captures[0].body, /viewer|private|discard/);
+  h.advance(1); await h.api.tick();
+  assert.equal(h.pageCalls(), 1);
+  assert.equal(h.requests.length, 0, 'Daangn uses the page action instead of a direct network request');
+});
+
+test('Daangn page completion depends on the server receipt for the same map', async () => {
+  for (const verified of [true, false]) {
+    const h = legacyDaangnHarness();
+    await h.api.tick();
+    await h.bind();
+    h.setDaangnCoverage({ pages: 1, received: 1, stored: 1, complete: verified });
+    await captureDaangn(h);
+    h.setResult({ kind: 'complete', note: '마지막 목록 확인' });
+    h.advance(10000); await h.api.tick();
+    if (!verified) { h.advance(15000); await h.api.tick(); }
+    assert.equal(h.saved[KEY].jobs[0].status, verified ? 'complete' : 'partial');
+  }
+});
+
+test('Daangn does not queue a recommendation feed without a listing cursor', async () => {
+  const h = legacyDaangnHarness();
+  await h.api.tick();
+  await h.bind();
+  const job = h.saved[KEY].jobs[0];
+  await h.capture({ capture: { site: 'daangn', pageUrl: job.url, url: DAANGN_API, status: 200,
+    requestBody: JSON.stringify({ variables: { placementId: 'synthetic-placement', first: 20 } }),
+    body: JSON.stringify({ data: { articleFeed: { edges: [], pageInfo: { hasNextPage: false } } } }),
+  } });
+  assert.equal(h.pending().length, 0);
+  assert.equal(h.posts.filter(post => post.path === '/api/browse/capture').length, 0);
+  assert.equal(h.saved[KEY].jobs[0].received || 0, 0);
+});
+
+test('Daangn saves the received pages and skips remaining Daangn maps on an access denial', async () => {
+  const h = legacyDaangnHarness([legacyDaangnJob(), legacyDaangnJob(1)]);
+  await h.api.tick();
+  await h.bind();
+  h.setDaangnCoverage({ pages: 1, received: 1, stored: 1, complete: false });
+  await captureDaangn(h);
+  await captureDaangn(h, { status: 403 });
+  await h.api.tick(); await h.api.tick();
+  assert.equal(h.saved[KEY].status, 'done');
+  assert.deepEqual(h.saved[KEY].jobs.map(job => job.status), ['partial', 'needs-input']);
+  assert.match(h.saved[KEY].jobs[0].note, /HTTP 403/);
+  assert.equal(h.saved[KEY].jobs[0].receipt.daangnCoverage.stored, 1);
+  assert.equal(h.navigations.length, 1);
+  assert.equal(h.pageCalls(), 0);
+  assert.equal(h.posts.filter(post => post.path === '/api/browse/capture').length, 1);
+});
 
 test('two selected regions reuse one owned tab and only server receipts count as partial results', async () => {
   const h = harness();
@@ -298,7 +390,7 @@ test('a dashboard run gives region areas to Naver and station areas to the other
   await h.command('start',{sites:['naver','dabang'],areas:[{...AREA,dabangRegions:[DONG]},NAVER_AREA],naverSourceTabId:99,naverFilterKey:key});
   assert.deepEqual(plain(h.saved[KEY].jobs.map(job=>[job.site,job.areaName])),[['dabang','예시 지역 · 예시동'],['naver','예시 지역']]);
   const regionOnly=harness();
-  await assert.rejects(regionOnly.command('start',{sites:['dabang'],areas:[NAVER_AREA]}),/구나 동 지역/);
+  await assert.rejects(regionOnly.command('start',{sites:['dabang'],areas:[NAVER_AREA]}),/조회할 수 있는 지역/);
   assert.equal(regionOnly.windows(),0);
 });
 
@@ -709,8 +801,33 @@ test('retry fetches newly learned station hints instead of revisiting missing hi
   assert.match(h.navigations[0].url, /subways\/synthetic-station\/items$/);
 });
 
-test('당근부동산은 대시보드 조회하기가 모으므로 순차 조회의 사이트로 받지 않는다', async () => {
-  const h = harness({ 'hnw-stations': [{ name: '예시역', lat: 35.1, lng: 128.1 }] });
-  await h.start(['zigbang', 'daangn'], [AREA]);
-  assert.ok(!(h.saved[KEY]?.jobs ?? []).some((j) => j.site === 'daangn'));
+test('new tours exclude Daangn sent by a stale dashboard or an automatic request', async () => {
+  const h = harness({ sites: { daangn: true } });
+  await assert.rejects(h.start(['daangn'], [DAANGN_AREA]), /일반 조회/);
+  await assert.rejects(h.api.startAutomatic({ id: 'synthetic-old-daangn', sites: ['daangn'], areas: [DAANGN_AREA] }), /invalid automatic request/);
+  assert.equal(h.saved[KEY], undefined);
+  assert.equal(h.windows(), 0);
+
+  await h.start(['daangn', 'dabang'], [DAANGN_AREA, AREA]);
+  assert.deepEqual(h.saved[KEY].jobs.map(job => job.site), ['dabang']);
+  assert.equal(new URL(h.navigations[0].url).hostname, 'www.dabangapp.com');
+});
+
+test('retry preserves past Daangn receipts and only requeues an eligible site', async () => {
+  const job = legacyDaangnJob();
+  job.status = 'partial';
+  job.receipt = { responses: 1, listings: 2, newCount: 0, changedCount: 0 };
+  const legacy = legacyDaangnHarness([job], 'done');
+  await assert.rejects(legacy.command('retry'), /일반 조회/);
+  assert.deepEqual(plain(legacy.saved[KEY].jobs[0]), job);
+  assert.equal(legacy.windows(), 0);
+
+  const dabang = { ...job, id: 'legacy-run:1', site: 'dabang', siteName: '다방', area: AREA, areaName: AREA.name,
+    url: 'https://www.dabangapp.com/map/onetwo?m_lat=35.1&m_lng=128.1', daangnScope: undefined };
+  const mixed = legacyDaangnHarness([job, dabang], 'done');
+  await mixed.command('retry');
+  await mixed.api.tick();
+  assert.deepEqual(plain(mixed.saved[KEY].jobs[0]), job);
+  assert.equal(mixed.saved[KEY].jobs[1].status, 'running');
+  assert.deepEqual(mixed.navigations.map(({ url }) => new URL(url).hostname), ['www.dabangapp.com']);
 });

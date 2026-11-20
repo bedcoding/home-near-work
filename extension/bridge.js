@@ -69,8 +69,17 @@ function maybeAutoSnapshot(url) {
 
 window.addEventListener('message', (event) => {
   if (event.source !== window || !event.data || event.data.__hnw !== 'capture') return;
-  const { url, method, status, requestBody, body } = event.data;
-  const capture = { at: new Date().toISOString(), site: HNW_SITE ? HNW_SITE.id : null, pageUrl: location.href, url, method, status, requestBody, body };
+  const { url, method, status, requestBody, body, requestPageUrl } = event.data;
+  const daangn = HNW_SITE?.id === 'daangn';
+  const denied = status === 403 || status === 429;
+  if (daangn && (event.origin !== location.origin || url !== 'https://realty.kr.karrotmarket.com/graphql' ||
+    typeof requestPageUrl !== 'string' || requestPageUrl.length > 2000 || typeof body !== 'string' || !Number.isInteger(status) ||
+    !denied && (status < 200 || status >= 300 || !body || body.length > 2000000))) return;
+  // MAIN에서 공개 목록으로 투영한 응답이며, 서비스 워커가 저장하기 전에 다시 검증한다.
+  const capture = daangn
+    ? { site: 'daangn', pageUrl: requestPageUrl, url, method, status,
+      requestBody: !denied && typeof requestBody === 'string' && requestBody.length <= 20000 ? requestBody : null, body: denied ? '' : body }
+    : { at: new Date().toISOString(), site: HNW_SITE ? HNW_SITE.id : null, pageUrl: location.href, url, method, status, requestBody, body };
   const adapter = HNW_SITE && HNW_ADAPTERS[HNW_SITE.id];
   if (adapter) {
     try {
@@ -85,9 +94,14 @@ window.addEventListener('message', (event) => {
       showReloadNotice();
       return;
     }
-    void HNW_BROWSE_CONTEXT.then((context) => {
+    void HNW_BROWSE_CONTEXT.then(async (context) => {
       if (context?.owned && !context.jobId) return;
-      maybeAutoSnapshot(url);
+      if (daangn && !context?.jobId) {
+        if (!capture.body) return;
+        const { sites: toggles } = await chrome.storage.local.get('sites');
+        if (!hnwEnabled(toggles, HNW_SITE)) return;
+      }
+      if (!daangn) maybeAutoSnapshot(url);
       return chrome.runtime.sendMessage({
         type: 'capture', capture,
         ...(context?.jobId ? { browseJobId: context.jobId, documentToken: HNW_DOCUMENT_TOKEN } : {}),
@@ -100,5 +114,5 @@ window.addEventListener('message', (event) => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.type !== 'snapshot') return;
-  sendResponse(takeSnapshot());
+  sendResponse(HNW_SITE?.id === 'daangn' ? null : takeSnapshot());
 });

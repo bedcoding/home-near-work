@@ -8,9 +8,10 @@ test('common collection prices replace site defaults only for selected sites tha
   const caps = { saleMax: null, jeonseMax: 21000, monthlyDepositMax: 0, monthlyMax: 50, excludeSale: false };
   const common = { ...caps, monthlyMax: 30 };
   const read = key => key === collectionPriceLimitsKey('dabang') ? JSON.stringify(caps) : null;
-  const sites = ['dabang', 'zigbang', 'daangn', 'courtauction'];
+  const sites = ['dabang', 'zigbang', 'ziptoss', 'courtauction'];
   assert.deepEqual(validateCommonPriceLimits(common, sites), common);
-  assert.throws(() => validateCommonPriceLimits(common, ['daangn']), /적용할 매물 사이트/);
+  assert.throws(() => validateCommonPriceLimits(common, ['ziptoss']), /적용할 매물 사이트/);
+  assert.deepEqual(runCollectionPriceLimits(read, ['daangn', 'ziptoss'], 'home', {}, common).limits, { daangn: common }, '당근도 공통 가격 조건을 받는다');
   assert.throws(() => validateCommonPriceLimits(common, ['onbid']), /적용할 매물 사이트/);
   assert.throws(() => validateCommonPriceLimits({ ...common, monthlyMax: -1 }, sites), /상한/);
   assert.deepEqual(runCollectionPriceLimits(read, sites, 'home', { dabang: null }, common).limits,
@@ -26,9 +27,10 @@ test('collection prices preserve zero caps and accept changes only for supported
   const zigbang = collectionPriceLimitsChange({ source: 'zigbang', limits: { ...limits, monthlyMax: 55 } });
   const data = new Map([change, zigbang].map(row => [collectionPriceLimitsKey(row.source), JSON.stringify(row.limits)]));
   const read = key => data.get(key) ?? null;
-  assert.deepEqual(collectionPriceLimitsState(read), { upstreamSites: ['dabang', 'zigbang'], limits: { dabang: limits, zigbang: zigbang.limits } });
+  assert.deepEqual(collectionPriceLimitsState(read), { upstreamSites: ['dabang', 'zigbang', 'daangn'], limits: { dabang: limits, zigbang: zigbang.limits } });
   assert.deepEqual(collectionPriceLimitsState(read, ['zigbang']).limits, { zigbang: zigbang.limits });
-  assert.throws(() => collectionPriceLimitsChange({ source: 'daangn', limits }), /지원/);
+  assert.throws(() => collectionPriceLimitsChange({ source: 'ziptoss', limits }), /지원/);
+  assert.deepEqual(collectionPriceLimitsChange({ source: 'daangn', limits }), { source: 'daangn', limits });
   for (const invalid of [-1, 0.5, '50', Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => collectionPriceLimitsChange({ source: 'dabang', limits: { ...limits, monthlyMax: invalid } }), /상한/);
   }
@@ -74,12 +76,13 @@ test('collection price tokens detect effective changes within the selected sourc
 test('rental-only preview and runner use a sale exclusion independent of the stored cap', () => {
   const caps = { saleMax: 50000, jeonseMax: 21000, monthlyDepositMax: 0, monthlyMax: 50, excludeSale: false };
   const read = key => key === collectionPriceLimitsKey('dabang') ? JSON.stringify(caps) : null;
-  const selected = ['dabang', 'daangn'];
+  const selected = ['dabang', 'ziptoss'];
   assert.deepEqual(runCollectionPriceLimits(read, selected, 'rentOnly').limits, { dabang: { ...caps, excludeSale: true } });
   assert.deepEqual(runCollectionPriceLimits(read, selected, 'home').limits, { dabang: caps });
   assert.equal(runCollectionPriceLimits(() => null, ['dabang'], 'rentOnly').limits.dabang?.excludeSale, true);
   assert.equal(runCollectionPriceLimits(() => null, ['zigbang'], 'rentOnly').limits.zigbang?.excludeSale, true);
-  assert.deepEqual(runCollectionPriceLimits(read, ['daangn'], 'rentOnly').limits, {});
+  assert.equal(runCollectionPriceLimits(() => null, ['daangn'], 'rentOnly').limits.daangn?.excludeSale, true);
+  assert.deepEqual(runCollectionPriceLimits(read, ['ziptoss'], 'rentOnly').limits, {});
 });
 
 test('temporary price overrides accept only enabled sites in the run and validate the whole condition', () => {
@@ -87,7 +90,8 @@ test('temporary price overrides accept only enabled sites in the run and validat
   assert.deepEqual(collectionPriceOverrides(undefined, ['dabang']), {});
   assert.deepEqual(collectionPriceOverrides({ dabang: caps, zigbang: null }, ['dabang', 'zigbang']), { dabang: caps, zigbang: null });
   assert.throws(() => collectionPriceOverrides({ zigbang: caps }, ['dabang']), /사이트/);
-  assert.throws(() => collectionPriceOverrides({ daangn: caps }, ['daangn']), /사이트/);
+  assert.throws(() => collectionPriceOverrides({ ziptoss: caps }, ['ziptoss']), /사이트/);
+  assert.deepEqual(collectionPriceOverrides({ daangn: caps }, ['daangn']), { daangn: caps });
   assert.throws(() => collectionPriceOverrides(JSON.parse('{"__proto__":null}'), ['dabang']), /사이트/);
   assert.throws(() => collectionPriceOverrides([{ dabang: caps }], ['dabang']), /가격 조건/);
   assert.throws(() => collectionPriceOverrides({ dabang: { ...caps, monthlyMax: -1 } }, ['dabang']), /상한/);

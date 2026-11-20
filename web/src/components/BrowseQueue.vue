@@ -20,10 +20,11 @@ interface ZigbangCoverage {
   excluded: number; missing: number; unreadable: number; complete: boolean; reason: string;
 }
 interface NaverCoverage { pages: number; total: number | null; received: number; stored: number | null; complete: boolean }
+interface DaangnCoverage { scopeUrl?: string; pages: number; received: number; stored: number; complete: boolean; reason: string }
 interface Receipt {
   responses: number; listings: number; newCount: number; changedCount: number;
   uniqueListings?: number; excludedOutside?: number; excludedUnknown?: number; retainedOutside?: number; retainedUnknown?: number; coverage?: Coverage;
-  zigbangCoverage?: ZigbangCoverage; naverCoverage?: NaverCoverage;
+  zigbangCoverage?: ZigbangCoverage; naverCoverage?: NaverCoverage; daangnCoverage?: DaangnCoverage;
 }
 /** 서버가 받은 응답과 저장 처리 수(페이지 확인 줄에 마우스를 올리면 보인다) */
 const receiptText = (r: Receipt) =>
@@ -90,15 +91,21 @@ const SITES = [
   { id: 'zigbang', name: '직방', mode: '매물 목록', defaultOn: true },
   { id: 'kbland', name: 'KB부동산', mode: '건수 확인', defaultOn: false },
   { id: 'hogangnono', name: '호갱노노', mode: '화면 확인', defaultOn: false },
-  // 당근부동산은 '조회하기'가 서버에서 모으므로 여기서 고르지 않는다.
 ];
+const browseSiteName = (id: string | undefined) => id === 'daangn' ? '당근부동산' : SITES.find((site) => site.id === id)?.name;
 const STATUS: Record<JobStatus, string> = {
   pending: '대기', running: '조회 중', complete: '선택 목록 저장 완료', partial: '일부 확인', failed: '실패', visited: '화면 확인', 'needs-input': '직접 확인 필요',
 };
-const HOSTS = new Set(['fin.land.naver.com', 'new.land.naver.com', 'www.dabangapp.com', 'www.zigbang.com', 'kbland.kr', 'hogangnono.com']);
+const HOSTS = new Set(['fin.land.naver.com', 'new.land.naver.com', 'realty.daangn.com', 'www.dabangapp.com', 'www.zigbang.com', 'kbland.kr', 'hogangnono.com']);
 const safeLink = (url: string) => {
   try {
     const u = new URL(url);
+    if (u.hostname === 'realty.daangn.com') {
+      const bounds = u.searchParams.get('region_bounds');
+      if (!bounds || !daangnMapKey(url)) return null;
+      u.search = '';
+      u.searchParams.set('region_bounds', bounds);
+    }
     return u.protocol === 'https:' && HOSTS.has(u.hostname) ? u.href : null;
   } catch { return null; }
 };
@@ -126,11 +133,34 @@ function validZigbangCoverage(value: ZigbangCoverage) {
     && typeof value.complete === 'boolean' && typeof value.reason === 'string' && value.reason.length <= 300
     && (!value.complete || value.total !== null && value.received === value.total && value.stored + value.excluded === value.total && value.missing === 0 && value.unreadable === 0);
 }
+function daangnMapKey(url: string | undefined): string | null {
+  if (typeof url !== 'string') return null;
+  try {
+    const map = new URL(url);
+    if (map.origin !== 'https://realty.daangn.com' || map.username || map.password || map.hash) return null;
+    const station = /^\/map\/subway\/([^/]+)\/?$/.exec(map.pathname)?.[1];
+    const bounds = map.searchParams.getAll('region_bounds');
+    if (!station || bounds.length !== 1) return null;
+    const stationName = decodeURIComponent(station);
+    if (!stationName || /[\u0000-\u001f\u007f/\\?#]/u.test(stationName)) return null;
+    const values = bounds[0].split(',');
+    if (values.length !== 5 || values.some((value) => !value.trim() || !Number.isFinite(Number(value)))) return null;
+    const [south, west, north, east, zoom] = values.map(Number);
+    if (south >= north || south < -90 || north > 90 || west >= east || west < -180 || east > 180 || !Number.isInteger(zoom) || zoom <= 0) return null;
+    return JSON.stringify([stationName, south, west, north, east, zoom]);
+  } catch { return null; }
+}
+function validDaangnCoverage(value: DaangnCoverage) {
+  return !!value && isCount(value.pages) && isCount(value.received) && isCount(value.stored) && value.stored <= value.received
+    && typeof value.complete === 'boolean' && typeof value.reason === 'string' && value.reason.length <= 300
+    && (value.scopeUrl === undefined || !!daangnMapKey(value.scopeUrl)) && (!value.complete || value.pages > 0 && value.reason === 'complete');
+}
 function validReceipt(receipt: Receipt) {
   return receipt && ['responses', 'listings', 'newCount', 'changedCount'].every((key) => isCount(receipt[key as keyof Receipt]))
     && ['uniqueListings', 'excludedOutside', 'excludedUnknown', 'retainedOutside', 'retainedUnknown'].every((key) => receipt[key as keyof Receipt] === undefined || isCount(receipt[key as keyof Receipt]))
     && (receipt.coverage === undefined || validCoverage(receipt.coverage))
-    && (receipt.zigbangCoverage === undefined || validZigbangCoverage(receipt.zigbangCoverage));
+    && (receipt.zigbangCoverage === undefined || validZigbangCoverage(receipt.zigbangCoverage))
+    && (receipt.daangnCoverage === undefined || validDaangnCoverage(receipt.daangnCoverage));
 }
 function zigbangStationId(job: BrowseJob) {
   if (job.site !== 'zigbang') return null;
@@ -148,7 +178,32 @@ function statusLabel(job: BrowseJob) {
   if (job.status === 'complete' && job.site === 'zigbang') {
     return zigbangCoverageFor(job)?.complete ? '역 1km 목록 확인 완료' : '이전 조회 결과 · 범위 확인 필요';
   }
+  if (job.status === 'complete' && job.site === 'daangn') return daangnCoverageFor(job)?.complete ? '지도 목록 저장 완료' : '지도 목록 확인 필요';
   return STATUS[job.status];
+}
+function daangnCoverageFor(job: BrowseJob) {
+  const coverage = job.site === 'daangn' ? job.receipt?.daangnCoverage : undefined;
+  const map = coverage && daangnMapKey(coverage.scopeUrl);
+  return coverage && map && validDaangnCoverage(coverage) && map === daangnMapKey(job.url) ? coverage : null;
+}
+function daangnCoverageText(coverage: DaangnCoverage) {
+  return `지도 목록 ${coverage.pages}페이지, 수신 ${coverage.received}건, 저장 ${coverage.stored}건`;
+}
+function daangnCoverageReason(coverage: DaangnCoverage) {
+  const reasons: Record<string, string> = {
+    'missing-list': '지도 목록을 아직 받지 못했습니다',
+    'missing-request': '페이지가 처음부터 순서대로 이어졌는지 확인하지 못했습니다',
+    'list-changed': '조회 중 지도 목록의 앞뒤 페이지가 이어지지 않았습니다',
+    'query-changed': '조회 중 지도 목록의 검색 조건이 바뀌었습니다',
+    'response-scope': '선택한 지도 범위의 목록인지 확인하지 못했습니다',
+    'response-status': '정상적으로 받지 못한 응답이 있습니다',
+    'more-pages': '마지막 페이지를 아직 확인하지 못했습니다',
+    'unreadable-list': '읽지 못한 지도 목록 응답이 있습니다',
+    'unreadable-articles': '읽지 못한 매물이 있습니다',
+    'unverified-storage': '받은 매물 중 서버 저장을 확인하지 못한 건이 있습니다',
+    'coverage-limit': '확인 한도에 도달해 일부만 확인했습니다',
+  };
+  return reasons[coverage.reason] || '지도 목록의 전체 수신 여부를 확인하지 못했습니다';
 }
 function naverCoverageFor(job: BrowseJob) {
   const c = job.site === 'naver' ? job.receipt?.naverCoverage : undefined;
@@ -208,7 +263,7 @@ function readState(value: unknown): BrowseState | null | undefined {
   if (['createdAt', 'phaseAt', 'heartbeatAt'].some((k) => x[k as 'createdAt'] !== undefined && !isCount(x[k as 'createdAt']))) return undefined;
   if (x.phase !== undefined && !Object.hasOwn(PHASES, x.phase) || x.detail !== undefined && (typeof x.detail !== 'string' || x.detail.length > 1000)) return undefined;
   if (x.logs !== undefined && (!Array.isArray(x.logs) || x.logs.length > 100 || !x.logs.every((e) => e && isCount(e.at) && Object.hasOwn(LOG_LABELS, e.code)
-    && (e.site === undefined || SITES.some((s) => s.id === e.site))
+    && (e.site === undefined || !!browseSiteName(e.site))
     && ['jobIndex', 'responses', 'listings', 'actions'].every((k) => e[k as 'jobIndex'] === undefined || isCount(e[k as 'jobIndex']))))) return undefined;
   if (!x.jobs.every((j) => j && typeof j.id === 'string' && typeof j.areaName === 'string' && typeof j.site === 'string' && typeof j.siteName === 'string'
     && typeof j.url === 'string' && Object.hasOwn(STATUS, j.status) && typeof j.note === 'string'
@@ -314,7 +369,10 @@ let firstRequestAt = 0;
 const running = computed(() => state.value?.status === 'running');
 const activeState = computed(() => pending.value === 'start' && state.value?.id === pendingBaseStateId.value ? null : state.value);
 const incompleteJobs = computed(() => state.value?.jobs.filter((j) => ['partial', 'failed', 'needs-input'].includes(j.status)) ?? []);
-const incomplete = computed(() => incompleteJobs.value.length);
+const retryJobs = computed(() => incompleteJobs.value.filter((job) => job.site !== 'daangn'));
+const incomplete = computed(() => retryJobs.value.length);
+// 예전 확장은 재시도를 요청하면 저장된 당근 작업도 다시 연다.
+const retryVersionReady = computed(() => extensionAtLeast(8, 33) || incompleteJobs.value.length === retryJobs.value.length);
 const finished = computed(() => activeState.value?.jobs.filter((j) => !['pending', 'running'].includes(j.status)).length ?? 0);
 const current = computed(() => activeState.value?.jobs.find((j) => j.status === 'running'));
 const totals = computed(() => activeState.value?.jobs.reduce((sum, j) => ({
@@ -325,14 +383,23 @@ const totals = computed(() => activeState.value?.jobs.reduce((sum, j) => ({
 }), { responses: 0, listings: 0, newCount: 0, changedCount: 0 }));
 const chosenAreas = computed(() => props.areas.filter((a) => selectedAreas.value.includes(a.id)));
 const chosenSites = computed(() => sites.value.filter((site) => selectedSites.value.includes(site.id)));
-// 확장의 순회 계획과 같은 기준이다. 네이버는 구나 동 전체를, 다른 사이트는 역 지역을 맡는다.
-const covers = (area: Area, site: string) => area.region ? site === 'naver' && area.purpose !== 'alert' : site !== 'naver';
+// 확장의 순회 계획과 같은 기준이다.
+function covers(area: Area, site: string) {
+  return area.region ? site === 'naver' && area.purpose !== 'alert' : site !== 'naver';
+}
 /** 고른 사이트가 하나도 안 보는 지역이면 그 까닭(지역 칸을 흐리게 하고 작은 글씨로 보인다). 사이트를 안 골랐으면 흐리게 하지 않는다. */
 const unusedReason = (area: Area): string | null => {
   if (!chosenSites.value.length || chosenSites.value.some((site) => covers(area, site.id))) return null;
+  if (area.purpose === 'alert' && area.region) return '알림용이라 안 봄';
   if (!area.region) return '네이버는 역을 안 봄';
-  return area.purpose === 'alert' ? '알림용이라 안 봄' : '네이버만 봄';
+  return '선택한 사이트에서 지원하지 않음';
 };
+function areaScopeLabel(area: Area) {
+  const unused = unusedReason(area);
+  if (unused) return unused;
+  if (area.region) return area.region.kind === 'gu' ? '구 전체' : '법정동 전체';
+  return selectedSites.value.includes('dabang') && areaScopes.value[area.id]?.length ? '동별 범위' : `반경 ${radiusText(area.radiusM)}`;
+}
 const plannedJobs = computed(() => chosenAreas.value.flatMap((area) => chosenSites.value.filter((site) => covers(area, site.id)).flatMap((site) => {
   if (site.id === 'naver') return [{ key: `${area.id}:naver`, areaId: area.id, site: site.id, areaName: area.name, siteName: site.name,
     label: area.region?.kind === 'gu' ? '구 전체' : '동 전체', detail: '고른 네이버 탭의 필터로 전체 목록을 마지막 페이지까지 확인', scoped: false }];
@@ -350,10 +417,11 @@ const skippedAreas = computed(() => chosenAreas.value.filter((area) => !plannedJ
 const skipNote = computed(() => {
   if (!skippedAreas.value.length) return '';
   const notes = [`이번 조회에서 빠지는 지역: ${skippedAreas.value.map((a) => a.name).join(', ')}.`];
-  if (skippedAreas.value.some((a) => a.region)) notes.push(naverAvailable.value
+  if (skippedAreas.value.some((a) => a.region && a.purpose !== 'alert')) notes.push(naverAvailable.value
     ? '구나 동 전체는 네이버를 고르면 함께 조회합니다.'
     : '구나 동 전체는 네이버로 조회합니다. 확장에서 네이버를 켜 두고 확장이 0.8.22 이상이면 여기서 고를 수 있습니다.');
-  if (skippedAreas.value.some((a) => !a.region)) notes.push('역 지역은 네이버가 아닌 사이트를 하나 이상 골라야 조회합니다.');
+  if (skippedAreas.value.some((a) => a.purpose === 'alert')) notes.push('알림용 지역은 선택한 사이트의 조회 범위에서 제외됩니다.');
+  if (skippedAreas.value.some((a) => !a.region && a.purpose !== 'alert')) notes.push('역 지역은 네이버가 아닌 사이트를 하나 이상 골라야 조회합니다.');
   return notes.join(' ');
 });
 const runExpanded = ref(false);
@@ -392,7 +460,7 @@ const actionCount = computed(() => activeState.value?.jobs.reduce((sum, j) => su
 const lastReplyText = computed(() => lastResponse.value ? `마지막 상태 응답 ${duration(seconds(lastResponse.value))} 전${connectionStale.value ? ', 연결 확인 필요' : ''}` : '확장프로그램 상태 응답 대기 중');
 const timeText = (at: number) => new Date(at).toLocaleTimeString('ko-KR', { hour12: false });
 function eventText(event: ActivityEvent) {
-  const context = [event.jobIndex !== undefined ? `${event.jobIndex + 1}번째 항목` : '', SITES.find((s) => s.id === event.site)?.name].filter(Boolean).join(', ');
+  const context = [event.jobIndex !== undefined ? `${event.jobIndex + 1}번째 항목` : '', browseSiteName(event.site)].filter(Boolean).join(', ');
   const counts = [event.responses !== undefined ? `응답 ${event.responses}건` : '', event.listings !== undefined ? `매물 저장 처리 ${event.listings}건` : '', event.actions !== undefined ? `탐색 ${event.actions}회` : ''].filter(Boolean).join(', ');
   return [context, [LOG_LABELS[event.code], counts].filter(Boolean).join(', ')].filter(Boolean).join(': ');
 }
@@ -557,6 +625,7 @@ function clearPending() {
 }
 function command(command: Command) {
   if (!ready.value || pending.value || command === 'start' && !canStart.value) return;
+  if (command === 'retry' && (!incomplete.value || !retryVersionReady.value)) return;
   pending.value = command;
   pendingAt.value = now.value = Date.now();
   pendingRequestId.value = requestId();
@@ -569,7 +638,8 @@ function command(command: Command) {
     window.postMessage({
       source: 'hnw-dashboard', type: 'browse-command', command, requestId: pendingRequestId.value,
       ...(command === 'start' ? {
-        areas: startAreas.value.map(({ id, name, lat, lng, radiusM, region }) => ({ id, name, lat, lng, radiusM,
+        areas: startAreas.value.map(({ id, name, lat, lng, radiusM, region, purpose }) => ({ id, name, lat, lng, radiusM,
+          ...(purpose === 'alert' ? { purpose } : {}),
           ...(region ? { region: { kind: region.kind, code: region.code, name: region.name } }
             : areaScopes.value[id] ? { dabangRegions: areaScopes.value[id].map(({ kind, name, dong, url }) => ({ kind, name, dong, url })) } : {}),
         })),
@@ -640,13 +710,13 @@ onBeforeUnmount(() => {
             <div class="check-list area-list">
               <label v-for="a in areas" :key="a.id" :class="{ selected: selectedAreas.includes(a.id), unused: !!unusedReason(a) }">
                 <input v-model="selectedAreas" type="checkbox" :value="a.id">
-                <span>{{ a.name }}<small>{{ unusedReason(a) ?? (a.region ? (a.region.kind === 'gu' ? '구 전체' : '법정동 전체') : selectedSites.includes('dabang') && areaScopes[a.id]?.length ? '동별 범위' : `반경 ${radiusText(a.radiusM)}`) }}</small></span>
+                <span>{{ a.name }}<small>{{ areaScopeLabel(a) }}</small></span>
               </label>
             </div>
           </template>
         </fieldset>
         <fieldset :disabled="running || !!pending">
-          <legend>2. 사이트 <span class="muted">{{ selectedSites.length }}곳 선택</span></legend>
+          <legend>2. 사이트 <span class="muted">{{ chosenSites.length }}곳 선택</span></legend>
           <p v-if="!sites.length" class="muted">확장 아이콘에서 조회할 사이트를 켜 주세요.</p>
           <div class="check-list site-list">
             <label v-for="s in sites" :key="s.id" :class="{ selected: selectedSites.includes(s.id) }">
@@ -727,6 +797,7 @@ onBeforeUnmount(() => {
             </div>
             <p v-if="current" class="current-job">{{ current.areaName }}, {{ current.siteName }}<span v-if="activeState"> ({{ activeState.index + 1 }}/{{ activeState.jobs.length }})</span></p>
             <p v-if="current && naverCoverageFor(current)" class="page-progress">{{ naverCoverageText(naverCoverageFor(current)!) }}</p>
+            <p v-if="current && daangnCoverageFor(current)" class="page-progress">{{ daangnCoverageText(daangnCoverageFor(current)!) }}</p>
             <p v-if="current?.receipt?.coverage" class="page-progress">{{ coverageText(current.receipt.coverage) }}</p>
             <template v-if="current && zigbangCoverageFor(current)">
               <p class="page-progress">{{ zigbangCoverageText(zigbangCoverageFor(current)!) }}</p>
@@ -753,7 +824,7 @@ onBeforeUnmount(() => {
               <article v-for="j in activeState.jobs" :key="j.id" class="job-result">
                 <div class="job-heading">
                   <span><strong>{{ j.areaName }}</strong> <span class="muted">{{ j.siteName }}</span></span>
-                  <span class="result-badge" :class="j.status === 'complete' && j.site === 'zigbang' && !zigbangCoverageFor(j)?.complete ? 'attention' : j.status">{{ statusLabel(j) }}</span>
+                  <span class="result-badge" :class="j.status === 'complete' && (j.site === 'zigbang' && !zigbangCoverageFor(j)?.complete || j.site === 'daangn' && !daangnCoverageFor(j)?.complete) ? 'attention' : j.status">{{ statusLabel(j) }}</span>
                 </div>
                 <template v-if="j.receipt">
                   <p v-if="j.receipt.coverage" class="page-progress" :title="receiptText(j.receipt)">{{ coverageText(j.receipt.coverage) }}</p>
@@ -764,8 +835,12 @@ onBeforeUnmount(() => {
                     <p v-if="!zigbangCoverageFor(j)!.complete" class="stale-help">{{ zigbangCoverageReason(zigbangCoverageFor(j)!) }}</p>
                   </template>
                   <p v-if="naverCoverageFor(j)" class="page-progress" :title="receiptText(j.receipt)">{{ naverCoverageText(naverCoverageFor(j)!) }}</p>
+                  <template v-if="daangnCoverageFor(j)">
+                    <p class="page-progress" :title="receiptText(j.receipt)">{{ daangnCoverageText(daangnCoverageFor(j)!) }}</p>
+                    <p v-if="!daangnCoverageFor(j)!.complete" class="stale-help">{{ daangnCoverageReason(daangnCoverageFor(j)!) }}</p>
+                  </template>
                   <!-- 페이지 확인 줄이 없을 때만 서버가 받은 수를 글로 보인다(있으면 그 줄에 마우스를 올려 본다). -->
-                  <p v-if="!j.receipt.coverage && !naverCoverageFor(j)" class="help">{{ receiptText(j.receipt) }}</p>
+                  <p v-if="!j.receipt.coverage && !naverCoverageFor(j) && !daangnCoverageFor(j)" class="help">{{ receiptText(j.receipt) }}</p>
                   <p v-if="j.scope" class="help">주변 함께 저장 {{ j.receipt.retainedOutside ?? 0 }}건, 동 미확인 저장 {{ j.receipt.retainedUnknown ?? 0 }}건, 저장 제외 {{ (j.receipt.excludedOutside ?? 0) + (j.receipt.excludedUnknown ?? 0) }}건</p>
                 </template>
                 <p v-else class="help">저장 확인 전</p>
@@ -775,8 +850,8 @@ onBeforeUnmount(() => {
               </article>
             </div>
             <div v-if="incomplete && !running" class="retry-area">
-              <button class="btn btn-sm" :disabled="!!pending || connectionStale" @click="command('retry')">{{ pending === 'retry' ? '재조회 준비 중…' : `미완료 작업 ${incomplete}개 처음부터 다시 조회` }}</button>
-              <HelpTip :text="`다시 조회할 대상: ${incompleteJobs.map((j) => `${j.areaName}(${j.siteName}${j.scope ? `, ${j.scope.dong}` : ''})`).join(', ')}. 목록을 처음부터 다시 보고, 이미 저장된 매물은 최신 정보로 갱신합니다.`" />
+              <button class="btn btn-sm" :disabled="!!pending || connectionStale || !retryVersionReady" @click="command('retry')">{{ pending === 'retry' ? '재조회 준비 중…' : `미완료 작업 ${incomplete}개 처음부터 다시 조회` }}</button>
+              <HelpTip :text="retryVersionReady ? `다시 조회할 대상: ${retryJobs.map((j) => `${j.areaName}(${j.siteName}${j.scope ? `, ${j.scope.dong}` : ''})`).join(', ')}. 목록을 처음부터 다시 보고, 이미 저장된 매물은 최신 정보로 갱신합니다.` : '당근 작업을 빼고 다시 조회하려면 확장을 업데이트해 주세요.'" />
             </div>
           </div>
           <details class="activity">

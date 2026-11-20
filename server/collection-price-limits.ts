@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { COLLECTION_AMOUNT_LABELS } from '../shared/collection-price-limits.js';
 import type { CollectionPriceLimits, CollectionPriceLimitsState, CollectionPriceOverrides, RunScope, SourceId } from '../shared/types.js';
 
-const upstreamSites: readonly SourceId[] = ['dabang', 'zigbang'];
+const upstreamSites: readonly SourceId[] = ['dabang', 'zigbang', 'daangn'];
 const amountKeys = Object.keys(COLLECTION_AMOUNT_LABELS) as (keyof typeof COLLECTION_AMOUNT_LABELS)[];
 const unrestricted: CollectionPriceLimits = { saleMax: null, jeonseMax: null, monthlyDepositMax: null, monthlyMax: null, excludeSale: false };
 export const collectionPriceLimitsKey = (source: SourceId) => `collection_price_limits_${source}`;

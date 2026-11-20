@@ -72,7 +72,7 @@ function fixture(site = 'dabang') {
   let overlay;
   const body = element('body');
   const root = element('html').append(body);
-  const domains = { naver: 'land.naver.com', dabang: 'www.dabangapp.com', zigbang: 'www.zigbang.com', kb: 'kbland.kr', hogangnono: 'hogangnono.com', daangn: 'www.daangn.com' };
+  const domains = { naver: 'land.naver.com', dabang: 'www.dabangapp.com', zigbang: 'www.zigbang.com', kb: 'kbland.kr', hogangnono: 'hogangnono.com', daangn: 'realty.daangn.com' };
   const location = new URL(`https://${domains[site]}/map`);
   const window = { addEventListener(type, fn) { if (type === 'message') captureListener = fn; } };
   const document = {
@@ -128,6 +128,248 @@ const dabangPage = (page, ids, { total = 3, limit = 1, hasMore = true, filters =
 });
 const naver = (clusterId, ids) => ({ requestBody: JSON.stringify({ clusterId }), body: JSON.stringify({ result: { list: ids.map(articleNumber => ({ representativeArticleInfo: { articleNumber } })) } }) });
 const bubble = (id, left) => element('button', { attrs: { 'data-nlogs-area': 'pin*art.bubble', 'data-cluster-id': id }, rect: { left, top: 400, width: 60, height: 50 }, text: '2개의 매물' });
+
+test('Daangn scrolls only the matching public map list and reports its terminal response', () => {
+  const f = fixture('daangn');
+  f.location.pathname = '/map/subway/Synthetic';
+  f.location.searchParams.set('region_bounds', '10,20,11,21,14');
+  const scope = { kind: 'daangn-map', url: f.location.href };
+  const button = element('button', { text: '매물 999+개' });
+  const pins = [
+    element('button', { attrs: { 'aria-pressed': 'false', 'aria-label': '매물 20개' }, rect: { left: 420 } }),
+    element('button', { attrs: { 'aria-pressed': 'true', 'aria-label': '매물 45개' }, rect: { left: 720 } }),
+  ];
+  const unrelated = list(f, { id: '999' });
+  f.body.append(button, ...pins);
+  assert.equal(f.step({ daangnScope: scope }).kind, 'action');
+  assert.equal(button.clicks, 1);
+  assert.deepEqual(pins.map(pin => pin.clicks), [0, 0]);
+  assert.equal(f.step({ daangnScope: scope }).waiting, true);
+
+  const actual = list(f, { id: '101' });
+  const capture = (hasNextPage, requestPageUrl = scope.url) => f.capture({
+    url: 'https://realty.kr.karrotmarket.com/graphql', requestPageUrl,
+    requestBody: JSON.stringify({ variables: { after: hasNextPage ? null : 'synthetic-cursor' } }),
+    body: JSON.stringify({ data: { articleFeed: { edges: [{ node: { article: { originalId: '101' } } }], pageInfo: { hasNextPage } } } }),
+  });
+  capture(false, 'https://realty.daangn.com/map/subway/Synthetic?region_bounds=10%2C20%2C11%2C22%2C14');
+  assert.equal(f.step({ daangnScope: scope }).waiting, true);
+  capture(true);
+  assert.equal(f.step({ daangnScope: scope }).kind, 'action');
+  assert.equal(actual.scrollTop, 160);
+  assert.equal(unrelated.scrolls.length, 0);
+  capture(false);
+  assert.equal(f.step({ daangnScope: scope }).kind, 'complete');
+});
+
+test('Daangn leaves ambiguous map list controls untouched', () => {
+  const f = fixture('daangn');
+  f.location.pathname = '/map/subway/Synthetic';
+  f.location.searchParams.set('region_bounds', '10,20,11,21,14');
+  const scope = { kind: 'daangn-map', url: f.location.href };
+  const first = element('button', { text: '매물 20개' });
+  const second = element('button', { text: '매물 50개', rect: { left: 420 } });
+  f.body.append(first, second);
+  assert.equal(f.step({ daangnScope: scope }).kind, 'idle');
+  assert.equal(first.clicks + second.clicks, 0);
+});
+
+function renderedDaangnList() {
+  const box = element('div', { style: { overflowY: 'auto' }, clientHeight: 200, scrollHeight: 1000 });
+  for (let i = 0; i < 3; i++) {
+    const card = element('div', { attrs: { role: 'button' }, text: '월세 500/20' });
+    card.append(element('img', { attrs: { alt: '매물 썸네일' } }));
+    box.append(element('div').append(card));
+  }
+  return box;
+}
+
+test('Daangn scrolls an already open list without matching card IDs and waits for its response at the end', () => {
+  const f = fixture('daangn');
+  f.location.pathname = '/map/subway/Synthetic';
+  f.location.searchParams.set('region_bounds', '10,20,11,21,14');
+  const scope = { kind: 'daangn-map', url: f.location.href };
+  const toggle = element('button', { text: '매물 999+개' });
+  const panel = renderedDaangnList();
+  const unrelated = list(f, { id: '999' });
+  f.body.append(toggle, panel);
+  assert.equal(f.step({ daangnScope: scope }).kind, 'action');
+  assert.deepEqual(panel.scrolls, [160]);
+  assert.equal(toggle.clicks, 0);
+  assert.deepEqual(unrelated.scrolls, []);
+
+  panel.scrollHeight = 1800;
+  for (let turn = 0; turn < 12 && panel.scrollTop < 1600; turn++) {
+    assert.equal(f.step({ daangnScope: scope }).kind, 'action');
+    f.advance(10_000);
+  }
+  assert.equal(panel.scrollTop, 1600);
+  assert.ok(panel.scrolls.every((top, index, all) => top - (all[index - 1] || 0) <= 160));
+  assert.equal(f.step({ daangnScope: scope }).waiting, true, '첫 응답은 실제 목록 끝에 닿은 뒤 기다린다');
+  f.capture({ url: 'https://realty.kr.karrotmarket.com/graphql', requestPageUrl: scope.url,
+    requestBody: JSON.stringify({ variables: { after: null } }),
+    body: JSON.stringify({ data: { articleFeed: { edges: [{ node: { article: { originalId: '101' } } }], pageInfo: { hasNextPage: true } } } }),
+  });
+  panel.scrollHeight = 2600;
+  assert.equal(f.step({ daangnScope: scope }).kind, 'action');
+  assert.equal(panel.scrollTop, 1760);
+});
+
+test('Daangn does not guess between two visible listing panels', () => {
+  const f = fixture('daangn');
+  f.location.pathname = '/map/subway/Synthetic';
+  f.location.searchParams.set('region_bounds', '10,20,11,21,14');
+  const scope = { kind: 'daangn-map', url: f.location.href };
+  const first = renderedDaangnList();
+  const second = renderedDaangnList();
+  f.body.append(first, second);
+  assert.equal(f.step({ daangnScope: scope }).kind, 'idle');
+  assert.equal(first.scrolls.length + second.scrolls.length, 0);
+});
+
+function daangnPaginationFixture() {
+  const f = fixture('daangn');
+  f.location.pathname = '/map/subway/Synthetic';
+  f.location.searchParams.set('region_bounds', '10,20,11,21,14');
+  const scope = { kind: 'daangn-map', url: f.location.href };
+  const panel = renderedDaangnList();
+  f.body.append(panel);
+  return {
+    f, panel, scope,
+    receive(page, hasNextPage) {
+      f.capture({ url: 'https://realty.kr.karrotmarket.com/graphql', requestPageUrl: scope.url,
+        requestBody: JSON.stringify({ variables: { after: page === 1 ? null : `synthetic-cursor-${page - 1}` } }),
+        body: JSON.stringify({ data: { articleFeed: {
+          edges: [{ node: { article: { originalId: String(100 + page) } } }],
+          pageInfo: { hasNextPage, endCursor: hasNextPage ? `synthetic-cursor-${page}` : null },
+        } } }),
+      });
+    },
+  };
+}
+
+test('Daangn crosses a loading sentinel before tall trailing content to receive four finite pages', () => {
+  const { f, panel, scope, receive } = daangnPaginationFixture();
+  const lastPage = 4;
+  let pages = 1;
+  let sentinelTop = 500;
+  panel.scrollHeight = sentinelTop + 1200;
+  receive(pages, true);
+  panel.onScroll = top => {
+    const sentinelVisible = top < sentinelTop + 12 && top + panel.clientHeight > sentinelTop;
+    if (!sentinelVisible || pages === lastPage) return;
+    pages++;
+    sentinelTop += 600;
+    panel.scrollHeight = sentinelTop + 1200;
+    receive(pages, pages < lastPage);
+  };
+
+  panel.scrollTo({ top: panel.scrollHeight - panel.clientHeight });
+  assert.equal(pages, 1, 'jumping to the physical bottom skips the loading sentinel');
+  panel.scrollTo({ top: 0 });
+  panel.scrolls.length = 0;
+
+  let answer;
+  for (let turn = 0; turn < 40; turn++) {
+    const before = panel.scrollTop;
+    answer = f.step({ daangnScope: scope });
+    if (answer.kind === 'complete') break;
+    assert.equal(answer.kind, 'action', 'the finite list still has a reachable loading sentinel');
+    assert.ok(panel.scrollTop > before, 'advance through the list before the trailing content');
+    assert.ok(panel.scrollTop - before <= panel.clientHeight * 0.8, 'each step keeps adjacent viewports overlapping');
+    f.advance(10_000);
+  }
+  assert.equal(pages, lastPage);
+  assert.equal(answer.kind, 'complete', 'only the final received response completes the list');
+});
+
+test('Daangn reaches an initial loading sentinel when the first rendered cards arrived without a captured feed', () => {
+  const { f, panel, scope, receive } = daangnPaginationFixture();
+  let received = false;
+  panel.scrollHeight = 1700;
+  panel.onScroll = top => {
+    if (!received && top < 512 && top + panel.clientHeight > 500) {
+      received = true;
+      receive(1, false);
+    }
+  };
+
+  assert.equal(f.step({ daangnScope: scope }).kind, 'action');
+  assert.equal(received, false);
+  assert.equal(f.step({ daangnScope: scope }).kind, 'action');
+  assert.equal(received, true);
+  assert.deepEqual(panel.scrolls, [160, 320]);
+  assert.equal(f.step({ daangnScope: scope }).kind, 'complete');
+});
+
+test('Daangn ignores an unrelated recommendation feed terminal response without the map cursor request', () => {
+  const { f, panel, scope, receive } = daangnPaginationFixture();
+  receive(1, true);
+  for (const requestBody of [null, JSON.stringify({ variables: { placementId: 'synthetic-placement', first: 20 } })]) {
+    f.capture({ url: 'https://realty.kr.karrotmarket.com/graphql', requestPageUrl: scope.url, requestBody,
+      body: JSON.stringify({ data: { articleFeed: { edges: [], pageInfo: { hasNextPage: false } } } }),
+    });
+    assert.equal(f.step({ daangnScope: scope }).kind, 'action');
+  }
+  assert.deepEqual(panel.scrolls, [160, 320]);
+  receive(2, false);
+  assert.equal(f.step({ daangnScope: scope }).kind, 'complete');
+});
+
+test('Daangn bounds bottom re-entry without a response and permits a fresh retry after the next feed page', () => {
+  const { f, panel, scope, receive } = daangnPaginationFixture();
+  receive(1, true);
+  const exhaust = () => {
+    for (let turn = 0; turn < 40; turn++) {
+      const answer = f.step({ daangnScope: scope });
+      assert.notEqual(answer.kind, 'complete', 'reaching the bottom cannot prove that the list ended');
+      f.advance(13_000);
+      if (answer.kind === 'idle' && !answer.waiting) return;
+    }
+    assert.fail('scroll retries must stop when no new page arrives');
+  };
+  const upwardSteps = scrolls => scrolls.filter((top, index) => index > 0 && top < scrolls[index - 1]).length;
+
+  exhaust();
+  const firstRetries = upwardSteps(panel.scrolls);
+  assert.equal(firstRetries, 3, 'the current page gets three bounded bottom re-entry attempts');
+  const firstEnd = panel.scrolls.length;
+  for (let turn = 0; turn < 5; turn++) {
+    const answer = f.step({ daangnScope: scope });
+    assert.equal(answer.kind, 'idle');
+    assert.equal(answer.waiting, false);
+    f.advance(13_000);
+  }
+  assert.equal(panel.scrolls.length, firstEnd, 'silent pages cannot restart their exhausted scroll retries');
+
+  receive(2, true);
+  const beforeNextPage = panel.scrollTop;
+  exhaust();
+  const secondRetries = upwardSteps([beforeNextPage, ...panel.scrolls.slice(firstEnd)]);
+  assert.equal(secondRetries, 3, 'a newly received page gets its own three bounded retries');
+  const secondEnd = panel.scrolls.length;
+  assert.equal(f.step({ daangnScope: scope }).waiting, false);
+  assert.equal(panel.scrolls.length, secondEnd);
+});
+
+test('Daangn refuses other ranges and stops UI work when matching requests are denied', () => {
+  for (const status of [403, 429]) {
+    const f = fixture('daangn');
+    f.location.pathname = '/map/subway/Synthetic';
+    f.location.searchParams.set('region_bounds', '10,20,11,21,14');
+    const unrelated = new URL(f.location);
+    unrelated.searchParams.set('region_bounds', '10,20,11,22,14');
+    const scope = { kind: 'daangn-map', url: f.location.href };
+    const button = element('button', { text: '매물 20개' });
+    f.body.append(button);
+    assert.equal(f.step({ daangnScope: { ...scope, url: unrelated.href } }).kind, 'blocked');
+    f.capture({ url: 'https://realty.kr.karrotmarket.com/graphql', requestPageUrl: scope.url, status, body: '' });
+    const result = f.step({ daangnScope: scope });
+    assert.equal(result.kind, 'blocked');
+    assert.match(result.note, new RegExp(`HTTP ${status}`));
+    assert.equal(button.clicks, 0);
+  }
+});
 
 test('Naver region traversal opens only the exact selected region and requires the final cursor page',()=>{
   const f=fixture('naver');

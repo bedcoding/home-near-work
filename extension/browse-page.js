@@ -5,7 +5,7 @@
   globalThis.__hnwBrowsePage = true;
   const SITE = typeof HNW_SITE !== 'undefined' && HNW_SITE ? HNW_SITE.id : null;
   const BUBBLE = 'button[data-nlogs-area="pin*art.bubble"], button[class*="BubbleMarker"]';
-  const SUPPORTED = ['naver', 'dabang', 'zigbang'];
+  const SUPPORTED = ['naver', 'dabang', 'zigbang', 'daangn'];
   const MAX_ACTIONS = 40;
   const ids = new Set();
   const titles = new Set();
@@ -17,6 +17,8 @@
   let dabangLatestRegion = null;
   let zigbangLedger = null;
   const naverStreams = new Map();
+  let daangnStream = null;
+  let daangnDenied = null;
   let responseVersion = 0;
   let responseAt = 0;
   let lastCluster = null;
@@ -236,10 +238,52 @@
     return null;
   }
 
+  function daangnMapKey(value) {
+    try {
+      const url = new URL(value);
+      const pathname = url.pathname.replace(/\/$/, '');
+      const bounds = url.searchParams.getAll('region_bounds');
+      if (url.origin === 'https://realty.daangn.com' && !url.username && !url.password &&
+          /^\/map\/subway\/[^/]+$/.test(pathname) && bounds.length === 1 && bounds[0]) return JSON.stringify([pathname, bounds[0]]);
+    } catch { /* Ignore a response outside the selected map. */ }
+    return null;
+  }
+
+  function rememberDaangn(c) {
+    const page = daangnMapKey(c.requestPageUrl);
+    if (!page || page !== daangnMapKey(location.href) || c.url !== 'https://realty.kr.karrotmarket.com/graphql') return;
+    if (c.status === 403 || c.status === 429) {
+      daangnDenied = { page, status: c.status };
+      return;
+    }
+    if (!Number.isInteger(c.status) || c.status < 200 || c.status >= 300) return;
+    if (typeof c.body !== 'string' || c.body.length > 2000000) return;
+    let feed;
+    try {
+      const variables = JSON.parse(c.requestBody)?.variables;
+      if (!variables || !Object.hasOwn(variables, 'after') || variables.after !== null &&
+          (typeof variables.after !== 'string' || !/^[A-Za-z0-9_+=/.:\-]{1,1024}$/.test(variables.after))) return;
+      feed = JSON.parse(c.body)?.data?.articleFeed;
+    } catch { return; }
+    if (!Array.isArray(feed?.edges) || typeof feed.pageInfo?.hasNextPage !== 'boolean') return;
+    if (daangnStream?.page !== page) daangnStream = { page, ids: new Set(), seen: new Set(), ended: false };
+    const pageIds = feed.edges.map(edge => edge?.node?.article?.originalId).filter(id => typeof id === 'string' && /^[1-9]\d{0,19}$/.test(id));
+    const signature = JSON.stringify([feed.pageInfo.endCursor, pageIds, feed.pageInfo.hasNextPage]);
+    if (daangnStream.seen.has(signature)) return;
+    daangnStream.seen.add(signature);
+    if (daangnStream.seen.size > 5000) daangnStream.seen.delete(daangnStream.seen.values().next().value);
+    for (const id of pageIds) daangnStream.ids.add(id);
+    while (daangnStream.ids.size > 5000) daangnStream.ids.delete(daangnStream.ids.values().next().value);
+    daangnStream.ended = !feed.pageInfo.hasNextPage;
+    responseVersion++;
+    responseAt = Date.now();
+  }
+
   // MAIN world hook이 전달한 동일 창, 동일 출처 응답만 이용한다. 개인 정보 응답은 기존 hook에서 제외한다.
   window.addEventListener('message', (event) => {
     if (event.source !== window || event.origin !== location.origin || event.data?.__hnw !== 'capture') return;
     const c = event.data;
+    if (SITE === 'daangn') { rememberDaangn(c); return; }
     if (!Number.isFinite(c.status) || c.status < 200 || c.status >= 300 || typeof c.body !== 'string') return;
     try {
       const u = new URL(c.url, location.href);
@@ -325,21 +369,36 @@
     return [...new Set(out)];
   }
 
+  function listingScrollContainer(item) {
+    let el = item.parentElement;
+    for (let depth = 0; el && depth < 12; depth++, el = el.parentElement) {
+      if (el === document.body || el === document.documentElement || el.closest('nav, header, [role="dialog"], dialog')) break;
+      if (visible(el) && /^(auto|scroll)$/.test(getComputedStyle(el).overflowY) && el.clientHeight >= 80) return el;
+    }
+    return null;
+  }
+
   function listContainer(allowedIds, allowedTitles) {
     const candidates = new Map();
     for (const item of listingElements(allowedIds, allowedTitles)) {
-      let el = item.parentElement;
-      for (let depth = 0; el && depth < 12; depth++, el = el.parentElement) {
-        if (el === document.body || el === document.documentElement) break;
-        if (el.closest('nav, header, [role="dialog"], dialog')) break;
-        const style = getComputedStyle(el);
-        if (visible(el) && /(auto|scroll)/.test(style.overflowY) && el.clientHeight >= 80) {
-          candidates.set(el, (candidates.get(el) || 0) + 1);
-          break;
-        }
-      }
+      const el = listingScrollContainer(item);
+      if (el) candidates.set(el, (candidates.get(el) || 0) + 1);
     }
     return [...candidates].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  }
+
+  function daangnRenderedList() {
+    // 첫 목록이 이미 떠 있고 카드에 매물 번호가 없는 화면에서도 목록 자체는 식별할 수 있다.
+    const cards = new Set([...document.querySelectorAll('img[alt="매물 썸네일"]')]
+      .map(image => image.closest('div[role="button"]')).filter(card => visible(card, false)));
+    const candidates = new Map();
+    for (const card of cards) {
+      if (!/(?:월세|전세|매매)\s*[\d,]/.test(tidy(card.innerText || card.textContent))) continue;
+      const box = listingScrollContainer(card);
+      if (box && box.scrollHeight > box.clientHeight + 3) candidates.set(box, (candidates.get(box) || 0) + 1);
+    }
+    const boxes = [...candidates].filter(([, count]) => count >= 2);
+    return boxes.length === 1 ? boxes[0][0] : null;
   }
 
   function act(note, fn) {
@@ -510,6 +569,46 @@
     return result('idle', `${proof.received}/${proof.total}건까지 받았습니다. 다음 목록 응답이 없어 일부 확인으로 남깁니다.`);
   }
 
+  function daangnMapStep(scope) {
+    const page = scope?.kind === 'daangn-map' && daangnMapKey(scope.url);
+    if (!page || page !== daangnMapKey(location.href)) {
+      return result('blocked', '선택한 범위의 당근 지도 화면을 확인하지 못했습니다');
+    }
+    if (daangnDenied?.page === page) return result('blocked', `당근 지도 목록 요청이 HTTP ${daangnDenied.status}로 거절됐습니다`);
+    const stream = daangnStream?.page === page ? daangnStream : null;
+    if (stream?.ended) return result('complete', '당근 지도에서 마지막 목록 응답을 받았습니다');
+    const verifiedBox = stream?.ids.size ? listContainer(stream.ids, new Set()) : null;
+    const box = verifiedBox || daangnRenderedList();
+    if (!box) {
+      // 지도 표식은 전환 버튼이며, 목록 열기 버튼과 같은 건수 문구를 쓴다.
+      const buttons = [...document.querySelectorAll('button, [role="button"]')].filter(button =>
+        button.getAttribute('aria-pressed') === null &&
+        /^매물\s*[\d,]+\+?\s*개$/.test(tidy(button.getAttribute('aria-label') || button.innerText || button.textContent)) &&
+        canClick(button));
+      if (!job.daangnOpenedAt && buttons.length === 1) return act('당근 지도 매물 목록을 여는 중', () => {
+        job.daangnOpenedAt = Date.now();
+        buttons[0].click();
+      });
+      return result('idle', '당근 지도에서 받은 매물과 일치하는 목록을 기다립니다',
+        Date.now() - Math.max(job.daangnOpenedAt || 0, responseAt, job.startedAt) < 20000);
+    }
+    const max = Math.max(0, box.scrollHeight - box.clientHeight);
+    if (box.scrollTop < max - 3) return act('당근 매물 목록 끝을 확인하는 중', () => {
+      job.daangnScrolledAt = Date.now();
+      // 끝으로 건너뛰면 카드 뒤의 로딩 감지 영역을 지나칠 수 있다.
+      box.scrollTo({ top: Math.min(max, box.scrollTop + Math.max(1, Math.floor(box.clientHeight * 0.8))), behavior: 'instant' });
+    });
+    const wait = stream ? 12000 : 20000;
+    if (Date.now() - Math.max(job.daangnScrolledAt || 0, responseAt) < wait) return result('idle', '당근의 다음 목록 응답을 기다리는 중', true);
+    const bottomKey = `${responseVersion}:${box.scrollHeight}`;
+    if (job.daangnBottom?.key !== bottomKey) job.daangnBottom = { key: bottomKey, attempts: 0 };
+    if (max > box.clientHeight && job.daangnBottom.attempts < 3) return act('당근 매물 목록 끝을 한 번 더 확인하는 중', () => {
+      job.daangnBottom.attempts++;
+      box.scrollTo({ top: Math.max(0, max - box.clientHeight - 20), behavior: 'instant' });
+    });
+    return result('idle', '당근의 다음 목록 응답을 확인하지 못했습니다');
+  }
+
   function step(message) {
     if (message.site !== SITE) return result('unsupported', '이 사이트는 화면 확인만 지원합니다');
     if (typeof message.jobId !== 'string' || !message.jobId || message.jobId.length > 120) return result('unsupported', '조회 작업을 확인할 수 없습니다');
@@ -519,6 +618,7 @@
     if (!SUPPORTED.includes(SITE)) return result('unsupported', '이 사이트는 화면 확인만 지원합니다');
     if (SITE === 'dabang') return dabangStep(message);
     if (SITE === 'zigbang') return zigbangStep();
+    if (SITE === 'daangn') return daangnMapStep(message.daangnScope);
     if (SITE === 'naver' && message.naverScope) return naverRegionStep(message.naverScope);
     if (job.actions >= MAX_ACTIONS) return result('idle', '한 페이지의 자동 탐색 한도에 도달했습니다. 일부만 확인했을 수 있습니다');
     if (SITE !== 'naver') return scrollList();

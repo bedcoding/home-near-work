@@ -506,6 +506,68 @@ test('네이버 수집의 페이지와 수신 건수를 같은 진행 표시에 
 const NAVER_EXT = { version: '0.8.22', browse: true, sites: ['naver', 'dabang', 'zigbang'] };
 const regionArea = (id, kind = 'gu') => ({ ...area(id), name: `예시 구역 ${id}`, purpose: 'collection',
   region: { kind, code: `9912${id}`, sido: '예시도', sigungu: '가상구', dong: kind === 'gu' ? null : '가상동', name: `예시도 가상구 ${id}` } });
+const DAANGN_EXT = { version: '0.8.28', browse: true, sites: ['daangn', 'kbland'] };
+const syntheticDaangnMap = 'https://realty.daangn.com/map/subway/SyntheticStation?region_bounds=1%2C1%2C2%2C2%2C14';
+
+test('당근은 사이트 선택과 새 순회 계획에서 빠지며 다른 사이트는 그대로 시작한다', async (t) => {
+  const h = harness(t, DAANGN_EXT);
+  h.props.areas = [area(1), regionArea(3), regionArea(4, 'dong'), { ...area(2), purpose: 'alert' }];
+  h.app.selectedAreas.value = h.props.areas.map((a) => a.id);
+  await h.ready;
+  h.receive({ state: null });
+  assert.deepEqual(clone(h.app.sites.value.map((site) => site.id)), ['kbland']);
+  assert.deepEqual(clone(h.app.selectedSites.value), []);
+  h.app.selectedSites.value = ['daangn'];
+  assert.equal(h.app.canStart.value, false);
+  assert.equal(h.app.plannedJobs.value.length, 0);
+  h.app.selectedSites.value = ['daangn', 'kbland'];
+  assert.deepEqual(clone(h.app.plannedJobs.value.map(({ areaId, site }) => [areaId, site])), [[1, 'kbland'], [2, 'kbland']]);
+  h.app.command('start');
+  const start = h.messages.at(-1).data;
+  assert.deepEqual(start.sites, ['kbland']);
+  assert.equal(start.areas.find((a) => a.id === 2).purpose, 'alert');
+  assert.equal(Object.hasOwn(start, 'naverSourceTabId'), false);
+});
+
+test('기존 당근 순회의 수신과 저장 기록을 읽고 다른 범위는 완료로 표시하지 않는다', async (t) => {
+  const h = harness(t, DAANGN_EXT);
+  await h.ready;
+  const coverage = { scopeUrl: syntheticDaangnMap, pages: 2, received: 40, stored: 31, complete: false, reason: 'missing-request' };
+  const daangn = { ...job('partial', { responses: 2, listings: 31, newCount: 0, changedCount: 0, daangnCoverage: coverage }),
+    site: 'daangn', siteName: '당근부동산', url: syntheticDaangnMap };
+  h.receive({ state: { ...state([daangn]), logs: [{ at: 1, code: 'saved', jobIndex: 0, site: 'daangn', listings: 31 }] } });
+  const result = h.app.daangnCoverageFor(h.app.state.value.jobs[0]);
+  assert.equal(h.app.daangnCoverageText(result), '지도 목록 2페이지, 수신 40건, 저장 31건');
+  assert.match(h.app.daangnCoverageReason(result), /처음부터 순서대로 이어졌는지/);
+  assert.match(h.app.activity.value[0].text, /당근부동산/);
+  assert.equal(h.app.safeLink(syntheticDaangnMap), syntheticDaangnMap);
+  assert.equal(h.app.safeLink(`${syntheticDaangnMap}&extra=example`), syntheticDaangnMap);
+  assert.equal(h.app.safeLink('https://realty.daangn.com/other'), null);
+  const complete = { ...daangn, status: 'complete', receipt: { ...daangn.receipt, daangnCoverage: { ...coverage, complete: true, reason: 'complete' } } };
+  assert.equal(h.app.statusLabel(complete), '지도 목록 저장 완료');
+  assert.equal(h.app.statusLabel({ ...complete, url: syntheticDaangnMap.replace('2%2C2', '3%2C3') }), '지도 목록 확인 필요');
+  assert.equal(h.app.daangnCoverageFor({ ...daangn, receipt: { ...daangn.receipt, daangnCoverage: { ...coverage, stored: 41 } } }), null);
+});
+
+test('이전 당근의 이어하기는 가능하고 함께 저장된 다른 미완료 작업만 최신 확장에서 재시도한다', async (t) => {
+  const h = harness(t, DAANGN_EXT);
+  await h.ready;
+  const legacy = { ...job('partial'), id: 'synthetic-daangn', site: 'daangn', siteName: '당근부동산', url: syntheticDaangnMap };
+  h.receive({ state: state([{ ...legacy, status: 'running' }], 'paused') });
+  h.app.command('resume');
+  const resume = h.messages.at(-1).data;
+  assert.equal(resume.command, 'resume');
+  h.receive({ requestId: resume.requestId, requestType: 'browse-command', state: { ...state([legacy, job('partial')]), updatedAt: 2 } });
+  assert.deepEqual(clone(h.app.retryJobs.value.map((item) => item.site)), ['dabang']);
+  const count = h.messages.length;
+  h.app.command('retry');
+  assert.equal(h.messages.length, count);
+
+  h.props.extension.version = '0.8.33';
+  h.app.command('retry');
+  assert.equal(h.messages.at(-1).data.command, 'retry');
+});
+
 const naverReply = (h, data) => h.receive({ type: 'naver-filter', ...data });
 async function readNaver(h, tabs = [{ id: 99, title: 'Synthetic map', active: false }], context = { key: 'synthetic-key', tabId: 99, conditions: [{ label: '월세', value: '77만원 이하' }] }) {
   await vue.nextTick();

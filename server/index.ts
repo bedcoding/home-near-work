@@ -792,7 +792,7 @@ app.get('/api/browse/scopes', async (_req, reply) => {
   catch { reply.code(409); return { error: '저장한 동별 범위와 현재 지역 설정을 확인해 주세요.' }; }
 });
 
-app.post<{ Body: { jobId?: unknown; batchId?: unknown; captures?: unknown; scope?: unknown; naverScope?: unknown } }>('/api/browse/capture', { bodyLimit: EXTENSION_BODY_LIMIT }, async (req, reply) => {
+app.post<{ Body: { jobId?: unknown; batchId?: unknown; captures?: unknown; scope?: unknown; naverScope?: unknown; daangnScope?: unknown } }>('/api/browse/capture', { bodyLimit: EXTENSION_BODY_LIMIT }, async (req, reply) => {
   if (!fromExtension(req.headers.origin)) {
     reply.code(403);
     return { error: '확장 프로그램에서 온 요청만 받습니다.' };

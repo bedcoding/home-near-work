@@ -155,11 +155,15 @@ test('common price limits reach a supported collector without filtering response
   assert.deepEqual(native.summary.sources[0].collectionPriceLimits, commonPriceLimits);
   assert.deepEqual(native.settingWrites, []);
 
-  const other = await run({ scope: 'home', source: 'daangn', commonPriceLimits, offers: [[monthly], [sale]] });
+  const other = await run({ scope: 'home', source: 'ziptoss', commonPriceLimits, offers: [[monthly], [sale]] });
   assert.equal(other.collectorLimits, undefined);
   assert.equal(other.summary.sources[0].collectionPriceLimits, undefined);
   assert.equal(other.summary.sources[0].coverage[0].complete, true);
-  assert.deepEqual([...other.rows.keys()], ['daangn:101', 'daangn:102']);
+  assert.deepEqual([...other.rows.keys()], ['ziptoss:101', 'ziptoss:102']);
+
+  const daangn = await run({ scope: 'home', source: 'daangn', commonPriceLimits, offers: [[{ ...monthly, monthly: 20 }]] });
+  assert.deepEqual(daangn.collectorLimits, commonPriceLimits, '당근 수집기도 공통 가격 조건을 받는다');
+  assert.deepEqual(daangn.summary.sources[0].collectionPriceLimits, commonPriceLimits);
 });
 
 test('a run passes edited prices to the collector and records the effective conditions without saving them as defaults', async () => {

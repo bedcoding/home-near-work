@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -621,25 +622,90 @@ test('Daangn account responses are never stored and identity fields are masked',
   assert.equal(r.api.redact('{"realName":"x","di":"abc","ci":"def","name":"y"}'), '{"realName":"***","di":"***","ci":"***","name":"y"}');
 });
 
-async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePrevious, emptyEnd, unsolicitedEnd, stalled, advanceTime }) {
+const DAANGN_MAP = `${DAANGN_PAGE}?region_bounds=35%2C127%2C36%2C128%2C14`;
+const DAANGN_MAP_SCOPE = { kind: 'daangn-map', url: DAANGN_MAP };
+function daangnMapCapture(rows, after, hasNextPage, endCursor) {
+  return { site: 'daangn', status: 200, pageUrl: DAANGN_MAP, url: 'https://realty.kr.karrotmarket.com/graphql',
+    requestBody: JSON.stringify({ variables: { after }, secret: 'private-request-fixture' }),
+    body: JSON.stringify({ data: {
+      viewer: { token: 'private-viewer-fixture' },
+      articleFeed: {
+        edges: rows.map(([id, type]) => ({ node: { article: { ...daangnArticle(id, type), hiddenField: 'private-article-fixture' } } })),
+        pageInfo: { endCursor, hasNextPage },
+      },
+    } }),
+  };
+}
+
+test('Daangn browser browsing stores public district listings and omits unrelated account fields', () => {
+  const r = receiver();
+  const row = daangnMapCapture([[901], [902, 'STORE']], null, true, 'private-cursor-fixture');
+  assert.equal(r.api.acceptCaptures([{ ...row, url: `${row.url}?value=private-query-fixture`, pageUrl: `${DAANGN_MAP}&value=private-page-fixture` }]), 1);
+  r.api.finishCaptureSession(false);
+  assert.deepEqual([...r.saved().keys()], ['daangn:901']);
+  assert.equal(r.rows()[0].url, row.url);
+  assert.equal(r.rows()[0].pageUrl, DAANGN_MAP);
+  assert.equal(r.rows()[0].requestBody, null);
+  assert.doesNotMatch(r.rows()[0].body, /private-.*-fixture/);
+});
+
+test('Daangn browser map receipts tie complete coverage to one scope, continuous cursors, and successful storage', () => {
+  const r = receiver();
+  const firstPage = daangnMapCapture([[911], [912, 'STORE']], null, true, 'private-cursor-fixture');
+  const first = r.api.acceptBrowseCaptures({ jobId: 'map-proof', batchId: 'first', daangnScope: DAANGN_MAP_SCOPE, captures: [firstPage] });
+  assert.equal(first.daangnCoverage.reason, 'more-pages');
+  const api = r.restart();
+  const repeated = api.acceptBrowseCaptures({ jobId: 'map-proof', batchId: 'duplicate', daangnScope: DAANGN_MAP_SCOPE, captures: [firstPage] });
+  assert.equal(repeated.daangnCoverage.pages, 1);
+  const lastPage = daangnMapCapture([[913]], 'private-cursor-fixture', false, 'last-page');
+  const done = api.acceptBrowseCaptures({ jobId: 'map-proof', batchId: 'last', daangnScope: DAANGN_MAP_SCOPE, captures: [lastPage] });
+  assert.deepEqual(plain(done.daangnCoverage), { stationPoiId: null, scopeUrl: DAANGN_MAP, pages: 2, received: 3,
+    stored: 2, excluded: 1, unreadable: 0, complete: true, reason: 'complete' });
+  assert.doesNotMatch(r.store.getSetting('browse_receipts'), /private-cursor-fixture/);
+  const changed = DAANGN_MAP.replace('%2C14', '%2C15');
+  assert.throws(() => api.acceptBrowseCaptures({ jobId: 'map-proof', batchId: 'changed', daangnScope: { kind: 'daangn-map', url: changed }, captures: [] }), /범위/);
+  assert.throws(() => api.acceptBrowseCaptures({ jobId: 'wrong-map', batchId: 'changed', daangnScope: DAANGN_MAP_SCOPE, captures: [{ ...lastPage, pageUrl: changed }] }), /범위/);
+  const unwritten = receiver({ skipWrites: true });
+  const pending = unwritten.api.acceptBrowseCaptures({ jobId: 'map-proof', batchId: 'only', daangnScope: DAANGN_MAP_SCOPE, captures: [daangnMapCapture([[914]], null, false, null)] });
+  assert.equal(pending.daangnCoverage.reason, 'unverified-storage');
+});
+
+test('Daangn map capture keeps available listings with unverified pagination and drops forbidden responses', () => {
+  const r = receiver();
+  const missing = r.api.acceptBrowseCaptures({ jobId: 'map-partial', batchId: 'missing', daangnScope: DAANGN_MAP_SCOPE, captures: [daangnMapCapture([[921]], undefined, false, null)] });
+  assert.equal(missing.daangnCoverage.reason, 'missing-request');
+  assert.equal(missing.daangnCoverage.stored, 1);
+  assert.equal(missing.daangnCoverage.complete, false);
+  const denied = r.api.acceptBrowseCaptures({ jobId: 'map-denied', batchId: 'denied', daangnScope: DAANGN_MAP_SCOPE,
+    captures: [{ ...daangnMapCapture([[922]], null, false, null), status: 403 }] });
+  assert.equal(denied.daangnCoverage.reason, 'response-status');
+  assert.equal(denied.responses, 0);
+  assert.deepEqual([...r.saved().keys()], ['daangn:921']);
+});
+
+async function collectMapFeed({ lastPage, blockedAt, responseStatuses, extraTarget, feedRequest, blockedRequest, auxiliaryRequest,
+  stopDuringWait, latePrevious, emptyEnd, unsolicitedEnd, stalled, silentAfter, advanceTime }) {
   const { collectDaangn } = await import('../server/collectors/daangn.ts');
   const { url } = daangnCapture([], null, false, 'fixture');
-  const pauses = [], actions = [], partial = [], coverage = [];
+  const pauses = [], actions = [], partial = [], coverage = [], records = [];
   const listeners = new Map();
   let frameUrl = 'about:blank', opened = 0, pageNumber = 0, stopped = false;
   let lateRequest;
   const frame = { url: () => frameUrl };
-  function startRequest() {
-    const request = { url: () => url, frame: () => frame, isNavigationRequest: () => false };
+  function startRequest({ method = 'POST', params, payload } = {}) {
+    const address = new URL(url);
+    for (const [key, value] of Object.entries(params ?? {})) address.searchParams.set(key, value);
+    const request = { url: () => address.href, method: () => method, postDataJSON: () => payload,
+      frame: () => frame, isNavigationRequest: () => false };
     listeners.get('request')(request);
     return request;
   }
-  function reply(request, id, cursor, hasNextPage, status = 200) {
+  function reply(request, id, cursor, hasNextPage, status = 200, data) {
     listeners.get('response')({
       request: () => request,
-      url: () => url,
+      url: request.url,
       status: () => status,
-      text: async () => JSON.stringify({ data: { articleFeed: {
+      text: async () => JSON.stringify(data ?? { data: { articleFeed: {
         edges: id === null ? [] : [{ node: { article: daangnArticle(id) } }],
         pageInfo: { endCursor: cursor === null ? null : String(cursor), hasNextPage },
       } } }),
@@ -648,7 +714,10 @@ async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePreviou
   function emitNext() {
     const index = ++pageNumber;
     const terminal = emptyEnd && index === lastPage;
-    reply(startRequest(), terminal ? null : (opened - 1) * 1000 + index, terminal ? null : index, index < lastPage, index === blockedAt ? 429 : 200);
+    const status = responseStatuses?.[index - 1] ?? (index === blockedAt ? 429 : 200);
+    const blocked = status === 403 || status === 429;
+    reply(startRequest(blocked ? blockedRequest : feedRequest), terminal ? null : (opened - 1) * 1000 + index,
+      terminal ? null : index, index < lastPage, status);
   }
   const page = {
     on: (event, handler) => { listeners.set(event, handler); },
@@ -668,7 +737,7 @@ async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePreviou
   };
   const session = {
     page,
-    record() {},
+    record: (...args) => records.push(args),
     rest: async () => {},
     goto: async (_source, targetUrl) => {
       opened++;
@@ -681,6 +750,7 @@ async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePreviou
         reply(previousDocumentRequest, 998, 2, false);
       }
       emitNext();
+      if (auxiliaryRequest) reply(startRequest(auxiliaryRequest), null, null, false, 200, { data: { extra: { value: 1 } } });
       if (unsolicitedEnd) reply(startRequest(), null, null, false);
       if (latePrevious && opened === 1) lateRequest = startRequest();
       return { status: () => 200 };
@@ -688,14 +758,14 @@ async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePreviou
     screenshot: async () => null,
     wheel: async () => {
       actions.push(pauses.length);
-      if (stalled === 'silent') return;
+      if (stalled === 'silent' || silentAfter != null && actions.length > silentAfter) return;
       if (stalled === 'failed') listeners.get('requestfailed')(startRequest());
       else if (stalled === 'http') reply(startRequest(), 2, 2, true, 503);
       else if (stalled === 'repeated') reply(startRequest(), 1, 1, true);
       else emitNext();
     },
   };
-  const targets = (blockedAt || latePrevious ? [1, 2] : [1]).map(id => ({
+  const targets = (blockedAt || latePrevious || extraTarget ? [1, 2] : [1]).map(id => ({
     area: { id, name: `가상동 ${id}` },
     station: { name: '가상역' },
     box: { south: 35, west: 127, north: 36 + id / 100, east: 128, zoom: 14 },
@@ -706,7 +776,13 @@ async function collectMapFeed({ lastPage, blockedAt, stopDuringWait, latePreviou
     partial: (...args) => partial.push(args),
     coverage: (row, ids) => coverage.push({ ...row, ids }),
   }, targets);
-  return { items, pauses, actions, partial, coverage, opened };
+  return { items, pauses, actions, partial, coverage, opened, records };
+}
+
+function mapFeedClock(t) {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  return ms => { now += ms; };
 }
 
 test('map feed waits before every next page and continues past page 30 to the end', async () => {
@@ -714,7 +790,7 @@ test('map feed waits before every next page and continues past page 30 to the en
   assert.equal(run.items.length, 32);
   assert.deepEqual(run.actions, Array.from({ length: 31 }, (_, i) => i + 1));
   assert.equal(run.pauses.length, 31);
-  assert.ok(run.pauses.every(ms => ms >= 3000 && ms <= 5000));
+  assert.ok(run.pauses.every(ms => ms === 10000));
   assert.deepEqual(run.partial, []);
   assert.deepEqual(run.coverage.map(row => [row.pages, row.complete, row.ids.length]), [[32, true, 32]]);
 });
@@ -736,13 +812,12 @@ test('map feed accepts a blank terminal response after scrolling only', async ()
 });
 
 test('map feed distinguishes silent scrolls, failed requests and repeated pages', async (t) => {
-  let now = Date.now();
-  t.mock.method(Date, 'now', () => now);
+  const advanceTime = mapFeedClock(t);
   for (const [stalled, reason] of [
     ['silent', /목록 요청이 발생하지 않음/], ['failed', /네트워크 실패 2건/],
     ['http', /HTTP 오류 503/], ['repeated', /페이지가 반복됨/],
   ]) {
-    const run = await collectMapFeed({ lastPage: 3, stalled, advanceTime: ms => { now += ms; } });
+    const run = await collectMapFeed({ lastPage: 3, stalled, advanceTime });
     assert.equal(run.items.length, 1);
     assert.equal(run.coverage[0].complete, false);
     assert.match(run.coverage[0].reason, reason);
@@ -763,4 +838,76 @@ test('map feed keeps the pages already read when access is limited or the user s
   assert.deepEqual(stopped.actions, []);
   assert.equal(stopped.coverage[0].complete, false);
   assert.match(stopped.partial[0][0], /중단/);
+});
+
+test('map feed identifies a rejected operation from a previously received listing page without recording request details', async (t) => {
+  const advanceTime = mapFeedClock(t);
+  const query = 'query SyntheticFeed { articleFeed { pageInfo { hasNextPage } } }';
+  const operationName = 'SyntheticFeed';
+  const extensions = { persistedQuery: { version: 1, sha256Hash: createHash('sha256').update(query).digest('hex') } };
+  for (const params of [
+    { query, operationName, variables: '{"after":"synthetic-cursor"}' },
+    { operationName, extensions: JSON.stringify(extensions) },
+  ]) {
+    const run = await collectMapFeed({ lastPage: 3, responseStatuses: [200, 403, 200], advanceTime,
+      feedRequest: { payload: { query, operationName, variables: { after: null } } },
+      blockedRequest: { method: 'GET', params },
+    });
+    assert.equal(run.opened, 1);
+    assert.deepEqual(run.coverage[0].ids, ['1', '3']);
+    assert.equal(run.coverage[0].complete, true);
+    assert.deepEqual(run.partial, []);
+    assert.deepEqual(run.records.map(([, , url, status, note]) => [new URL(url).search, status, note]), [
+      ['', 200, '지도 범위 매물 목록 1쪽 1건'], ['', 403, '차단 응답, 매물 목록 요청, 연속 1/5회'],
+      ['', 200, '지도 범위 매물 목록 2쪽 1건'],
+    ]);
+  }
+});
+
+test('map feed excludes confirmed other 403s from the listing count and stops immediately on 429', async (t) => {
+  const advanceTime = mapFeedClock(t);
+  const auxiliaryRequest = { payload: { operationName: 'SyntheticExtra', query: 'query SyntheticExtra { extra { value } }' } };
+  for (const [blockedRequest, label, blockedStatus] of [
+    [auxiliaryRequest, '차단 응답, 기타 요청', 403],
+    [{ payload: { operationName: 'SyntheticExtra' } }, '차단 응답, 요청 종류 미확인, 연속 1/5회', 403],
+    [{ payload: [auxiliaryRequest.payload] }, '차단 응답, 요청 종류 미확인, 연속 1/5회', 403],
+    [auxiliaryRequest, '차단 응답, 기타 요청', 429],
+  ]) {
+    const run = await collectMapFeed({ lastPage: 3, responseStatuses: [200, blockedStatus, 200], advanceTime, auxiliaryRequest, blockedRequest });
+    assert.equal(run.opened, 1);
+    assert.equal(run.records.find(record => record[3] === blockedStatus)?.[4], label);
+    assert.equal(run.actions.length, blockedStatus === 429 ? 1 : 2);
+    assert.equal(run.coverage[0].complete, blockedStatus === 403);
+    if (blockedStatus === 429) assert.equal(run.partial[0][1], false);
+  }
+});
+
+test('map feed stops after five consecutive listing 403s and keeps the previous page', async (t) => {
+  const run = await collectMapFeed({ lastPage: 7, extraTarget: true, advanceTime: mapFeedClock(t),
+    responseStatuses: [200, 403, 403, 403, 403, 403, 200],
+  });
+  assert.equal(run.opened, 1);
+  assert.equal(run.actions.length, 5);
+  assert.deepEqual(run.pauses, [10000, 10000, 10000, 10000, 10000]);
+  assert.deepEqual(run.coverage[0].ids, ['1']);
+  assert.equal(run.coverage[0].complete, false);
+  assert.match(run.coverage[0].reason, /HTTP 403 5회 연속/);
+  assert.equal(run.partial[0][1], false);
+});
+
+test('map feed resets the forbidden count after receiving a new listing page', async (t) => {
+  const responseStatuses = [200, 403, 403, 403, 403, 200, 403, 403, 403, 403, 200];
+  const run = await collectMapFeed({ lastPage: responseStatuses.length, responseStatuses, advanceTime: mapFeedClock(t) });
+  assert.deepEqual(run.coverage[0].ids, ['1', '6', '11']);
+  assert.equal(run.coverage[0].complete, true);
+  assert.deepEqual(run.partial, []);
+  assert.equal(run.records.filter(record => record[4].endsWith('연속 4/5회')).length, 2);
+});
+
+test('map feed returns partial results when a 403 is followed by two silent scrolls', async (t) => {
+  const run = await collectMapFeed({ lastPage: 6, responseStatuses: [200, 403], silentAfter: 1, advanceTime: mapFeedClock(t) });
+  assert.equal(run.actions.length, 3);
+  assert.deepEqual(run.coverage[0].ids, ['1']);
+  assert.equal(run.coverage[0].complete, false);
+  assert.match(run.coverage[0].reason, /다음 목록 미확인.*HTTP 오류 403/);
 });

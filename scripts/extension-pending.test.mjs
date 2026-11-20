@@ -5,10 +5,14 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8');
+const sitesSource = fs.readFileSync(new URL('../extension/sites.js', import.meta.url), 'utf8');
+const daangnCaptureSource = fs.readFileSync(new URL('../extension/daangn-capture.js', import.meta.url), 'utf8');
 const settle = () => new Promise(resolve => setImmediate(resolve));
-function worker(storage, status = 503, { ownedTabId = null, ownershipFails = false } = {}) {
+function worker(storage, status = 503, { ownedTabId = null, ownershipFails = false, existingBridge = null } = {}) {
   let handler;
   const sent = [];
+  const registeredScripts = [];
+  const updatedScripts = [];
   const event = { addListener() {} };
   const local = {
     getKeys: async () => Object.keys(storage),
@@ -29,6 +33,11 @@ function worker(storage, status = 503, { ownedTabId = null, ownershipFails = fal
     },
     chrome: {
       storage: { local, onChanged: event },
+      scripting: {
+        getRegisteredContentScripts: async () => existingBridge ? [existingBridge] : [],
+        registerContentScripts: async scripts => registeredScripts.push(...scripts),
+        updateContentScripts: async scripts => updatedScripts.push(...scripts),
+      },
       action: { setBadgeBackgroundColor: async () => {}, setBadgeText: async () => {}, setTitle: async () => {} },
       runtime: { onMessage: { addListener(fn) { handler = fn; } }, onInstalled: event, onStartup: event, getManifest: () => ({ version: 'test' }) },
       downloads: { onChanged: event }, alarms: { onAlarm: event },
@@ -39,9 +48,9 @@ function worker(storage, status = 503, { ownedTabId = null, ownershipFails = fal
       return { ok: status === 200, status, json: async () => ({ total: sent.flat().length }) };
     },
   };
-  vm.runInNewContext(source + '\nglobalThis.testApi = { flushPending, isListing };', context);
+  vm.runInNewContext(sitesSource + '\n' + daangnCaptureSource + '\n' + source + '\nglobalThis.testApi = { flushPending, isListing, registerSiteScripts };', context);
   return {
-    ...context.testApi, sent,
+    ...context.testApi, sent, registeredScripts, updatedScripts,
     capture: (capture, sender = {}) => new Promise(resolve => assert.equal(handler({ type: 'capture', capture }, sender, resolve), true)),
   };
 }
@@ -74,6 +83,48 @@ test('listing captures survive an offline worker restart and replay successfully
   await restarted.flushPending();
   assert.equal(Object.keys(storage).length, 0);
   assert.deepEqual(restarted.sent.flat().map(c => c.body).sort(), captures.map(c => c.body).sort());
+});
+
+test('the worker keeps Daangn scripts available for the dedicated tour with passive capture disabled', async () => {
+  const background = worker({ sites: { daangn: false, naver: false } });
+  await background.registerSiteScripts();
+  assert.deepEqual(background.registeredScripts.map(script => script.id), ['hnw-hook', 'hnw-bridge']);
+  const [main, isolated] = background.registeredScripts;
+  assert.ok(main.js.includes('daangn-capture.js'));
+  assert.ok(!main.js.some(file => isolated.js.includes(file)), 'Chrome must get distinct script resources in each world');
+  for (const script of background.registeredScripts) {
+    assert.ok(script.matches.includes('https://realty.daangn.com/*'));
+    assert.ok(!script.matches.includes('https://fin.land.naver.com/*'));
+  }
+});
+
+test('a worker-only reload removes the duplicate parser from the existing isolated registration', async () => {
+  const background = worker({}, 200, { existingBridge: { id: 'hnw-bridge', js: ['sites.js', 'daangn-capture.js', 'bridge.js'] } });
+  await settle();
+  assert.deepEqual(JSON.parse(JSON.stringify(background.updatedScripts)), [{ id: 'hnw-bridge', js: ['sites.js', 'bridge.js'] }]);
+  assert.deepEqual(background.registeredScripts, []);
+});
+
+test('the worker retains only the opted-in public fields of passive Daangn map responses', async () => {
+  const storage = { sites: { daangn: false } };
+  const offline = worker(storage);
+  const pageUrl = 'https://realty.daangn.com/map?region_bounds=10%2C20%2C11%2C21%2C14';
+  const capture = { site: 'daangn', url: 'https://realty.kr.karrotmarket.com/graphql', status: 200, pageUrl,
+    requestBody: '{"variables":{"after":"synthetic","private":"discard"}}',
+    body: '{"data":{"articleFeed":{"edges":[],"pageInfo":{"hasNextPage":false}},"viewer":{"private":"discard"}}}' };
+  const disabled = await offline.capture(capture, { url: pageUrl });
+  assert.equal(disabled.reason, 'passive-capture-disabled');
+  assert.equal(Object.keys(storage).filter(key => key.startsWith('pending:')).length, 0);
+  assert.equal(offline.sent.length, 0);
+
+  storage.sites.daangn = true;
+  assert.equal((await offline.capture(capture, { url: pageUrl })).ok, true);
+  assert.equal((await offline.capture({ ...capture, status: 403 }, { url: pageUrl })).ok, false);
+  await settle();
+  const pending = Object.entries(storage).filter(([key]) => key.startsWith('pending:')).map(([, value]) => value);
+  assert.equal(pending.length, 1);
+  assert.doesNotMatch(JSON.stringify(pending), /viewer|private|discard/);
+  assert.equal(pending[0].requestBody, null);
 });
 
 test('temporary 429 responses retain the durable queue; invalid requests are discarded', async () => {

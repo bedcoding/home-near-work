@@ -12,7 +12,11 @@ import { isDabangMapResponse, matchesDabangRegionPage, matchesDabangRegionRespon
 import * as store from './db.js';
 import { learnLinkHints, zigbangStationName } from './link-hints.js';
 import { parseZigbangItemRows, parseZigbangStationIds } from './zigbang-parse.js';
-import { acceptDaangnPage, createDaangnLedger, daangnCoverage, daangnStationName, parseDaangnArticles, type DaangnCoverage, type DaangnLedger } from './daangn-parse.js';
+import {
+  acceptDaangnMapPage, acceptDaangnPage, createDaangnLedger, createDaangnMapLedger, daangnCoverage, daangnMapScopeUrl, daangnStationName,
+  isDaangnListingCapture, normalizeDaangnMapScope, parseDaangnArticles, parseDaangnFeed, publicDaangnListingBody,
+  type DaangnCoverage, type DaangnLedger, type DaangnMapLedger,
+} from './daangn-parse.js';
 import { recordZigbangDetails, recordZigbangPage, recordZigbangStationList, zigbangCoverage, zigbangPageStation, type ZigbangCoverage, type ZigbangLedger } from './zigbang-coverage.js';
 import { normalizeNaverItem, parseNaverList } from './naver-parse.js';
 import { notify } from './notify.js';
@@ -83,18 +87,29 @@ export function acceptCaptures(list: CaptureInput[], scheduleSession = true): nu
     const site = typeof c.site === 'string' ? c.site : 'naver';
     const host = SITE_HOSTS[site];
     if (!host || !host.test(url.hostname) || SKIP.test(url.pathname)) continue;
-    // 당근은 모든 요청이 같은 /graphql 주소라 주소로 거를 수 없다. 로그인 사용자 정보 응답은 저장하지 않는다.
-    if (site === 'daangn' && /^\s*\{\s*"data"\s*:\s*\{\s*"viewer"\s*:/.test(c.body)) continue;
-    const requestBody = str(c.requestBody, 4000);
+    let body = c.body;
+    let pageUrl = str(c.pageUrl, 2000);
+    let responseUrl = c.url.slice(0, 4000);
+    let requestBody = str(c.requestBody, 4000);
+    if (site === 'daangn') {
+      if (!isDaangnListingCapture(pageUrl, c.url) || typeof c.status !== 'number' || !(c.status >= 200 && c.status < 300)) continue;
+      const publicBody = publicDaangnListingBody(body, false, false);
+      if (publicBody === null) continue;
+      if (parseDaangnFeed(publicBody).hasNextPage !== null) requestBody = null;
+      body = publicBody;
+      responseUrl = `${url.origin}${url.pathname}`;
+      const page = new URL(pageUrl!);
+      pageUrl = daangnMapScopeUrl(pageUrl) ?? `${page.origin}${page.pathname}`;
+    }
     rows.push({
       at: capturedAt(c.at),
       site,
-      pageUrl: str(c.pageUrl, 2000),
-      url: c.url.slice(0, 4000),
+      pageUrl,
+      url: responseUrl,
       method: str(c.method, 10),
       status: typeof c.status === 'number' && Number.isFinite(c.status) ? c.status : null,
       requestBody: requestBody === null ? null : redact(requestBody),
-      body: redact(c.body),
+      body: redact(body),
     });
   }
   if (rows.length) {
@@ -200,6 +215,7 @@ interface BrowseReceiptEntry {
   zigbangScope?: ZigbangLedger;
   naverLedger?: ReturnType<typeof naverLedger.create>;
   daangnScope?: DaangnLedger;
+  daangnMapLedger?: DaangnMapLedger;
 }
 const BROWSE_RECEIPTS_KEY = 'browse_receipts';
 const BROWSE_RECEIPT_DAYS = 7 * 24 * 60 * 60 * 1000;
@@ -213,6 +229,7 @@ let browseDabangMax: number | null | undefined;
 let browseDabangScope: { scope: DabangRegionScope; ledger: DabangScopeLedger } | null = null;
 let browseZigbangScope: ZigbangLedger | null = null;
 let browseDaangnScope: DaangnLedger | null = null;
+let browseDaangnMapLedger: DaangnMapLedger | null = null;
 const browseInputError = (message: string) => Object.assign(new Error(message), { statusCode: 400 });
 
 function browseId(value: unknown): string {
@@ -243,7 +260,7 @@ export function browseReceipt(jobId: unknown): BrowseReceipt | null {
  * 수동 탐색의 미처리 응답을 먼저 끝내므로 다른 탭의 저장 건수가 섞이지 않는다.
  * 배치 번호와 DB 변경을 같은 transaction에 기록하여 응답을 잃어 재전송해도 중복 처리하지 않는다.
  */
-export function acceptBrowseCaptures(input: { jobId?: unknown; batchId?: unknown; captures?: unknown; scope?: unknown; naverScope?: unknown }): BrowseReceipt {
+export function acceptBrowseCaptures(input: { jobId?: unknown; batchId?: unknown; captures?: unknown; scope?: unknown; naverScope?: unknown; daangnScope?: unknown }): BrowseReceipt {
   const jobId = browseId(input.jobId);
   const batchId = browseId(input.batchId);
   if (!Array.isArray(input.captures) || input.captures.length > 200) throw browseInputError('응답 묶음은 200개 이하의 목록이어야 합니다.');
@@ -251,17 +268,23 @@ export function acceptBrowseCaptures(input: { jobId?: unknown; batchId?: unknown
   let naverScope: ReturnType<typeof naverLedger.scope> | null = null;
   try { if (input.naverScope != null) naverScope = naverLedger.scope(input.naverScope); }
   catch { throw browseInputError('네이버 구·동 범위를 확인해 주세요.'); }
-  if (scope && naverScope) throw browseInputError('조회 범위는 사이트별로 하나만 지정해 주세요.');
+  const daangnMapScope = normalizeDaangnMapScope(input.daangnScope);
+  if (input.daangnScope != null && !daangnMapScope) throw browseInputError('당근 지도 범위를 확인해 주세요.');
+  if ([scope, naverScope, daangnMapScope].filter(Boolean).length > 1) throw browseInputError('조회 범위는 사이트별로 하나만 지정해 주세요.');
   const entries = browseReceiptEntries();
   const previous = entries.find((e) => e.jobId === jobId);
   if (JSON.stringify(previous?.naverLedger?.scope ?? null) !== JSON.stringify(naverScope) && previous) throw browseInputError('같은 조회의 구·동 범위를 바꿀 수 없습니다. 새 조회를 시작해 주세요.');
   if (previous && !sameDabangRegionScope(previous.scope, scope)) throw browseInputError('같은 조회의 동 범위를 바꿀 수 없습니다. 새 조회를 시작해 주세요.');
+  if (previous && (previous.daangnMapLedger?.scopeUrl ?? null) !== (daangnMapScope?.url ?? null)) throw browseInputError('같은 조회의 지도 범위를 바꿀 수 없습니다. 새 조회를 시작해 주세요.');
   if (previous?.batches.includes(batchId)) return { ...previous.receipt };
-  if (previous && previous.batches.length >= (naverScope ? 4096 : BROWSE_BATCH_LIMIT)) throw browseInputError('이 조회의 응답 묶음이 너무 많습니다. 새 조회를 시작해 주세요.');
+  if (previous && previous.batches.length >= (naverScope || daangnMapScope ? 4096 : BROWSE_BATCH_LIMIT)) throw browseInputError('이 조회의 응답 묶음이 너무 많습니다. 새 조회를 시작해 주세요.');
   const captures = input.captures as CaptureInput[];
   if (naverScope && captures.some(c => c?.site !== 'naver')) throw browseInputError('네이버 조회에는 해당 사이트의 응답만 저장할 수 있습니다.');
   if (scope && captures.some((c) => c?.site !== 'dabang' || !matchesDabangRegionPage(scope, c.pageUrl))) {
     throw browseInputError('선택한 다방 동 검색 화면과 응답의 범위가 다릅니다.');
+  }
+  if (daangnMapScope && captures.some(c => c?.site !== 'daangn' || daangnMapScopeUrl(c.pageUrl) !== daangnMapScope.url || !isDaangnListingCapture(c.pageUrl, c.url))) {
+    throw browseInputError('선택한 당근 지도와 응답의 범위가 다릅니다.');
   }
 
   if (sessionTimer) clearTimeout(sessionTimer);
@@ -294,11 +317,19 @@ export function acceptBrowseCaptures(input: { jobId?: unknown; batchId?: unknown
         }
       }
       // 당근 역 근처 목록: 같은 역 화면의 응답만 이어 받아 끝 페이지와 매물별 저장을 대조한다.
-      const daangnPage = captures.find((c) => c?.site === 'daangn');
-      browseDaangnScope = scope || naverScope ? null : previous?.daangnScope ? structuredClone(previous.daangnScope)
+      const daangnPage = captures.find((c) => c?.site === 'daangn' && typeof c.body === 'string' && parseDaangnArticles(c.body).hasNextPage !== null);
+      browseDaangnScope = scope || naverScope || daangnMapScope ? null : previous?.daangnScope ? structuredClone(previous.daangnScope)
         : daangnPage ? createDaangnLedger(daangnStationName(typeof daangnPage.pageUrl === 'string' ? daangnPage.pageUrl : null)) : null;
       if (browseDaangnScope) for (const c of captures) if (c?.site !== 'daangn') browseDaangnScope.invalid ||= 'response-scope';
-      const accepted = naverScope?.filter ? captures.filter(c => {
+      const mapLedger = daangnMapScope ? previous?.daangnMapLedger ? structuredClone(previous.daangnMapLedger) : createDaangnMapLedger(daangnMapScope) : null;
+      browseDaangnMapLedger = mapLedger;
+      const accepted = mapLedger ? captures.filter(c => {
+        if (!(typeof c.status === 'number' && c.status >= 200 && c.status < 300)) { mapLedger.invalid ||= 'response-status'; return false; }
+        const publicBody = typeof c.body === 'string' && c.body.length <= MAX_BODY ? publicDaangnListingBody(c.body, true) : null;
+        if (!publicBody) { mapLedger.invalid ||= 'unreadable-list'; return false; }
+        acceptDaangnMapPage(mapLedger, parseDaangnFeed(publicBody), str(c.requestBody, 4000));
+        return true;
+      }) : naverScope?.filter ? captures.filter(c => {
         if (!naverLedger.endpoint(typeof c.url === 'string' ? c.url : '')) return false;
         if (!(typeof c.status === 'number' && c.status >= 200 && c.status < 300)) return false;
         try { return naverLedger.matchesFilter(naverScope!,JSON.parse(typeof c.requestBody === 'string' ? c.requestBody : '{}').filter); } catch { return false; }
@@ -334,10 +365,15 @@ export function acceptBrowseCaptures(input: { jobId?: unknown; batchId?: unknown
         receipt.daangnCoverage = daangnCoverage(browseDaangnScope);
         receipt.uniqueListings = receipt.daangnCoverage.stored;
       }
+      if (mapLedger) {
+        receipt.daangnCoverage = daangnCoverage(mapLedger);
+        receipt.uniqueListings = receipt.daangnCoverage.stored;
+      }
       const entry = { jobId, at: Date.now(), receipt, batches: [...(previous?.batches ?? []), batchId], zigbangFresh: [...browseZigbangFresh].slice(-20000), dabangMax: browseDabangMax,
         ...(regionLedger ? { naverLedger: regionLedger } : {}),
         ...(browseZigbangScope ? { zigbangScope: browseZigbangScope } : {}),
         ...(browseDaangnScope ? { daangnScope: browseDaangnScope } : {}),
+        ...(mapLedger ? { daangnMapLedger: mapLedger } : {}),
         ...(scope ? { scope, dabangScope: browseDabangScope!.ledger } : {}) };
       store.setSetting(BROWSE_RECEIPTS_KEY, JSON.stringify([...entries.filter((e) => e.jobId !== jobId), entry].slice(-BROWSE_RECEIPT_LIMIT)));
       return { ...receipt };
@@ -353,6 +389,7 @@ export function acceptBrowseCaptures(input: { jobId?: unknown; batchId?: unknown
     browseDabangScope = null;
     browseZigbangScope = null;
     browseDaangnScope = null;
+    browseDaangnMapLedger = null;
   }
 }
 
@@ -483,17 +520,19 @@ function processZigbang(): { stations: { subwayId: string; pageUrl: string | nul
 const DAANGN_IDS_KEY = 'daangn_station_ids';
 
 /**
- * 아직 읽지 않은 당근 역 근처 목록 응답에서 주거용 매물을 저장한다. 상가, 사무실, 건물은 저장하지 않는다.
- * 신규: 그 역 목록에서 전에 본 적 없는 매물 번호. 처음 본 역은 기준만 잡는다.
+ * 아직 읽지 않은 당근 지도나 역 근처 목록에서 주거용 매물을 저장한다.
+ * 신규는 같은 종류의 화면에서 전에 본 적 없는 매물 번호다. 처음 본 화면은 기준만 잡는다.
  */
 function processDaangn(): { stations: { name: string; total: number; fresh: number; baseline: boolean }[]; news: NewsItem[] } {
   const pending = store.pendingNaverCaptures('daangn');
   const items = new Map<string, CollectedItem>();
   const seenByStation = new Map<string, Set<string>>();
   for (const r of pending) {
-    const page = browseDaangnScope ? acceptDaangnPage(browseDaangnScope, r) : parseDaangnArticles(r.body);
+    const mapPage = parseDaangnFeed(r.body);
+    const isMap = mapPage.hasNextPage !== null;
+    const page = isMap ? mapPage : browseDaangnScope ? acceptDaangnPage(browseDaangnScope, r) : parseDaangnArticles(r.body);
     if (!page || !page.ids.length) continue;
-    const station = daangnStationName(r.pageUrl) ?? '역 미확인';
+    const station = isMap ? '지도 목록' : daangnStationName(r.pageUrl) ?? '역 미확인';
     const ids = seenByStation.get(station) ?? new Set<string>();
     for (const id of page.ids) ids.add(id);
     seenByStation.set(station, ids);
@@ -524,13 +563,14 @@ function processDaangn(): { stations: { name: string; total: number; fresh: numb
       seenAt: pending[pending.length - 1].at,
       news,
     });
-    addToCaptureRun(runId, summary, `당근부동산: 역 근처 주거용 매물 ${summary.fetched}개(저장 ${summary.kept}개), 신규 ${summary.newCount}, 가격 변동 ${summary.priceChanged}`);
-    if (browseDaangnScope) {
+    addToCaptureRun(runId, summary, `당근부동산: 브라우저에서 본 주거용 매물 ${summary.fetched}개(저장 ${summary.kept}개), 신규 ${summary.newCount}, 가격 변동 ${summary.priceChanged}`);
+    const ledger = browseDaangnMapLedger ?? browseDaangnScope;
+    if (ledger) {
       // 이번에 처리한 매물이 실제로 이번 조회 기록으로 저장됐을 때만 저장 확인으로 친다.
       for (const { listing } of items.values()) {
-        if (browseDaangnScope.articles[listing.sourceId] !== 'pending') continue;
+        if (ledger.articles[listing.sourceId] !== 'pending') continue;
         const stored = store.getListing(`daangn:${listing.sourceId}`);
-        if (stored?.last_seen_run === runId && stored.data === JSON.stringify(listing)) browseDaangnScope.articles[listing.sourceId] = 'stored';
+        if (stored?.last_seen_run === runId && stored.data === JSON.stringify(listing)) ledger.articles[listing.sourceId] = 'stored';
       }
     }
   }
@@ -626,7 +666,7 @@ export function finishCaptureSession(notifyUser = true): { title: string; messag
     saveCaptureNews('daangn', { at, text, hot: daangn.stations.some((s) => s.fresh > 0) });
     if (matched.length) {
       parts.push(`당근 ${matched.length}건`);
-      lines.push(`당근부동산: 역 근처 새 매물 중 알림 조건에 맞는 ${matched.length}`);
+      lines.push(`당근부동산: 브라우저에서 본 새 매물 중 알림 조건에 맞는 ${matched.length}`);
       url ??= matched.length === 1 ? matched[0].url : `${DASHBOARD_URL}/?tab=news`;
     }
   }
