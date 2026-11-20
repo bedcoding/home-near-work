@@ -111,8 +111,8 @@ export function naverLink(l: ListingView): NaverLink | null {
   return null;
 }
 
-/** 좌표를 주소에 넣을 글자로. 소수점 아래 7자리(약 1cm)까지만 남긴다. */
-const coord = (v: number) => String(Number(v.toFixed(7)));
+/** 좌표를 주소에 넣을 글자로. 소수점 아래 7자리(약 1cm)까지만 남긴다. KB부동산과 호갱노노 단추(priceSites.ts)도 쓴다. */
+export const coord = (v: number) => String(Number(v.toFixed(7)));
 
 /**
  * 네이버 지도(map.naver.com)에서 이 매물 좌표('위도,경도')를 검색해 연다. 그 자리에 핀이 서므로 어디인지 보이고,

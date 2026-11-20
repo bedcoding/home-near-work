@@ -39,8 +39,8 @@ function daangnView(area: Area, zoom: number): string {
 }
 
 /**
- * 사이트 바로 가기. 네이버, 피터팬, 다방, KB부동산은 고른 지역 가운데로, 집토스와 당근부동산은 가까운 역 페이지로,
- * 직방은 가까운 역의 직방 역 번호로, 호갱노노는 가까운 역 옆 단지 화면으로 연다(Station.zigbangId, hogangnonoApt). 모르면 첫 화면.
+ * 사이트 바로 가기. 네이버, 피터팬, 다방, KB부동산, 호갱노노는 고른 지역 가운데로, 집토스와 당근부동산은 가까운 역 페이지로,
+ * 직방은 가까운 역의 직방 역 번호로 연다(Station.zigbangId). 모르면 첫 화면.
  */
 export function siteLinks(area: Area | null, stations: Station[]): SiteLink[] {
   const zoom = area && area.radiusM > 1200 ? 13 : 14;
@@ -93,8 +93,8 @@ export function siteLinks(area: Area | null, stations: Station[]): SiteLink[] {
     {
       id: 'hogangnono',
       name: '호갱노노',
-      url: station?.hogangnonoApt ? `https://hogangnono.com/apt/${encodeURIComponent(station.hogangnonoApt)}` : 'https://hogangnono.com/',
-      where: station?.hogangnonoApt ? `호갱노노를 ${station.name} 옆 단지 화면으로 엽니다` : home,
+      url: area ? `https://hogangnono.com/map?lat=${area.lat}&lng=${area.lng}&zoom=${zoom}` : 'https://hogangnono.com/',
+      where: area ? `${area.name} 가운데로 호갱노노 지도를 엽니다` : home,
     },
     {
       id: 'daangn',

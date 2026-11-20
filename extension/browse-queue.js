@@ -6,7 +6,8 @@ const HNW_BROWSE = (() => {
   const AUTO_REPORT = 'hnw-browse-auto-report';
   const AUTO_STARTED = 'hnw-browse-auto-started';
   const ALARM = 'hnw-browse';
-  const SITES = ['naver', 'dabang', 'zigbang', 'kbland', 'hogangnono'];
+  // KB부동산과 호갱노노는 확장에서 뺐다(대시보드 매물 단추가 그 자리 지도를 연다).
+  const SITES = ['naver', 'dabang', 'zigbang'];
   const LISTINGS = ['naver', 'dabang', 'zigbang', 'daangn'];
   const DAANGN_GENERAL_ONLY = '당근부동산은 일반 조회에서 수집합니다.';
   const DAANGN_SCROLL_DELAY_MS = 10000;
@@ -211,7 +212,6 @@ const HNW_BROWSE = (() => {
   function hasRegion(link) {
     const u = new URL(link.url);
     if (link.id === 'zigbang') return /\/subways\/[^/]+\/items/.test(u.pathname);
-    if (link.id === 'hogangnono') return /^\/apt\/[^/]+/.test(u.pathname);
     return true;
   }
   function usefulCapture(c) {
@@ -226,8 +226,6 @@ const HNW_BROWSE = (() => {
         const feed = JSON.parse(c.body)?.data?.articleFeed;
         return c.status >= 200 && c.status < 300 && Array.isArray(feed?.edges) && typeof feed.pageInfo?.hasNextPage === 'boolean';
       }
-      if (c.site === 'kbland') return u.pathname.endsWith('/stutCdFilter/count');
-      if (c.site === 'hogangnono') return u.pathname.includes('/api/apt/');
       return false;
     } catch { return false; }
   }
@@ -288,7 +286,7 @@ const HNW_BROWSE = (() => {
         }
         const ready = hasRegion(link);
         jobs.push({ id: `${runId}:${jobs.length}`, areaName: area.name, area, site: link.id, siteName: link.name,
-          url: link.url, status: ready ? 'pending' : 'needs-input', note: ready ? '대기 중' : '이 지역의 역이나 단지 바로가기 정보가 없습니다. 사이트에서 지역을 한 번 검색한 뒤 미확인 재시도를 눌러 주세요.' });
+          url: link.url, status: ready ? 'pending' : 'needs-input', note: ready ? '대기 중' : '이 지역의 역 바로가기 정보가 없습니다. 사이트에서 지역을 한 번 검색한 뒤 미확인 재시도를 눌러 주세요.' });
       }
     }
     if (!jobs.length && hadDaangn) throw new Error(`${DAANGN_GENERAL_ONLY} 순차 조회할 사이트와 지역을 골라 주세요.`);
@@ -723,7 +721,7 @@ const HNW_BROWSE = (() => {
       const note = job.captureGap ? '보관 한도를 넘겨 받지 못한 응답이 있습니다. 미확인 다시 조회로 새로 확인해 주세요.'
         : !saved ? '저장된 응답을 확인하지 못했습니다. 빈 매물 결과라는 뜻은 아닙니다.'
         : listing ? `${bounded ? '한 번의 탐색 한도에 도달했습니다. ' : `${job.note} `}${job.receipt.listings ? '받은 목록을 저장했습니다.' : '응답은 저장했지만 조건에 맞는 개별 매물 저장은 확인하지 못했습니다.'} 현재 지도와 필터 범위의 일부이며 전체 매물 수집은 확인되지 않았습니다.`
-        : `${job.site === 'kbland' ? '건수 응답' : '화면 응답'}을 확인했습니다. 개별 매물 목록 저장은 지원하지 않습니다.`;
+        : '화면 응답을 확인했습니다. 개별 매물 목록 저장은 지원하지 않습니다.';
       await finishJob(state, status, note);
     } else await save(state);
     schedule();

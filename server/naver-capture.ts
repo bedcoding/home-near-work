@@ -6,7 +6,7 @@ import naverLedger from './naver-ledger.js';
 import path from 'node:path';
 import { DASHBOARD_URL, DATA_DIR, ROOT } from './config.js';
 import { alertSettings, matchesAlert, type NewsItem } from './alerts.js';
-import { compareCount, compareNaverClusters, kbAreaCount, naverClusterCounts, readMarks, readViews, saveCaptureNews, writeMarks, writeViews } from './capture-news.js';
+import { compareNaverClusters, naverClusterCounts, readMarks, readViews, saveCaptureNews, writeMarks, writeViews } from './capture-news.js';
 import { parseDabangRoomList } from './dabang-parse.js';
 import { isDabangMapResponse, matchesDabangRegionPage, matchesDabangRegionResponse, normalizeDabangRegionScope, sameDabangRegionScope, type DabangRegionScope } from './browse-scope.js';
 import * as store from './db.js';
@@ -49,8 +49,6 @@ const SITE_HOSTS: Record<string, RegExp> = {
   peterpanz: /(^|\.)peterpanz\.com$/,
   dabang: /(^|\.)dabangapp\.com$/,
   zigbang: /(^|\.)zigbang\.com$/,
-  kbland: /(^|\.)kbland\.kr$/,
-  hogangnono: /(^|\.)hogangnono\.com$/,
   daangn: /(^|\.)(daangn|karrotmarket)\.com$/,
   ziptoss: /(^|\.)ziptoss\.com$/,
 };
@@ -436,7 +434,7 @@ function dabangCoverage(ledger: DabangScopeLedger): DabangCoverage {
 }
 
 /** 한 번의 확인(사이트를 열어 응답이 이어서 들어오는 동안)으로 묶어 읽는 사이트 */
-const SESSION_SITES = ['dabang', 'zigbang', 'daangn', 'kbland', 'naver'];
+const SESSION_SITES = ['dabang', 'zigbang', 'daangn', 'naver'];
 /** 직방 역, 조건마다 마지막에 본 반경 안 방 번호(설정). 자동조회의 직방 수집(zigbang-client.ts의 같은 키)도 갱신한다. */
 const ZIGBANG_IDS_KEY = 'zigbang_station_ids';
 
@@ -592,26 +590,10 @@ function scheduleCaptureSession() {
   }, 8000);
 }
 
-/** 아직 읽지 않은 KB 응답에서 법정동 매물 수를 읽어(같은 조건은 마지막 것) 전에 본 수와 비교한다. delta: 늘어난 수, 처음이면 null. */
-function processKbCounts(at: string): { dong: string; count: number; delta: number | null }[] {
-  const pending = store.pendingNaverCaptures('kbland');
-  const latest = new Map<string, { dong: string; count: number }>();
-  for (const r of pending) {
-    if (!r.url.includes('/stutCdFilter/count')) continue;
-    const c = kbAreaCount(r.requestBody, r.body);
-    if (c) latest.set(c.key, { dong: c.dong, count: c.count });
-  }
-  const marks = readMarks();
-  const out = [...latest].map(([key, c]) => ({ ...c, delta: compareCount(marks, key, c.count, at) }));
-  if (latest.size) writeMarks(marks);
-  if (pending.length) store.markNaverCapturesParsed(pending.map((r) => r.id));
-  return out;
-}
-
 /**
- * 이번 확인을 마무리한다: 다방 방 목록과 KB 매물 수를 읽고(네이버 동그라미는 받을 때 셈) 사이트마다 결과를 남긴 뒤,
+ * 이번 확인을 마무리한다: 다방, 직방, 당근 방 목록을 읽고(네이버 동그라미는 받을 때 셈) 사이트마다 결과를 남긴 뒤,
  * 알림 설정 captureSites가 켜져 있고 새 것이 있으면 알림 하나를 띄운다.
- * 다방은 새 방 중 켜 둔 매물 알림 줄에 맞는 수, KB, 네이버는 늘어난 매물 수(가격 조건으로 거르지 못함)를 센다.
+ * 다방은 새 방 중 켜 둔 매물 알림 줄에 맞는 수, 네이버는 늘어난 매물 수(가격 조건으로 거르지 못함)를 센다.
  * 돌려주는 값: 새 것이 있으면 알림 내용(설정이 꺼져 있어도), 없으면 null.
  */
 export function finishCaptureSession(notifyUser = true): { title: string; message: string; url: string } | null {
@@ -669,13 +651,6 @@ export function finishCaptureSession(notifyUser = true): { title: string; messag
       lines.push(`당근부동산: 브라우저에서 본 새 매물 중 알림 조건에 맞는 ${matched.length}`);
       url ??= matched.length === 1 ? matched[0].url : `${DASHBOARD_URL}/?tab=news`;
     }
-  }
-
-  const kb = processKbCounts(at);
-  if (kb.length) {
-    const fmt = (k: (typeof kb)[number]) => (k.delta == null || k.delta === 0 ? `${k.dong} ${k.count}` : `${k.dong} ${k.count - k.delta} → ${k.count}`);
-    const up = kb.filter((k) => k.delta != null && k.delta > 0);
-    saveCaptureNews('kbland', { at, text: kb.map(fmt).join(', '), hot: up.length > 0 });
   }
 
   if (naverSession.seen) {

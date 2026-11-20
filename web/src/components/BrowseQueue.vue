@@ -89,14 +89,15 @@ const SITES = [
   { id: 'naver', name: '네이버', mode: '구나 동 전체', defaultOn: false },
   { id: 'dabang', name: '다방', mode: '기존 동별 원·투룸', defaultOn: true },
   { id: 'zigbang', name: '직방', mode: '매물 목록', defaultOn: true },
-  { id: 'kbland', name: 'KB부동산', mode: '건수 확인', defaultOn: false },
-  { id: 'hogangnono', name: '호갱노노', mode: '화면 확인', defaultOn: false },
+  // KB부동산과 호갱노노는 매물 목록을 주지 않아 순회에서 뺐다. 매물 카드와 지도 정보 창의 단추로 그 자리 지도를 연다(priceSites.ts).
 ];
-const browseSiteName = (id: string | undefined) => id === 'daangn' ? '당근부동산' : SITES.find((site) => site.id === id)?.name;
+/** 지금은 순회에서 뺐지만 확장에 남은 예전 순회 기록에 나올 수 있는 사이트 */
+const PAST_SITES: Record<string, string> = { daangn: '당근부동산', kbland: 'KB부동산', hogangnono: '호갱노노' };
+const browseSiteName = (id: string | undefined) => id && Object.hasOwn(PAST_SITES, id) ? PAST_SITES[id] : SITES.find((site) => site.id === id)?.name;
 const STATUS: Record<JobStatus, string> = {
   pending: '대기', running: '조회 중', complete: '선택 목록 저장 완료', partial: '일부 확인', failed: '실패', visited: '화면 확인', 'needs-input': '직접 확인 필요',
 };
-const HOSTS = new Set(['fin.land.naver.com', 'new.land.naver.com', 'realty.daangn.com', 'www.dabangapp.com', 'www.zigbang.com', 'kbland.kr', 'hogangnono.com']);
+const HOSTS = new Set(['fin.land.naver.com', 'new.land.naver.com', 'realty.daangn.com', 'www.dabangapp.com', 'www.zigbang.com']);
 const safeLink = (url: string) => {
   try {
     const u = new URL(url);

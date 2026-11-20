@@ -36,8 +36,6 @@ interface Site {
 
 const BROWSE: Site[] = [
   { id: 'naver', name: '네이버 부동산', way: 'browse', source: 'naver' },
-  { id: 'kbland', name: 'KB부동산', way: 'browse', source: null },
-  { id: 'hogangnono', name: '호갱노노', way: 'browse', source: null },
 ];
 const AUTO: Site[] = [
   { id: 'dabang', name: '다방', way: 'auto', source: 'dabang', home: 'https://www.dabangapp.com/' },
@@ -71,7 +69,7 @@ const WAY_TIP: Record<Way, string> = {
 };
 
 // 수집 기준 표: 범위 기준마다 한 줄에 사이트를 늘어놓는다(범위가 넓은 기준부터). 사이트를 누르면 그 사이트를 고른다.
-const KIND_ORDER: ScopeKind[] = ['region', 'site', 'station', 'map', 'count', 'screen'];
+const KIND_ORDER: ScopeKind[] = ['region', 'site', 'station', 'map'];
 const scopeRows = computed(() => KIND_ORDER.map((kind) => ({
   kind,
   sites: ALL.filter((s) => SITE_SCOPES[s.id]?.kind === kind).map((s) => ({ site: s, scope: SITE_SCOPES[s.id] })),

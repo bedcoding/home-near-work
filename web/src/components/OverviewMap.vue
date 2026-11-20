@@ -8,6 +8,8 @@ import { auctionSiteLinks } from '../auction';
 import { kindOf } from '../kinds';
 import { roomRange } from '../rooms';
 import { naverLink, naverMapLink } from '../naverPlaces';
+import { addressSiteLinks, copyText, priceSiteLinks, type SiteButton } from '../priceSites';
+import { dabangAddresses } from '../dabangAddress';
 import { looksSeen, markSeen } from '../marks';
 import { rentRate } from '../rentRate';
 import { distanceText, money, priceAmount, priceText, pyeong } from '../format';
@@ -882,7 +884,11 @@ function popup(g: Group, items: ListingView[]) {
     // '📞 문의함'과 '📝 메모' 단추는 매물 카드에만 둔다.
     // 네이버 단지 단추는 단지 매물이거나 같은 자리 단지를 찾으면 그 단지 화면을 연다(naverLink).
     // 네이버 지도 단추는 네이버 지도에서 이 매물 좌표를 찾아 핀을 찍어 연다(naverMapLink).
-    for (const link of [naverLink(l), naverMapLink(l)]) {
+    // KB부동산과 호갱노노 단추는 두 사이트 지도를 이 매물 자리 가운데로 연다(priceSiteLinks).
+    // 집품과 부동산플래닛 단추는 번지까지 있는 주소가 있을 때만 붙는다(addressSiteLinks). 부동산플래닛은 주소를 복사하고 연다.
+    const address = l.address ?? dabangAddresses.get(l.id);
+    const links: (SiteButton | null)[] = [naverLink(l), naverMapLink(l), ...priceSiteLinks(l), ...addressSiteLinks(l, address)];
+    for (const link of links) {
       if (!link) continue;
       const naver = document.createElement('a');
       naver.textContent = link.label;
@@ -890,6 +896,8 @@ function popup(g: Group, items: ListingView[]) {
       naver.target = '_blank';
       naver.rel = 'noopener';
       naver.title = link.title;
+      const copy = link.copy;
+      if (copy) naver.addEventListener('click', () => copyText(copy));
       actions.appendChild(naver);
     }
     for (const s of auctionSiteLinks(l)) {

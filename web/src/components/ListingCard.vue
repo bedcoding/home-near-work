@@ -8,6 +8,7 @@ import { isNoOption } from '../filters';
 import { KIND_LABEL, kindOf } from '../kinds';
 import { isRoomStay, roomRange as rangeOf, roomTypesText } from '../rooms';
 import { naverLink, naverMapLink } from '../naverPlaces';
+import { addressSiteLinks, copyText, priceSiteLinks } from '../priceSites';
 import { redevChip } from '../zones';
 import { loanView } from '../loans';
 import { cannotGet, profile } from '../profile';
@@ -102,6 +103,10 @@ const walkTip = computed(() =>
 const naver = computed(() => naverLink(l.value));
 /** '네이버 지도' 단추: 네이버 지도에서 이 매물 좌표를 찾아 핀을 찍어 연다(회사까지 시간 보기) */
 const naverMap = computed(() => naverMapLink(l.value));
+/** 'KB부동산', '호갱노노' 단추: 두 사이트 지도를 이 매물 자리 가운데로 열어 주변 시세를 본다 */
+const priceSites = computed(() => priceSiteLinks(l.value));
+/** '집품', '부동산플래닛' 단추: 번지까지 있는 주소(다방은 '주소 보기'로 받은 지번 포함)가 있을 때만 */
+const addressSites = computed(() => addressSiteLinks(l.value, l.value.address ?? dabangAddresses.get(l.value.id)));
 /** 경매 물건을 다른 경매 사이트에서 여는 주소 */
 const siteLinks = computed(() => auctionSiteLinks(props.listing));
 
@@ -347,6 +352,14 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
         <button class="btn btn-ghost btn-sm" title="사이트가 준 원래 값과 저장한 값 비교" @click="emit('raw')">원본 데이터</button>
         <a v-if="naver" class="btn btn-ghost btn-sm" :href="naver.url" target="_blank" rel="noopener" :title="naver.title">{{ naver.label }}</a>
         <a v-if="naverMap" class="btn btn-ghost btn-sm" :href="naverMap.url" target="_blank" rel="noopener" :title="naverMap.title">{{ naverMap.label }}</a>
+        <a
+          v-for="p in priceSites" :key="p.url" class="btn btn-ghost btn-sm" :href="p.url" target="_blank" rel="noopener"
+          :title="p.title"
+        >{{ p.label }}</a>
+        <a
+          v-for="p in addressSites" :key="p.label" class="btn btn-ghost btn-sm" :href="p.url" target="_blank" rel="noopener"
+          :title="p.title" @click="p.copy && copyText(p.copy)"
+        >{{ p.label }}</a>
       </div>
     </div>
 

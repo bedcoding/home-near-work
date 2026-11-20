@@ -661,9 +661,9 @@ test('unrelated tabs, old documents, wrong sites and unrelated responses cannot 
 
 test('missing region hints and disabled sites are never replaced by homepage visits', async () => {
   const h = harness({ sites: { naver: false } });
-  await h.start(['naver', 'zigbang', 'hogangnono'],[AREA]);
+  await h.start(['naver', 'zigbang'],[AREA]);
   assert.equal(h.windows(), 0);
-  assert.deepEqual(plain(h.saved[KEY].jobs.map((j) => j.status)), ['needs-input', 'needs-input']);
+  assert.deepEqual(plain(h.saved[KEY].jobs.map((j) => j.status)), ['needs-input']);
   assert.equal(h.saved[KEY].status, 'done');
   await h.command('retry'); await h.api.tick();
   assert.equal(h.windows(), 0);

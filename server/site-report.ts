@@ -1,6 +1,6 @@
 import { manwon } from '../shared/format.js';
 import type { SiteCaptureLine, SiteCaptureReport, SiteReport } from '../shared/types.js';
-import { kbAreaCount, naverClusterCounts } from './capture-news.js';
+import { naverClusterCounts } from './capture-news.js';
 import { parseDabangRoomList } from './dabang-parse.js';
 import * as store from './db.js';
 import { zigbangStationName, zigbangStations } from './link-hints.js';
@@ -12,7 +12,7 @@ import { collectionAreas } from '../shared/regions.js';
 // 사이트별 탭의 요약(GET /api/site-report): 소스마다 최근 조회 기록, 크롬 확장 사이트마다 사이트 화면이 센 수와 매물 내용까지 받은 수.
 
 /** 크롬 확장으로 받는 사이트(당근은 조회하기가 모은다) */
-const BROWSE_SITES = ['naver', 'dabang', 'zigbang', 'kbland', 'hogangnono'];
+const BROWSE_SITES = ['naver', 'dabang', 'zigbang'];
 /** 받은 날을 셀 기간(일) */
 const DAYS = 14;
 /** 소스마다 보일 조회 기록 수 */
@@ -88,8 +88,6 @@ function captureReport(site: string, since: string): SiteCaptureReport {
     site === 'naver' ? naverLines()
     : site === 'dabang' ? dabangLines()
     : site === 'zigbang' ? zigbangLines()
-    : site === 'kbland' ? kbLines()
-    : site === 'hogangnono' ? hogangnonoLines()
     : [];
   return { lastAt, days, lines };
 }
@@ -273,38 +271,3 @@ function zigbangLines(): SiteCaptureLine[] {
     },
   ];
 }
-
-/** KB: 마지막으로 본 날의 법정동 매물 수(매물 목록은 받지 않음) */
-function kbLines(): SiteCaptureLine[] {
-  const last = store.latestCapture('kbland', '%/propList/stutCdFilter/count%');
-  if (!last) return [{ label: '동 매물 수', value: '없음', at: '', tip: 'KB부동산 화면이 받은 동 매물 수가 아직(최근 응답 안에) 없습니다.' }];
-  const byDong = new Map<string, number>();
-  for (const r of store.capturesSince('kbland', '%/propList/stutCdFilter/count%', dayStart(kstDay(last.at)))) {
-    const c = kbAreaCount(r.requestBody, r.body);
-    if (c) byDong.set(c.dong, c.count);
-  }
-  const dongs = [...byDong].map(([dong, count]) => `${dong} ${n(count)}`);
-  return [
-    {
-      label: '동 매물 수',
-      value: dongs.slice(0, 3).join(', ') + (dongs.length > 3 ? ` 외 ${dongs.length - 3}곳` : ''),
-      at: last.at,
-      tip: `KB부동산 화면이 받은 법정동 매물 수(KB가 셈)${dongs.length > 3 ? `: ${dongs.join(', ')}` : ''}. 매물 목록은 받지 않아 대시보드에 매물로 들어오지 않고, 수가 늘면 새 매물 알림만 갑니다.`,
-    },
-  ];
-}
-
-/** 호갱노노: 아파트 단지 화면이라 매물 목록이 없다 */
-function hogangnonoLines(): SiteCaptureLine[] {
-  const last = store.latestCapture('hogangnono', '%/api/apt/bounding%');
-  const apts = json(last?.body)?.data;
-  return [
-    {
-      label: '받은 것',
-      value: Array.isArray(apts) ? `아파트 단지 ${n(apts.length)}곳` : '없음',
-      at: last?.at ?? '',
-      tip: '호갱노노는 아파트 단지와 시세 화면이라 전월세 매물 목록이 오지 않습니다. 바로 가기와 단지 번호를 배우는 데만 씁니다.',
-    },
-  ];
-}
-

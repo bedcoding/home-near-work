@@ -1,7 +1,7 @@
 import * as store from './db.js';
 import type { CaptureNews } from '../shared/types.js';
 
-// 크롬 확장으로 본 사이트 중 매물 수만 오는 곳(KB 동별 매물 수, 네이버 동그라미별 매물 수)을 전에 본 같은 조건의 수와 비교한다.
+// 크롬 확장으로 본 사이트 중 매물 수만 오는 곳(네이버 동그라미별 매물 수)을 전에 본 같은 조건의 수와 비교한다.
 // 조건마다 마지막에 본 수는 설정 count_marks({ 키: { count, at } }), 네이버가 본 지도 범위는 설정 naver_views, 사이트마다 마지막 확인 결과는 설정 capture_news에 둔다.
 
 type Marks = Record<string, { count: number; at: string }>;
@@ -22,30 +22,6 @@ export function writeMarks(marks: Marks) {
   const entries = Object.entries(marks);
   const kept = entries.length > MARKS_MAX ? entries.sort((a, b) => b[1].at.localeCompare(a[1].at)).slice(0, MARKS_MAX) : entries;
   store.setSetting(MARKS_KEY, JSON.stringify(Object.fromEntries(kept)));
-}
-
-/** 수를 기록하고 전에 본 수와의 차이를 돌려준다. 처음 보는 키면 null. */
-export function compareCount(marks: Marks, key: string, count: number, at: string): number | null {
-  const prev = marks[key];
-  marks[key] = { count, at };
-  return prev ? count - prev.count : null;
-}
-
-/**
- * KB부동산 지도가 받는 `land-property/propList/stutCdFilter/count` 응답 하나: 법정동의 매물 수(지역매물총건수).
- * key: 법정동코드와 검색 조건(지도 범위, 확대는 뺌). 모양이 다르면 null.
- */
-export function kbAreaCount(requestBody: string | null, body: string): { key: string; dong: string; count: number } | null {
-  try {
-    const req = JSON.parse(requestBody ?? 'null') as Record<string, unknown> | null;
-    const data = JSON.parse(body)?.dataBody?.data;
-    const count = data?.['지역매물총건수'];
-    if (!req || typeof count !== 'number') return null;
-    const { zoomLevel: _z, startLat: _a, startLng: _b, endLat: _c, endLng: _d, ...cond } = req;
-    return { key: `kbland|${JSON.stringify(cond)}`, dong: typeof data['법정동명'] === 'string' ? data['법정동명'] : String(req['법정동코드'] ?? '?'), count };
-  } catch {
-    return null;
-  }
 }
 
 /** 지도 타일 범위 [확대, x0, y0, x1, y1] */

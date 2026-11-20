@@ -2,15 +2,13 @@
  * 사이트마다 실제로 어떤 범위를 어떻게 모으는지. 사이트별 탭의 '수집 기준' 표와 사이트 설명이 이것을 그대로 보여 준다.
  * 수집 코드의 범위가 바뀌면 여기도 같이 고친다(사용자가 수집 기준을 알 수 있는 곳은 이 설명뿐이다).
  */
-export type ScopeKind = 'region' | 'station' | 'map' | 'site' | 'count' | 'screen';
+export type ScopeKind = 'region' | 'station' | 'map' | 'site';
 
 export const SCOPE_KIND_LABEL: Record<ScopeKind, string> = {
   region: '구나 동 전체',
   station: '역 기준',
   map: '지도 한 화면',
   site: '사이트 전체',
-  count: '건수만',
-  screen: '화면만 확인',
 };
 
 export interface SiteScope {
@@ -82,13 +80,5 @@ export const SITE_SCOPES: Record<string, SiteScope> = {
     kind: 'map', short: '지역 범위 매물 목록', by: '서버',
     how: "수집용 구나 동(없으면 역 반경)마다 그 범위의 지도 화면을 열고, 주거 종류(원룸, 투룸 이상, 오피스텔, 아파트, 주택)만 걸러 왼쪽 '매물' 목록을 내려 최근 매물부터 받습니다.",
     limit: '다음 페이지를 열기 전에 3~5초씩 쉽니다. 접근이 제한되면 받은 주거 매물까지 저장하고 일부 확인으로 표시합니다.',
-  },
-  kbland: {
-    kind: 'count', short: '법정동 매물 수', by: '크롬 확장',
-    how: '연 화면의 법정동 매물 수만 저장합니다.', limit: '개별 매물은 저장하지 않습니다.',
-  },
-  hogangnono: {
-    kind: 'screen', short: '단지 화면', by: '크롬 확장',
-    how: '가까운 역 옆 단지 화면을 엽니다. 바로 가기에 쓰는 단지 번호만 배웁니다.', limit: '매물은 저장하지 않습니다.',
   },
 };

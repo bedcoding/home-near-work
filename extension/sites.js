@@ -1,16 +1,15 @@
 // 확장이 켜고 끌 수 있는 부동산 사이트 목록. 백그라운드, 팝업, 사이트 안 스크립트가 같이 쓴다.
 // ready: 지도 동그라미 '봤음' 표시가 되는 곳.
 // 나머지는 켜 두면 그 사이트 화면이 받은 데이터와 화면 구조를 대시보드로 보낸다.
-// 다방, 직방, KB부동산, 호갱노노는 기본으로 켜 둔다.
+// 다방, 직방은 기본으로 켜 둔다.
 // 피터팬, 집토스, 당근부동산은 확장에서 따로 켤 수 있다.
+// KB부동산과 호갱노노는 화면 데이터를 받지 않는다. 대시보드 매물 단추와 바로 가기로 그 자리 지도만 연다.
 // base: 그 사이트가 데이터를 받아 오는 주소(이 도메인과 그 하위 주소의 응답만 읽는다).
 const HNW_SITES = [
   { id: 'naver', name: '네이버 부동산', matches: ['https://fin.land.naver.com/*', 'https://new.land.naver.com/*'], base: 'land.naver.com', ready: true, defaultOn: true },
   { id: 'peterpanz', name: '피터팬', matches: ['https://www.peterpanz.com/*'], base: 'peterpanz.com', ready: false },
   { id: 'dabang', name: '다방', matches: ['https://www.dabangapp.com/*'], base: 'dabangapp.com', ready: false, defaultOn: true },
   { id: 'zigbang', name: '직방', matches: ['https://www.zigbang.com/*'], base: 'zigbang.com', ready: false, defaultOn: true },
-  { id: 'kbland', name: 'KB부동산', matches: ['https://kbland.kr/*'], base: 'kbland.kr', ready: false, defaultOn: true },
-  { id: 'hogangnono', name: '호갱노노', matches: ['https://hogangnono.com/*'], base: 'hogangnono.com', ready: false, defaultOn: true },
   { id: 'ziptoss', name: '집토스', matches: ['https://ziptoss.com/*'], base: 'ziptoss.com', ready: false },
   { id: 'daangn', name: '당근부동산', matches: ['https://realty.daangn.com/*'], base: 'karrotmarket.com', ready: false },
 ];
@@ -33,8 +32,8 @@ function hnwEnabled(toggles, site) {
 }
 
 // ---------- 바로 가기 ----------
-// 지도 주소에 위치를 넘길 수 있는 곳(네이버, 피터팬, 다방, KB부동산)은 고른 지역 가운데로, 집토스는 가까운 역 페이지로,
-// 직방은 가까운 역의 직방 역 번호로, 호갱노노는 가까운 역 옆 단지 화면으로 연다(역 번호, 단지 번호는 대시보드가 역 목록에 붙여 줌).
+// 지도 주소에 위치를 넘길 수 있는 곳(네이버, 피터팬, 다방, KB부동산, 호갱노노)은 고른 지역 가운데로, 집토스는 가까운 역 페이지로,
+// 직방은 가까운 역의 직방 역 번호로 연다(역 번호는 대시보드가 역 목록에 붙여 줌).
 // 그 값을 모르면 첫 화면을 연다. 대시보드의 web/src/siteLinks.ts와 같게 유지한다.
 
 const HNW_BASE62 = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -74,7 +73,7 @@ function hnwDaangnMapLink(area, stations) {
   return { id: 'daangn', name: '당근부동산', url: url.href, where: `${area.name}의 설정 범위 지도를 엽니다` };
 }
 
-/** area: { name, lat, lng, radiusM } 또는 null. stations: [{ name, lat, lng, zigbangId?, hogangnonoApt? }] */
+/** area: { name, lat, lng, radiusM } 또는 null. stations: [{ name, lat, lng, zigbangId? }] */
 function hnwSiteLinks(area, stations) {
   const zoom = area && area.radiusM > 1200 ? 13 : 14;
   const station = area
@@ -129,8 +128,8 @@ function hnwSiteLinks(area, stations) {
     {
       id: 'hogangnono',
       name: '호갱노노',
-      url: station && station.hogangnonoApt ? `https://hogangnono.com/apt/${encodeURIComponent(station.hogangnonoApt)}` : 'https://hogangnono.com/',
-      where: station && station.hogangnonoApt ? `호갱노노를 ${station.name} 옆 단지 화면으로 엽니다` : home,
+      url: area ? `https://hogangnono.com/map?lat=${area.lat}&lng=${area.lng}&zoom=${zoom}` : 'https://hogangnono.com/',
+      where: area ? `${area.name} 가운데로 호갱노노 지도를 엽니다` : home,
     },
     hnwDaangnMapLink(area, stations) ?? { id: 'daangn', name: '당근부동산', url: 'https://realty.daangn.com/map', where: home },
   ];

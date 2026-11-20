@@ -255,7 +255,7 @@ async function syncAreas() {
     }
     if (Array.isArray(state.stations)) {
       await chrome.storage.local.set({
-        'hnw-stations': state.stations.map(({ name, label, lat, lng, zigbangId, hogangnonoApt }) => ({ name, label, lat, lng, zigbangId, hogangnonoApt })),
+        'hnw-stations': state.stations.map(({ name, label, lat, lng, zigbangId }) => ({ name, label, lat, lng, zigbangId })),
       });
     }
     const got = await chrome.storage.local.get(['hnw-area-list', 'hnw-areas-edited']);

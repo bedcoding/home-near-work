@@ -484,8 +484,6 @@ export interface Station {
   gu?: string;
   /** 직방 지하철역 번호(바로 가기 주소에 씀) */
   zigbangId?: string;
-  /** 역에서 가까운 호갱노노 단지 번호(바로 가기를 그 단지 화면으로 열어 지도를 이 근처로 맞춘다) */
-  hogangnonoApt?: string;
   /** 서울과 경기, 인천 등 */
   sido?: string;
 }
@@ -1049,7 +1047,7 @@ export interface SourceRunInfo {
 export interface SiteReport {
   /** 소스마다 그 소스가 들어간 조회(새것부터 12개까지). 크롬 확장 사이트는 하루치를 묶은 기록이다. */
   history: Partial<Record<SourceId, SiteRunRow[]>>;
-  /** 크롬 확장 사이트(naver, dabang, zigbang, kbland, hogangnono, daangn)마다 받은 화면 데이터 요약 */
+  /** 크롬 확장 사이트(naver, dabang, zigbang)마다 받은 화면 데이터 요약 */
   captures: Record<string, SiteCaptureReport>;
   /** 역 기준 사이트가 수집 지역을 실제로 얼마나 덮는지(지금은 직방 서버 수집). percent는 면적 비율, 셀 수 없으면 null. */
   scopeCoverage?: Partial<Record<string, { areaName: string; stations: number; percent: number | null }[]>>;
@@ -1124,7 +1122,7 @@ export interface AppState {
   areasUpdatedAt: string | null;
   autoCheck: AutoCheckState;
   alerts: AlertSettings;
-  /** 크롬 확장 사이트(dabang, kbland, naver)마다 마지막 확인 결과 */
+  /** 크롬 확장 사이트(dabang, zigbang, daangn, naver)마다 마지막 확인 결과 */
   captureNews: Partial<Record<string, CaptureNews>>;
   /** 켜진 지역 근처 서울 구(임대 공고를 지역으로 거를 때 쓴다) */
   gus: string[];
