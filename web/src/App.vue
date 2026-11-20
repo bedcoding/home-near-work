@@ -992,7 +992,7 @@ watch(filtersHidden, (v) => localStorage.setItem('hnw-filters-hidden', String(v)
 
 // ---------- 크롬 확장 ----------
 // 웹 페이지는 창을 여러 개 한꺼번에 열 수 없어서(팝업 차단), 크롬 확장이 대시보드 안에 넣는 작은 스크립트(extension/dashboard.js)에 부탁한다.
-// 머리말의 '한 번에 열기'는 지역 순차 조회와 겹쳐서 뺐고, 노선 탭의 '이 역 사이트 열기'만 openAll을 쓴다.
+// 머리말의 '한 번에 열기'는 순차 조회(지금의 '네이버 조회')와 겹쳐서 뺐고, 노선 탭의 '이 역 사이트 열기'만 openAll을 쓴다.
 const ext = ref<{ version: string; sites: string[]; browse?: boolean; browseError?: string } | null>(null);
 const browseOpen = ref(false);
 async function manageAreas() {
@@ -1312,7 +1312,7 @@ const filterUse = computed<string[] | 'all'>(() => {
         v-if="state?.autoCheck.missed && !running" class="btn btn-sm missed"
         title="마지막 자동 확인 시각에 대시보드가 꺼져 있었고 그 뒤로 조회하지 않았습니다" @click="openRunPreview()"
       >자동 확인 놓침, 지금 확인</button>
-      <button class="btn" :aria-expanded="browseOpen" aria-controls="browse-queue" title="선택한 지역과 사이트를 차례로 방문하고 수집 결과를 확인합니다" @click="browseOpen = !browseOpen">지역 순차 조회</button>
+      <button class="btn" :aria-expanded="browseOpen" aria-controls="browse-queue" title="크롬 확장으로 고른 구나 동의 네이버 매물 목록을 차례로 받고 수집 결과를 확인합니다" @click="browseOpen = !browseOpen">네이버 조회</button>
       <div ref="runMenuEl" class="runall">
         <button class="btn btn-primary run run-main" :disabled="!!running" :title="runAllTitle" aria-haspopup="dialog" @click="openRunPreview()">
           {{ running ? '조회 중…' : '조회하기' }}
@@ -1335,7 +1335,7 @@ const filterUse = computed<string[] | 'all'>(() => {
               <span class="run-scope-what">{{ s.skip }}</span>
             </button>
           </template>
-          <span class="menu-label" title="크롬 확장이 모으는 네이버는 '지역 순차 조회'로 돕니다.">탭 하나만 조회</span>
+          <span class="menu-label" title="크롬 확장이 모으는 네이버는 머리말의 '네이버 조회'로 돕니다.">탭 하나만 조회</span>
           <button v-for="s in runScopes" :key="s.id" class="run-scope" :class="{ here: s.here }" :title="s.title || undefined" @click="runScope(s.id)">
             <span class="run-scope-name">{{ s.label }}<span v-if="s.here" class="here-chip">지금 탭</span></span>
             <span class="run-scope-what">{{ s.what }}</span>
@@ -1373,7 +1373,7 @@ const filterUse = computed<string[] | 'all'>(() => {
     </span>
   </div>
 
-  <!-- 지역 순차 조회: 보던 목록을 밀어내지 않게 모달로 띄운다. 바깥을 누르거나 Esc, 닫기로 닫는다. -->
+  <!-- 네이버 조회(크롬 확장 순차 조회): 보던 목록을 밀어내지 않게 모달로 띄운다. 바깥을 누르거나 Esc, 닫기로 닫는다. -->
   <div v-if="browseOpen" class="overlay browse-overlay" @click.self="browseOpen = false">
     <div class="browse-dialog" role="dialog" aria-modal="true" aria-labelledby="browse-title">
       <BrowseQueue :areas="areas" :extension="ext" :naver-received-at="state?.naverCapture.lastAt ?? null" @close="browseOpen = false" @manage-areas="browseOpen = false; manageAreas()" />

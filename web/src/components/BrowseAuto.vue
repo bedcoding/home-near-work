@@ -6,7 +6,7 @@ import HelpTip from './HelpTip.vue';
 const AUTO_HELP = '기존 자동 확인 시각에 여기서 고른 사이트와 지역도 확장이 조회합니다. 예약으로 돌리려면 설정 탭의 \'자동 확인\' 시각을 켜 주세요. '
   + '\'지금 실행\'은 따로 쓸 수 있습니다. 크롬과 이 PC의 대시보드 서버가 켜져 있어야 하고, 확장이 전용 탭에서 조회합니다. '
   + '네이버 예약은 위에서 읽은 필터와 지역을 예약용으로 저장한 뒤 \'예약 설정\'에서 네이버를 켜면 됩니다. '
-  + '예약 설정은 위 순차 조회의 선택과 따로 저장되고, 예약을 꺼도 이미 시작한 조회는 계속됩니다(위 진행 화면에서 중단).';
+  + '예약 설정은 위 네이버 조회의 선택과 따로 저장되고, 예약을 꺼도 이미 시작한 조회는 계속됩니다(위 진행 화면에서 중단).';
 const props = defineProps<{ areas: Area[]; scopes: Record<string, { name: string; dong: string }[]>; scopesReady: boolean }>();
 type RunStatus = 'queued' | 'running' | 'paused' | 'complete' | 'partial' | 'failed' | 'expired';
 type AutoSite = 'dabang' | 'zigbang' | 'naver';

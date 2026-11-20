@@ -166,7 +166,7 @@ function toggleStation(s: CatalogStation, event: Event, radiusM = 1000) {
         <h2 id="area-settings-title">지역 추가·관리</h2>
         <p class="muted small">켜 둔 구나 동 {{ registered.filter(a => a.enabled).length }}곳과 지하철역 {{ legacy.filter(a => a.enabled).length }}곳을 함께 모읍니다. 둘 다 하나 이상씩 켜 두어야 합니다.</p>
       </div>
-      <button class="btn btn-sm" @click="emit('browse')">순차 조회로 돌아가기</button>
+      <button class="btn btn-sm" @click="emit('browse')">네이버 조회로 돌아가기</button>
     </div>
     <p v-if="error" class="error">{{ error }}</p>
     <div v-if="missing.length" class="kind-warning" role="alert">
@@ -189,7 +189,7 @@ function toggleStation(s: CatalogStation, event: Event, radiusM = 1000) {
         </button>
       </div>
       <p class="muted small">주변에서 함께 받은 매물도 저장합니다. 기본 목록은 선택한 구만 보여 주며, 지역 필터를 끄면 주변 매물도 볼 수 있습니다.</p>
-      <p class="muted small">구 선택은 수집 대상 설정입니다. 사이트별 실제 조회 범위와 전체 수집 완료 여부는 순차 조회 결과에서 따로 확인합니다.</p>
+      <p class="muted small">구 선택은 수집 대상 설정입니다. 사이트별 실제 조회 범위와 전체 수집 완료 여부는 사이트별 탭과 네이버 조회 결과에서 따로 확인합니다.</p>
     </div>
     <details class="add">
       <summary>특정 법정동으로 좁히기</summary>

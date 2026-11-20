@@ -11,7 +11,7 @@ export function readNaverPreset() {
     const saved=JSON.parse(raw);
     if(!Number.isSafeInteger(saved.updatedAt) || !Array.isArray(saved.areaIds) || !saved.areaIds.every((id:unknown)=>Number.isSafeInteger(id) && Number(id)>0))throw new Error('invalid');
     return {...context.read({pageUrl:saved.pageUrl}),areaIds:saved.areaIds as number[],updatedAt:saved.updatedAt as number};
-  } catch {throw error('저장한 네이버 필터를 읽지 못했습니다. 순차 조회의 네이버 필터나 확장 아이콘 메뉴에서 조건을 다시 저장해 주세요.');}
+  } catch {throw error('저장한 네이버 필터를 읽지 못했습니다. 네이버 조회의 네이버 필터나 확장 아이콘 메뉴에서 조건을 다시 저장해 주세요.');}
 }
 export function naverPresetState() {
   const saved=readNaverPreset();
@@ -29,7 +29,7 @@ export function saveNaverPreset(input:{pageUrl?:unknown;areaIds?:unknown}) {
 }
 export function naverAreaJob(area:Area) {
   const preset=readNaverPreset();
-  if(!preset)throw error('순차 조회의 네이버 필터나 확장 아이콘 메뉴에서 네이버 필터와 지역을 예약용으로 먼저 저장해 주세요.');
+  if(!preset)throw error('네이버 조회의 네이버 필터나 확장 아이콘 메뉴에서 네이버 필터와 지역을 예약용으로 먼저 저장해 주세요.');
   if(!area.region || area.purpose==='alert')throw error('네이버 예약에는 구나 동 수집 지역이 필요합니다.');
   return context.forArea({name:area.name,region:area.region},preset,`https://fin.land.naver.com/map?center=${area.lng}-${area.lat}`);
 }

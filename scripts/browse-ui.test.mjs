@@ -14,10 +14,15 @@ const script = compileScript(descriptor, { id: 'browse-ui-test' });
 const compiled = ts.transpileModule(script.content, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const area = (id) => ({ id, name: `예시 지역 ${id}`, lat: 35.1 + id * 0.001, lng: 128.1, radiusM: 700, enabled: true });
+/** 수집용 구나 동 지역(네이버 조회가 보는 지역) */
+const regionArea = (id, kind = 'gu') => ({ ...area(id), name: `예시 구역 ${id}`, purpose: 'collection',
+  region: { kind, code: `9912${id}`, sido: '예시도', sigungu: '가상구', dong: kind === 'gu' ? null : '가상동', name: `예시도 가상구 ${id}` } });
+/** 시작 메시지에 실리는 구 지역 모양 */
+const sentRegion = (id) => ({ id, name: `예시 구역 ${id}`, lat: 35.1 + id * 0.001, lng: 128.1, radiusM: 700, region: { kind: 'gu', code: `9912${id}`, name: `예시도 가상구 ${id}` } });
 const job = (status, receipt) => ({ id: 'synthetic-job', areaName: '예시 지역', site: 'dabang', siteName: '다방', url: 'https://www.dabangapp.com/map/onetwo', status, note: '', ...(receipt ? { receipt } : {}) });
 const state = (jobs, status = 'done') => ({ id: 'synthetic-run', status, jobs, index: jobs.length, updatedAt: 1 });
 
-function harness(t, extension = { version: '0.8.4', browse: true, sites: ['naver', 'dabang'] }, options = {}) {
+function harness(t, extension = { version: '0.8.33', browse: true, sites: ['naver'] }, options = {}) {
   const mounted = [];
   const unmounted = [];
   const messages = [];
@@ -41,7 +46,7 @@ function harness(t, extension = { version: '0.8.4', browse: true, sites: ['naver
     clearTimeout: (id) => timeouts.delete(id),
   };
   const origin = 'https://example.invalid';
-  const props = vue.reactive({ areas: [area(1), area(2)], extension });
+  const props = vue.reactive({ areas: [regionArea(1), regionArea(2)], extension });
   const exports = {};
   let scopeResponse = options.scopeResponse || (() => ({ scopes: {} }));
   const fetches = [];
@@ -72,19 +77,40 @@ function harness(t, extension = { version: '0.8.4', browse: true, sites: ['naver
     advance: (ms) => { now += ms; }, now: () => now, tick: () => intervals.forEach((fn) => fn()) };
 }
 
-test('선택 지역과 켜진 매물 사이트만 시작 메시지에 전달한다', async (t) => {
+const naverReply = (h, data) => h.receive({ type: 'naver-filter', ...data });
+async function readNaver(h, tabs = [{ id: 99, title: 'Synthetic map', active: false }], context = { key: 'synthetic-key', tabId: 99, conditions: [{ label: '월세', value: '77만원 이하' }] }) {
+  await vue.nextTick();
+  const list = h.messages.at(-1).data;
+  assert.equal(list.type, 'naver-filter-tabs');
+  naverReply(h, { requestId: list.requestId, requestType: 'naver-filter-tabs', tabs });
+  const read = h.messages.at(-1).data;
+  assert.deepEqual([read.type, read.tabId], ['naver-filter-state', context.tabId]);
+  naverReply(h, { requestId: read.requestId, requestType: 'naver-filter-state', context });
+}
+
+/** 상태 응답을 받고 네이버 필터까지 읽어 시작할 수 있게 한다 */
+async function prepared(h) {
+  await h.ready;
+  h.receive({ state: null });
+  await readNaver(h);
+}
+
+test('선택한 구나 동만 네이버 시작 메시지에 전달한다', async (t) => {
   const h = harness(t);
   await h.ready;
   assert.deepEqual(clone(h.app.selectedAreas.value), [1, 2]);
-  assert.deepEqual(clone(h.app.selectedSites.value), ['dabang'], '직접 확인하는 사이트는 순회 기본 선택에서 제외한다');
+  assert.deepEqual(clone(h.app.selectedSites.value), ['naver'], '네이버 조회는 네이버를 처음부터 고른다');
   assert.equal(h.app.canStart.value, false, '최초 상태 확인 전 중복 시작을 막는다');
   h.receive({ state: null });
+  assert.equal(h.app.canStart.value, false, '네이버 필터를 읽기 전에는 시작하지 않는다');
+  await readNaver(h);
   h.app.selectedAreas.value = [2];
   h.app.command('start');
   const command = h.messages.at(-1);
   assert.equal(command.origin, 'https://example.invalid');
-  assert.deepEqual(command.data.areas, [{ id: 2, name: '예시 지역 2', lat: 35.102000000000004, lng: 128.1, radiusM: 700 }]);
-  assert.deepEqual(command.data.sites, ['dabang']);
+  assert.deepEqual(command.data.areas, [sentRegion(2)]);
+  assert.deepEqual(command.data.sites, ['naver']);
+  assert.deepEqual([command.data.naverSourceTabId, command.data.naverFilterKey], [99, 'synthetic-key']);
   const count = h.messages.length;
   h.app.command('start');
   assert.equal(h.messages.length, count, '응답 대기 중 중복 명령을 보내지 않는다');
@@ -92,8 +118,7 @@ test('선택 지역과 켜진 매물 사이트만 시작 메시지에 전달한�
 
 test('브라우저 메시지 전송이 실패해도 시작하는 중에 갇히지 않고 다시 실행할 수 있다', async (t) => {
   const h = harness(t);
-  await h.ready;
-  h.receive({ state: null });
+  await prepared(h);
   const post = h.win.postMessage;
   h.win.postMessage = () => { throw new Error('synthetic DataCloneError'); };
   assert.doesNotThrow(() => h.app.command('start'));
@@ -135,22 +160,21 @@ test('중단 상태를 복구하고 이어하기하며 패널 종료 시 폴링�
   assert.equal(typeof sent.requestId, 'string');
   assert.deepEqual(sent, { source: 'hnw-dashboard', type: 'browse-command', command: 'resume', requestId: sent.requestId });
   assert.equal(h.intervals.size, 1);
-  assert.equal(h.timeouts.size, 1);
+  assert.equal(h.timeouts.size, 2, '이어하기 응답 대기와 창을 열 때 보낸 네이버 탭 목록 요청의 대기');
   h.unmount();
   assert.equal(h.intervals.size, 0);
   assert.equal(h.timeouts.size, 0);
   assert.equal(h.listeners.size, 0);
 });
 
-test('꺼진 지역과 사이트는 선택에서 빠지고 구버전 확장은 실행하지 않는다', async (t) => {
+test('꺼진 지역은 선택에서 빠지고 순회를 지원하지 않는 확장으로는 실행하지 않는다', async (t) => {
   const h = harness(t);
-  await h.ready;
-  h.props.areas = [area(2)];
-  h.props.extension.sites = ['dabang'];
+  await prepared(h);
+  h.props.areas = [regionArea(2)];
   await vue.nextTick();
   assert.deepEqual(clone(h.app.selectedAreas.value), [2]);
-  assert.deepEqual(clone(h.app.selectedSites.value), ['dabang']);
-  h.receive({ state: null });
+  assert.deepEqual(clone(h.app.selectedSites.value), ['naver']);
+  assert.equal(h.app.canStart.value, true);
   h.props.extension.browse = false;
   await vue.nextTick();
   const before = h.messages.length;
@@ -161,10 +185,8 @@ test('꺼진 지역과 사이트는 선택에서 빠지고 구버전 확장은 �
 
 test('응답이 끊기면 시작을 잠그고 연결 재확인 후 선택을 유지한 채 다시 활성화한다', async (t) => {
   const h = harness(t);
-  await h.ready;
-  h.receive({ state: null });
+  await prepared(h);
   h.app.selectedAreas.value = [2];
-  h.app.selectedSites.value = ['dabang'];
   assert.equal(h.app.canStart.value, true);
   h.receive({ error: 'synthetic disconnected worker' });
   assert.equal(h.app.received.value, false);
@@ -176,13 +198,12 @@ test('응답이 끊기면 시작을 잠그고 연결 재확인 후 선택을 유
   h.receive({ state: null });
   assert.equal(h.app.canStart.value, true);
   assert.deepEqual(clone(h.app.selectedAreas.value), [2]);
-  assert.deepEqual(clone(h.app.selectedSites.value), ['dabang']);
+  assert.deepEqual(clone(h.app.selectedSites.value), ['naver']);
 });
 
 test('시작 요청 직후 진행 안내와 로그를 보이고 응답 대기 중에도 상태를 계속 조회한다', async (t) => {
   const h = harness(t);
-  await h.ready;
-  h.receive({ state: null });
+  await prepared(h);
   h.app.command('start');
   const command = h.messages.at(-1).data;
   assert.equal(h.app.progressTitle.value, '시작 요청을 보냈습니다');
@@ -206,8 +227,7 @@ test('시작 요청 직후 진행 안내와 로그를 보이고 응답 대기 �
 
 test('명령 대기 중 작업 상태 푸시는 단계와 카운터를 갱신하되 대기를 해제하지 않는다', async (t) => {
   const h = harness(t);
-  await h.ready;
-  h.receive({ state: null });
+  await prepared(h);
   h.app.command('start');
   const stamp = h.now();
   h.tick();
@@ -231,8 +251,7 @@ test('명령 대기 중 작업 상태 푸시는 단계와 카운터를 갱신하
 
 test('오래된 상태와 멈춘 작업 신호는 진행 중이라고 단정하지 않고 재시작을 막는다', async (t) => {
   const h = harness(t);
-  await h.ready;
-  h.receive({ state: null });
+  await prepared(h);
   assert.equal(h.app.canStart.value, true);
   h.advance(14000);
   h.tick();
@@ -249,8 +268,7 @@ test('오래된 상태와 멈춘 작업 신호는 진행 중이라고 단정하�
 
 test('타임아웃과 관련 없는 오류가 시작 성공으로 바뀌지 않고 명령 오류는 유지된다', async (t) => {
   const h = harness(t);
-  await h.ready;
-  h.receive({ state: null });
+  await prepared(h);
   h.app.command('start');
   h.receive({ error: '다른 명령 오류', requestType: 'browse-command', requestId: 'unrelated' });
   assert.equal(h.app.pending.value, 'start');
@@ -289,20 +307,19 @@ test('잘못된 로그와 진행 필드는 거부하고 기존 상태는 호환�
 
 const region = (id = 70001) => ({ kind: 'dabang-region', name: '예시시 예시구 가상동', dong: '가상동', url: `https://www.dabangapp.com/map/onetwo?search_type=region&search_id=${id}` });
 
-test('예정 항목은 선택 지역 수가 아니라 사이트와 중복 없는 동별 작업 수로 계산한다', async (t) => {
-  const first = region();
-  const second = { ...region(70002), name: '예시시 예시구 상상동', dong: '상상동' };
-  const h = harness(t, undefined, { scopeResponse: () => ({ scopes: { 1: [first, second, { ...first, url: `${first.url}&m_zoom=14` }] } }) });
+test('예정 항목은 고른 구나 동마다 네이버 하나이고 역 반경과 알림용 지역은 목록에서 뺀다', async (t) => {
+  const h = harness(t);
+  h.props.areas = [regionArea(1), regionArea(2, 'dong'), area(3), { ...regionArea(4), purpose: 'alert' }];
   await h.ready;
-  h.app.selectedAreas.value = [1];
-  h.app.selectedSites.value = ['dabang'];
-  assert.equal(h.app.plannedJobs.value.length, 2, '같은 동 ID의 다른 지도 URL은 한 번만 조회한다');
-  h.app.selectedSites.value = ['naver', 'dabang'];
-  assert.equal(h.app.plannedJobs.value.length, 2, '직접 확인하는 사이트는 예전 선택값이 남아도 순회하지 않는다');
-  h.app.selectedAreas.value = [1, 2];
-  assert.equal(h.app.plannedJobs.value.length, 3, '동 설정이 없는 지역은 지원하는 사이트마다 하나의 작업이다');
+  await vue.nextTick();
+  assert.deepEqual(clone(h.app.naverAreas.value.map((a) => a.id)), [1, 2]);
+  assert.equal(h.app.otherAreaCount.value, 2);
+  assert.deepEqual(clone(h.app.plannedJobs.value.map((j) => [j.areaId, j.site, j.label])), [[1, 'naver', '구 전체'], [2, 'naver', '동 전체']]);
+  h.app.selectedAreas.value = [2, 3, 4];
+  assert.deepEqual(clone(h.app.plannedJobs.value.map((j) => j.areaId)), [2], '목록에 없는 지역은 골라 두어도 조회하지 않는다');
+  h.app.selectedSites.value = [];
+  assert.equal(h.app.plannedJobs.value.length, 0, '네이버를 쓸 수 없으면 순회를 만들지 않는다');
   h.app.selectedSites.value = ['naver'];
-  assert.equal(h.app.plannedJobs.value.length, 0, '수동 사이트만 선택한 값으로는 순회를 만들지 않는다');
   h.app.selectedAreas.value = [];
   assert.equal(h.app.plannedJobs.value.length, 0);
 });
@@ -335,15 +352,14 @@ test('복구한 이전 결과는 접고 현재 실행과 중단 상태는 펼치
   assert.equal(h.app.runExpanded.value, true, '복구한 중단 작업은 이어하기를 찾을 수 있게 펼친다');
 });
 
-test('이전 미확인 재조회에는 현재 선택을 섞지 않고 새 조회만 새 동 범위를 전달한다', async (t) => {
+test('이전 미확인 재조회에는 현재 선택을 섞지 않고 새 조회만 고른 구나 동을 전달한다', async (t) => {
   const h = harness(t, undefined, { scopeResponse: () => ({ scopes: { 1: [region(), region(70002)] } }) });
   await h.ready;
   const previous = state([{ ...job('partial'), areaName: '이전 예시 지역' }]);
   h.receive({ state: previous });
-  await vue.nextTick();
+  await readNaver(h);
   h.app.selectedAreas.value = [1];
-  h.app.selectedSites.value = ['dabang'];
-  assert.equal(h.app.plannedJobs.value.length, 2);
+  assert.equal(h.app.plannedJobs.value.length, 1);
   h.app.command('retry');
   await vue.nextTick();
   const retry = h.messages.at(-1).data;
@@ -356,59 +372,46 @@ test('이전 미확인 재조회에는 현재 선택을 섞지 않고 새 조회
   await vue.nextTick();
   const start = h.messages.at(-1).data;
   assert.equal(start.command, 'start');
-  assert.deepEqual(start.areas.map((a) => a.id), [1]);
-  assert.deepEqual(start.areas[0].dabangRegions, [region(), region(70002)]);
-  assert.deepEqual(start.sites, ['dabang']);
+  assert.deepEqual(start.areas, [sentRegion(1)]);
+  assert.equal(start.areas[0].dabangRegions, undefined, '저장된 다방 동별 범위는 네이버 조회에 섞지 않는다');
+  assert.deepEqual(start.sites, ['naver']);
   assert.equal(h.app.activeState.value, null, '새 실행을 기다리는 동안 이전 결과를 새 실행의 결과로 표시하지 않는다');
   assert.equal(h.app.runExpanded.value, true);
 });
 
-test('동별 범위를 무시하는 구버전 확장에서는 시작하지 않는다', async (t) => {
-  const h = harness(t, { version: '0.8.3', browse: true, sites: ['dabang'] }, { scopeResponse: () => ({ scopes: { 1: [region()] } }) });
-  await h.ready; h.receive({ state: null });
-  assert.equal(h.app.canStart.value, false);
-  h.app.command('start');
-  assert.equal(h.messages.filter((x) => x.data.type === 'browse-command').length, 0);
-  h.props.extension.version = '0.8.4';
-  assert.equal(h.app.canStart.value, true);
-});
-
-test('저장된 동 범위를 확인한 뒤 선택한 지역에만 복제 가능한 동 설정을 전달한다', async (t) => {
+test('저장된 다방 동별 범위는 예약 조회에만 넘기고 네이버 시작 메시지에는 넣지 않는다', async (t) => {
   let resolveScopes;
   const h = harness(t, undefined, { scopeResponse: () => new Promise((resolve) => { resolveScopes = resolve; }) });
   h.receive({ state: null });
-  assert.equal(h.app.canStart.value, false, '범위 조회 전에는 역 반경으로 잘못 시작하지 않는다');
+  await readNaver(h);
+  assert.equal(h.app.scopesReady.value, false);
+  assert.equal(h.app.canStart.value, true, '다방 범위를 기다리지 않고 네이버 조회를 시작할 수 있다');
   resolveScopes({ scopes: { 1: [region(), { ...region(70002), name: '예시시 예시구 상상동', dong: '상상동' }] } });
   await h.ready;
-  assert.equal(h.app.canStart.value, true);
-  h.app.selectedSites.value = ['dabang'];
+  assert.equal(h.app.scopesReady.value, true);
+  assert.equal(h.app.areaScopes.value[1].length, 2);
   h.app.command('start');
   const sent = h.messages.at(-1).data;
   assert.equal(sent.type, 'browse-command');
-  assert.deepEqual(sent.areas[0].dabangRegions, [region(), { ...region(70002), name: '예시시 예시구 상상동', dong: '상상동' }]);
-  assert.equal(sent.areas[1].dabangRegions, undefined, '설정 없는 지역은 기존 동작을 유지한다');
-  assert.doesNotThrow(() => structuredClone(sent), 'Vue Proxy가 중첩된 동 목록에 남지 않는다');
+  assert.deepEqual(sent.areas, [sentRegion(1), sentRegion(2)]);
+  assert.doesNotThrow(() => structuredClone(sent), 'Vue Proxy가 시작 메시지에 남지 않는다');
   assert.equal(h.fetches[0].url, '/api/browse/scopes');
   assert.equal(h.fetches[0].init.cache, 'no-store');
 });
 
-test('동 범위 조회 실패와 잘못된 범위는 반경 조회로 우회하지 않고 재조회 성공 후 풀린다', async (t) => {
+test('다방 동별 범위를 못 불러오거나 잘못 오면 예약 조회에 넘기지 않고 다시 불러오면 풀린다', async (t) => {
   const h = harness(t, undefined, { scopeResponse: () => { throw new Error('offline'); } });
-  await h.ready;
-  h.receive({ state: null });
-  assert.equal(h.app.canStart.value, false);
-  assert.match(h.app.scopeError.value, /동별 조회 범위를 불러오지 못했습니다/);
-  h.app.command('start');
-  assert.equal(h.messages.some((message) => message.data.type === 'browse-command'), false);
+  await prepared(h);
+  assert.equal(h.app.scopesReady.value, false);
+  assert.equal(h.app.canStart.value, true, '범위 실패가 네이버 조회를 막지 않는다');
   for (const scopes of [{ 1: [region(), { ...region(), url: 'https://unrelated.invalid/' }] }, { 1: [] }, []]) {
     h.setScopeResponse(() => ({ scopes }));
     await h.app.loadScopes();
-    assert.equal(h.app.canStart.value, false);
+    assert.equal(h.app.scopesReady.value, false);
   }
   h.setScopeResponse(() => ({ scopes: { 1: [region()] } }));
   await h.app.loadScopes();
-  assert.equal(h.app.scopeError.value, null);
-  assert.equal(h.app.canStart.value, true);
+  assert.equal(h.app.scopesReady.value, true);
   assert.equal(h.timeouts.size, 0, '범위 조회 제한 타이머를 정리한다');
 });
 
@@ -475,18 +478,22 @@ test('직방 누락과 읽기 실패를 구분하고 불완전한 완료 증거�
   assert.equal(h.app.statusLabel(h.app.state.value.jobs[0]), '역 1km 목록 확인 완료');
 });
 
-test('예전 확장에서는 네이버를 고를 수 없고 시작 명령에도 넣지 않는다', async (t) => {
-  const h = harness(t);
+test('예전 확장이나 네이버를 꺼 둔 확장으로는 네이버 조회를 시작하지 않는다', async (t) => {
+  const h = harness(t, { version: '0.8.21', browse: true, sites: ['naver', 'dabang'] });
   await h.ready;
   assert.equal(h.app.naverEnabled.value, true);
   assert.equal(h.app.naverVersionReady.value, false);
-  assert.equal(h.app.sites.value.some((s) => s.id === 'naver'), false);
+  assert.deepEqual(clone(h.app.sites.value), []);
+  assert.deepEqual(clone(h.app.selectedSites.value), []);
   h.receive({ state: null });
+  assert.equal(h.app.canStart.value, false);
   h.app.command('start');
-  assert.deepEqual(h.messages.at(-1).data.sites, ['dabang']);
-  const off = harness(t, { version: '0.8.4', browse: true, sites: ['dabang'] });
+  assert.equal(h.messages.some((m) => m.data.type === 'browse-command'), false);
+  assert.equal(h.messages.some((m) => m.data.type === 'naver-filter-tabs'), false, '네이버를 못 쓰면 탭 목록도 묻지 않는다');
+  const off = harness(t, { version: '0.8.33', browse: true, sites: ['dabang'] });
   await off.ready;
-  assert.equal(off.app.naverEnabled.value, false, '확장에서 꺼 둔 네이버는 안내도 숨긴다');
+  assert.equal(off.app.naverEnabled.value, false, '확장에서 꺼 둔 네이버는 켜라는 안내를 보인다');
+  assert.deepEqual(clone(off.app.sites.value), []);
 });
 
 test('네이버 수집의 페이지와 수신 건수를 같은 진행 표시에 보인다', async (t) => {
@@ -504,31 +511,28 @@ test('네이버 수집의 페이지와 수신 건수를 같은 진행 표시에 
 });
 
 const NAVER_EXT = { version: '0.8.22', browse: true, sites: ['naver', 'dabang', 'zigbang'] };
-const regionArea = (id, kind = 'gu') => ({ ...area(id), name: `예시 구역 ${id}`, purpose: 'collection',
-  region: { kind, code: `9912${id}`, sido: '예시도', sigungu: '가상구', dong: kind === 'gu' ? null : '가상동', name: `예시도 가상구 ${id}` } });
-const DAANGN_EXT = { version: '0.8.28', browse: true, sites: ['daangn', 'zigbang'] };
-/** 꺼 둔 지역(켜진 지역이 없으면 서버가 직방을 모으지 않아 순차 조회에서 고를 수 있다) */
-const off = (a) => ({ ...a, enabled: false });
+const DAANGN_EXT = { version: '0.8.28', browse: true, sites: ['daangn', 'naver'] };
 const syntheticDaangnMap = 'https://realty.daangn.com/map/subway/SyntheticStation?region_bounds=1%2C1%2C2%2C2%2C14';
 
-test('당근은 사이트 선택과 새 순회 계획에서 빠지며 다른 사이트는 그대로 시작한다', async (t) => {
+test('당근은 사이트 선택과 새 순회 계획에서 빠지고 네이버만 시작한다', async (t) => {
   const h = harness(t, DAANGN_EXT);
-  h.props.areas = [off(area(1)), off(regionArea(3)), off(regionArea(4, 'dong')), off({ ...area(2), purpose: 'alert' })];
+  h.props.areas = [regionArea(3), regionArea(4, 'dong'), area(1), { ...regionArea(2), purpose: 'alert' }];
   h.app.selectedAreas.value = h.props.areas.map((a) => a.id);
   await h.ready;
   h.receive({ state: null });
-  assert.deepEqual(clone(h.app.sites.value.map((site) => site.id)), ['zigbang']);
-  assert.deepEqual(clone(h.app.selectedSites.value), ['zigbang']);
+  assert.deepEqual(clone(h.app.sites.value.map((site) => site.id)), ['naver']);
+  assert.deepEqual(clone(h.app.selectedSites.value), ['naver']);
   h.app.selectedSites.value = ['daangn'];
   assert.equal(h.app.canStart.value, false);
   assert.equal(h.app.plannedJobs.value.length, 0);
-  h.app.selectedSites.value = ['daangn', 'zigbang'];
-  assert.deepEqual(clone(h.app.plannedJobs.value.map(({ areaId, site }) => [areaId, site])), [[1, 'zigbang'], [2, 'zigbang']]);
+  h.app.selectedSites.value = ['daangn', 'naver'];
+  await readNaver(h);
+  assert.deepEqual(clone(h.app.plannedJobs.value.map(({ areaId, site }) => [areaId, site])), [[3, 'naver'], [4, 'naver']]);
   h.app.command('start');
   const start = h.messages.at(-1).data;
-  assert.deepEqual(start.sites, ['zigbang']);
-  assert.equal(start.areas.find((a) => a.id === 2).purpose, 'alert');
-  assert.equal(Object.hasOwn(start, 'naverSourceTabId'), false);
+  assert.deepEqual(start.sites, ['naver']);
+  assert.deepEqual(start.areas.map((a) => a.id), [3, 4], '역 반경과 알림용 지역은 보내지 않는다');
+  assert.equal(start.naverSourceTabId, 99);
 });
 
 test('기존 당근 순회의 수신과 저장 기록을 읽고 다른 범위는 완료로 표시하지 않는다', async (t) => {
@@ -570,18 +574,7 @@ test('이전 당근의 이어하기는 가능하고 함께 저장된 다른 미�
   assert.equal(h.messages.at(-1).data.command, 'retry');
 });
 
-const naverReply = (h, data) => h.receive({ type: 'naver-filter', ...data });
-async function readNaver(h, tabs = [{ id: 99, title: 'Synthetic map', active: false }], context = { key: 'synthetic-key', tabId: 99, conditions: [{ label: '월세', value: '77만원 이하' }] }) {
-  await vue.nextTick();
-  const list = h.messages.at(-1).data;
-  assert.equal(list.type, 'naver-filter-tabs');
-  naverReply(h, { requestId: list.requestId, requestType: 'naver-filter-tabs', tabs });
-  const read = h.messages.at(-1).data;
-  assert.deepEqual([read.type, read.tabId], ['naver-filter-state', context.tabId]);
-  naverReply(h, { requestId: read.requestId, requestType: 'naver-filter-state', context });
-}
-
-test('네이버를 고르면 열린 탭의 필터를 읽은 뒤 구 지역과 역 지역을 한 번에 시작한다', async (t) => {
+test('네이버 조회는 열린 탭의 필터를 읽은 뒤에만 고른 구나 동으로 시작하고 역 반경 지역은 목록에서 뺀다', async (t) => {
   const h = harness(t, NAVER_EXT);
   h.props.areas = [area(1), regionArea(3)];
   h.app.selectedAreas.value = h.props.areas.map((a) => a.id);
@@ -589,59 +582,35 @@ test('네이버를 고르면 열린 탭의 필터를 읽은 뒤 구 지역과 �
   await vue.nextTick();
   h.receive({ state: null });
   assert.deepEqual(clone(h.app.sites.value.map((s) => s.id)), ['naver'], '다방과 직방은 서버 자동수집에 맡기고 KB부동산과 호갱노노는 순회하지 않는다');
-  assert.deepEqual(clone(h.app.selectedSites.value), [], '네이버는 처음에 고르지 않는다');
-  // 지역을 끄면 서버가 직방을 모으지 않아 여기서 고를 수 있다.
-  h.props.areas = [off(area(1)), off(regionArea(3))];
-  await vue.nextTick();
-  h.app.selectedSites.value = ['zigbang'];
-  await vue.nextTick();
-  assert.deepEqual(clone(h.app.skippedAreas.value.map((a) => a.id)), [3]);
-  assert.match(h.app.skipNote.value, /네이버를 고르면/);
-  h.app.selectedSites.value = ['naver', 'zigbang'];
-  await vue.nextTick();
+  assert.deepEqual(clone(h.app.selectedSites.value), ['naver'], '네이버 조회는 네이버를 처음부터 고른다');
+  assert.deepEqual(clone(h.app.naverAreas.value.map((a) => a.id)), [3]);
+  assert.equal(h.app.otherAreaCount.value, 1);
   assert.equal(h.app.canStart.value, false, '필터를 읽기 전에는 시작하지 않는다');
   await readNaver(h);
   assert.equal(h.app.canStart.value, true);
-  assert.deepEqual(clone(h.app.plannedJobs.value.map((j) => [j.areaId, j.site, j.label])), [[1, 'zigbang', '역 1km 원룸'], [3, 'naver', '구 전체']]);
-  assert.equal(h.app.skipNote.value, '');
+  assert.deepEqual(clone(h.app.plannedJobs.value.map((j) => [j.areaId, j.site, j.label])), [[3, 'naver', '구 전체']]);
   h.app.command('start');
   const start = h.messages.at(-1).data;
   assert.equal(start.type, 'browse-command');
-  assert.deepEqual(start.sites, ['naver', 'zigbang']);
-  assert.deepEqual(start.areas, [
-    { id: 1, name: '예시 지역 1', lat: 35.101, lng: 128.1, radiusM: 700 },
-    { id: 3, name: '예시 구역 3', lat: 35.103, lng: 128.1, radiusM: 700, region: { kind: 'gu', code: '99123', name: '예시도 가상구 3' } },
-  ]);
+  assert.deepEqual(start.sites, ['naver']);
+  assert.deepEqual(start.areas, [sentRegion(3)]);
   assert.equal(start.naverSourceTabId, 99);
   assert.equal(start.naverFilterKey, 'synthetic-key');
 });
 
-test('네이버만 고르면 역 지역은 빠지는 지역으로 알리고, 구나 동이 없으면 필터 없이 다른 사이트를 시작한다', async (t) => {
+test('수집용 구나 동이 없으면 네이버 조회를 시작하지 않는다', async (t) => {
   const h = harness(t, NAVER_EXT);
-  h.props.areas = [area(1), regionArea(3, 'dong')];
+  h.props.areas = [area(1), { ...regionArea(2), purpose: 'alert' }];
   h.app.selectedAreas.value = h.props.areas.map((a) => a.id);
   await h.ready;
   h.receive({ state: null });
-  h.app.selectedSites.value = ['naver'];
   await readNaver(h, [{ id: 99, title: 'Synthetic map', active: true }]);
-  assert.deepEqual(clone(h.app.skippedAreas.value.map((a) => a.id)), [1]);
-  assert.match(h.app.skipNote.value, /역 지역은 네이버가 아닌 사이트/);
-  assert.equal(h.app.plannedJobs.value[0].label, '동 전체');
+  assert.deepEqual(clone(h.app.naverAreas.value), []);
+  assert.equal(h.app.otherAreaCount.value, 2);
+  assert.equal(h.app.plannedJobs.value.length, 0);
+  assert.equal(h.app.canStart.value, false);
   h.app.command('start');
-  assert.deepEqual(h.messages.at(-1).data.sites, ['naver']);
-  assert.deepEqual(h.messages.at(-1).data.areas.map((a) => a.id), [3]);
-
-  const stationOnly = harness(t, NAVER_EXT);
-  await stationOnly.ready;
-  stationOnly.receive({ state: null });
-  stationOnly.app.selectedSites.value = ['naver', 'dabang'];
-  await vue.nextTick();
-  assert.equal(stationOnly.app.naverJobs.value.length, 0);
-  assert.equal(stationOnly.app.canStart.value, true, '네이버 작업이 없으면 필터를 기다리지 않는다');
-  stationOnly.app.command('start');
-  const sent = stationOnly.messages.at(-1).data;
-  assert.deepEqual(sent.sites, ['dabang']);
-  assert.equal(Object.hasOwn(sent, 'naverSourceTabId'), false);
+  assert.equal(h.messages.some((m) => m.data.type === 'browse-command'), false);
 });
 
 test('네이버 응답은 마지막 요청만 받고, 닫힌 탭을 다른 탭으로 바꾸지 않으며, 답이 없으면 안내한다', async (t) => {
@@ -705,36 +674,4 @@ test('읽은 네이버 필터와 고른 구나 동을 예약용으로 저장하�
   const old = harness(t, NAVER_EXT);
   await old.ready;
   assert.equal(old.app.naverPresetVersionReady.value, false, '0.8.22 확장에는 대시보드 예약용 저장을 열지 않는다');
-});
-
-test('수집 지역에 구가 있으면 다방은 구 전체 자동수집에 맡기고 순차 조회에서 뺀다', async (t) => {
-  const h = harness(t, { version: '0.8.22', browse: true, sites: ['naver', 'dabang'] });
-  await h.ready;
-  h.receive({ state: null });
-  assert.deepEqual(clone(h.app.sites.value.map((s) => s.id)), ['naver', 'dabang'], '구가 없으면 다방을 그대로 고를 수 있다');
-  h.app.selectedSites.value = ['dabang'];
-  h.props.areas = [area(1), regionArea(3)];
-  h.app.selectedAreas.value = [1, 3];
-  await vue.nextTick();
-  assert.equal(h.app.dabangByServer.value, true);
-  assert.deepEqual(clone(h.app.sites.value.map((s) => s.id)), ['naver']);
-  assert.deepEqual(clone(h.app.selectedSites.value), [], '이미 고른 다방도 선택에서 빠진다');
-  h.props.areas = [area(1), { ...regionArea(3), purpose: 'alert' }];
-  await vue.nextTick();
-  assert.equal(h.app.dabangByServer.value, false, '알림용 지역은 다방 구 전체 수집 대상이 아니다');
-});
-
-test('켜진 구, 동이나 지하철역이 있으면 직방은 서버 자동수집에 맡기고 순차 조회에서 뺀다', async (t) => {
-  const h = harness(t, { version: '0.8.22', browse: true, sites: ['naver', 'zigbang'] });
-  h.props.areas = [off(area(1))];
-  await h.ready;
-  h.receive({ state: null });
-  assert.equal(h.app.zigbangByServer.value, false, '켜진 지역이 없으면 서버가 직방을 모으지 않는다');
-  assert.deepEqual(clone(h.app.sites.value.map((s) => s.id)), ['naver', 'zigbang']);
-  h.app.selectedSites.value = ['zigbang'];
-  h.props.areas = [{ ...area(1), purpose: 'alert' }];
-  await vue.nextTick();
-  assert.equal(h.app.zigbangByServer.value, true, '알림용 지하철역도 서버가 모은다');
-  assert.deepEqual(clone(h.app.sites.value.map((s) => s.id)), ['naver']);
-  assert.deepEqual(clone(h.app.selectedSites.value), [], '이미 고른 직방도 선택에서 빠진다');
 });

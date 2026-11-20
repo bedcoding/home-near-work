@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Area } from '../../../shared/types';
-import { radiusText } from '../format';
 import BrowseAuto from './BrowseAuto.vue';
 import HelpTip from './HelpTip.vue';
 import NaverManual from './NaverManual.vue';
@@ -31,7 +30,8 @@ const receiptText = (r: Receipt) =>
   `서버 응답 ${r.responses}건, 저장 처리 ${r.listings}건${r.uniqueListings !== undefined ? `, 중복 없는 매물 ${r.uniqueListings}건` : ''}`;
 
 // 화면에 늘어놓던 설명은 제목 옆 (?)에 모았다.
-const PANEL_HELP = '크롬 확장이 새 전용 창에서 고른 지역과 사이트를 차례로 확인합니다. PC와 대시보드 서버를 켜 두세요. '
+const PANEL_HELP = '크롬 확장이 새 전용 창에서 고른 구나 동의 네이버 매물 목록을 읽은 필터로 마지막 페이지까지 차례로 받습니다. PC와 대시보드 서버를 켜 두세요. '
+  + "다방과 직방은 '조회하기'가 서버에서 모으고, 역 반경 지역은 네이버로 조회하지 않습니다. "
   + '진행 상황은 아래 진행 표시와 수집 창에서 보고, 확장 아이콘 메뉴에서도 같은 조회를 시작하고 볼 수 있습니다.';
 const NAVER_HELP = '네이버 지도에서 가격과 거래 조건 필터를 적용한 매물 탭을 고르세요. 시작할 때 그 탭 주소에서 필터를 다시 읽어 같을 때만 '
   + '전용 창에 복사하고, 고른 구나 동의 목록을 마지막 페이지까지 확인합니다. 수집 창의 조건이 달라지면 멈춥니다. '
@@ -84,15 +84,11 @@ interface BrowseState {
 }
 type Command = 'start' | 'pause' | 'resume' | 'retry';
 
-const SITES = [
-  // 네이버는 열어 둔 네이버 탭의 필터가 있어야 해서 처음에는 고르지 않는다.
-  { id: 'naver', name: '네이버', mode: '구나 동 전체', defaultOn: false },
-  { id: 'dabang', name: '다방', mode: '기존 동별 원·투룸', defaultOn: true },
-  { id: 'zigbang', name: '직방', mode: '매물 목록', defaultOn: true },
-  // KB부동산과 호갱노노는 매물 목록을 주지 않아 순회에서 뺐다. 매물 카드와 지도 정보 창의 단추로 그 자리 지도를 연다(priceSites.ts).
-];
+// 네이버 조회: 이 순회는 네이버(고른 구나 동 전체 목록)만 돈다. 다방과 직방은 '조회하기'가 서버에서 구, 동, 역 반경까지 모으고,
+// KB부동산과 호갱노노는 매물 카드와 지도 정보 창의 단추로 그 자리 지도만 연다(priceSites.ts). 확장은 예약 조회와 예전 기록 때문에 다른 사이트도 안다.
+const SITES = [{ id: 'naver', name: '네이버', mode: '구나 동 전체', defaultOn: true }];
 /** 지금은 순회에서 뺐지만 확장에 남은 예전 순회 기록에 나올 수 있는 사이트 */
-const PAST_SITES: Record<string, string> = { daangn: '당근부동산', kbland: 'KB부동산', hogangnono: '호갱노노' };
+const PAST_SITES: Record<string, string> = { dabang: '다방', zigbang: '직방', daangn: '당근부동산', kbland: 'KB부동산', hogangnono: '호갱노노' };
 const browseSiteName = (id: string | undefined) => id && Object.hasOwn(PAST_SITES, id) ? PAST_SITES[id] : SITES.find((site) => site.id === id)?.name;
 const STATUS: Record<JobStatus, string> = {
   pending: '대기', running: '조회 중', complete: '선택 목록 저장 완료', partial: '일부 확인', failed: '실패', visited: '화면 확인', 'needs-input': '직접 확인 필요',
@@ -281,29 +277,28 @@ function extensionAtLeast(minor: number, patch: number) {
   return parts.length === 3 && parts.every(Number.isSafeInteger) &&
     (parts[0] > 0 || parts[1] > minor || parts[1] === minor && parts[2] >= patch);
 }
-// 0.8.22부터 대시보드도 열린 네이버 탭의 필터를 읽어 네이버를 다른 사이트와 함께 시작한다.
+// 0.8.22부터 대시보드도 열린 네이버 탭의 필터를 읽어 네이버 조회를 시작한다.
 const naverVersionReady = computed(() => extensionAtLeast(8, 22));
-// 수집 지역에 구가 있으면 다방은 위의 구 전체 자동수집이 모은다. 순차 조회에서 또 돌면 같은 매물을 중복 조회하므로 뺀다.
-const dabangByServer = computed(() => props.areas.some((a) => a.enabled && a.purpose !== 'alert' && a.region?.kind === 'gu'));
-// 켜진 구, 동이나 지하철역이 있으면 직방은 '조회하기'와 자동 확인이 지역 안 역들의 1km 원룸을 서버에서 모은다. 순차 조회에서 또 돌면 중복이라 뺀다.
-const zigbangByServer = computed(() => props.areas.some((a) => a.enabled));
-const sites = computed(() => SITES.filter((s) => (s.id !== 'naver' || naverVersionReady.value) && (s.id !== 'dabang' || !dabangByServer.value)
-  && (s.id !== 'zigbang' || !zigbangByServer.value) && props.extension?.sites.includes(s.id)));
+const sites = computed(() => SITES.filter((s) => naverVersionReady.value && props.extension?.sites.includes(s.id)));
 const naverEnabled = computed(() => !!props.extension?.sites.includes('naver'));
 const naverAvailable = computed(() => sites.value.some((s) => s.id === 'naver'));
+/** 네이버가 보는 지역: 수집용 구와 동(역 반경과 알림용 지역은 네이버로 조회하지 않는다) */
+const naverAreas = computed(() => props.areas.filter((a) => !!a.region && a.purpose !== 'alert'));
+/** 목록에서 뺀 지역 수(역 반경, 알림용) */
+const otherAreaCount = computed(() => props.areas.length - naverAreas.value.length);
 const selectedAreas = ref<number[]>([]);
 const selectedSites = ref<string[]>([]);
+// 다방 동별 범위: 이제 네이버 조회에는 쓰지 않고, 아래 브라우저 예약 조회(BrowseAuto)의 다방 예약에만 넘긴다.
+// 못 불러오면 예약 조회의 다방만 못 고르고 네이버 조회는 그대로 시작할 수 있다.
 const areaScopes = ref<Record<string, DabangRegionScope[]>>({});
 const scopesReady = ref(false);
 const scopesLoading = ref(false);
-const scopeError = ref<string | null>(null);
 let scopeController: AbortController | undefined;
 let scopeTimeout: number | undefined;
 async function loadScopes() {
   if (scopesLoading.value) return;
   scopesReady.value = false;
   scopesLoading.value = true;
-  scopeError.value = null;
   const controller = new AbortController();
   scopeController = controller;
   scopeTimeout = window.setTimeout(() => controller.abort(), 8000);
@@ -324,7 +319,7 @@ async function loadScopes() {
     areaScopes.value = next;
     scopesReady.value = true;
   } catch {
-    scopeError.value = '저장된 동별 조회 범위를 불러오지 못했습니다. 범위가 바뀌지 않도록 시작을 멈췄습니다. 서버 연결을 확인하고 다시 불러와 주세요.';
+    // 범위를 못 읽으면 scopesReady가 false로 남아 예약 조회가 다방 예약을 막는다.
   } finally {
     window.clearTimeout(scopeTimeout);
     scopesLoading.value = false;
@@ -333,7 +328,7 @@ async function loadScopes() {
 }
 let initializedAreas = false;
 let initializedSites = false;
-watch(() => props.areas.map((a) => a.id), (ids) => {
+watch(() => naverAreas.value.map((a) => a.id), (ids) => {
   if (!initializedAreas && ids.length) { selectedAreas.value = [...ids]; initializedAreas = true; }
   else selectedAreas.value = selectedAreas.value.filter((id) => ids.includes(id));
 }, { immediate: true });
@@ -382,49 +377,16 @@ const totals = computed(() => activeState.value?.jobs.reduce((sum, j) => ({
   newCount: sum.newCount + (j.receipt?.newCount ?? 0),
   changedCount: sum.changedCount + (j.receipt?.changedCount ?? 0),
 }), { responses: 0, listings: 0, newCount: 0, changedCount: 0 }));
-const chosenAreas = computed(() => props.areas.filter((a) => selectedAreas.value.includes(a.id)));
+const chosenAreas = computed(() => naverAreas.value.filter((a) => selectedAreas.value.includes(a.id)));
 const chosenSites = computed(() => sites.value.filter((site) => selectedSites.value.includes(site.id)));
-// 확장의 순회 계획과 같은 기준이다.
-function covers(area: Area, site: string) {
-  return area.region ? site === 'naver' && area.purpose !== 'alert' : site !== 'naver';
-}
-/** 고른 사이트가 하나도 안 보는 지역이면 그 까닭(지역 칸을 흐리게 하고 작은 글씨로 보인다). 사이트를 안 골랐으면 흐리게 하지 않는다. */
-const unusedReason = (area: Area): string | null => {
-  if (!chosenSites.value.length || chosenSites.value.some((site) => covers(area, site.id))) return null;
-  if (area.purpose === 'alert' && area.region) return '알림용이라 안 봄';
-  if (!area.region) return '네이버는 역을 안 봄';
-  return '선택한 사이트에서 지원하지 않음';
-};
-function areaScopeLabel(area: Area) {
-  const unused = unusedReason(area);
-  if (unused) return unused;
-  if (area.region) return area.region.kind === 'gu' ? '구 전체' : '법정동 전체';
-  return selectedSites.value.includes('dabang') && areaScopes.value[area.id]?.length ? '동별 범위' : `반경 ${radiusText(area.radiusM)}`;
-}
-const plannedJobs = computed(() => chosenAreas.value.flatMap((area) => chosenSites.value.filter((site) => covers(area, site.id)).flatMap((site) => {
-  if (site.id === 'naver') return [{ key: `${area.id}:naver`, areaId: area.id, site: site.id, areaName: area.name, siteName: site.name,
-    label: area.region?.kind === 'gu' ? '구 전체' : '동 전체', detail: '고른 네이버 탭의 필터로 전체 목록을 마지막 페이지까지 확인', scoped: false }];
-  const regions = site.id === 'dabang' ? [...new Map((areaScopes.value[area.id] ?? [])
-    .map((scope) => [new URL(scope.url).searchParams.get('search_id'), scope])).values()] : [];
-  return regions.length
-    ? regions.map((scope) => ({ key: `${area.id}:${site.id}:${scope.url}`, areaId: area.id, site: site.id, areaName: area.name, siteName: site.name, label: scope.dong, detail: scope.name, scoped: true }))
-    : [{ key: `${area.id}:${site.id}`, areaId: area.id, site: site.id, areaName: area.name, siteName: site.name,
-      label: site.id === 'zigbang' ? '역 1km 원룸' : '지도와 필터 범위',
-      detail: site.id === 'zigbang' ? `알려진 역의 1km 원룸 목록. 지역 설정 반경 ${radiusText(area.radiusM)}와 별개이며 사이트의 현재 필터가 적용됩니다.` : `역 중심 반경 ${radiusText(area.radiusM)}의 지도를 열고 사이트의 현재 필터 범위를 조회`, scoped: false }];
-})));
-const naverJobs = computed(() => plannedJobs.value.filter((job) => job.site === 'naver'));
+const areaScopeLabel = (area: Area) => area.region?.kind === 'gu' ? '구 전체' : '법정동 전체';
+/** 이번 조회의 작업: 고른 구나 동마다 네이버 한 번(확장의 순회 계획과 같은 기준) */
+const plannedJobs = computed(() => chosenSites.value.some((site) => site.id === 'naver')
+  ? chosenAreas.value.map((area) => ({ key: `${area.id}:naver`, areaId: area.id, site: 'naver', areaName: area.name, siteName: '네이버',
+    label: area.region?.kind === 'gu' ? '구 전체' : '동 전체', detail: '고른 네이버 탭의 필터로 전체 목록을 마지막 페이지까지 확인', scoped: false }))
+  : []);
+const naverJobs = plannedJobs;
 const startAreas = computed(() => chosenAreas.value.filter((area) => plannedJobs.value.some((job) => job.areaId === area.id)));
-const skippedAreas = computed(() => chosenAreas.value.filter((area) => !plannedJobs.value.some((job) => job.areaId === area.id)));
-const skipNote = computed(() => {
-  if (!skippedAreas.value.length) return '';
-  const notes = [`이번 조회에서 빠지는 지역: ${skippedAreas.value.map((a) => a.name).join(', ')}.`];
-  if (skippedAreas.value.some((a) => a.region && a.purpose !== 'alert')) notes.push(naverAvailable.value
-    ? '구나 동 전체는 네이버를 고르면 함께 조회합니다.'
-    : '구나 동 전체는 네이버로 조회합니다. 확장에서 네이버를 켜 두고 확장이 0.8.22 이상이면 여기서 고를 수 있습니다.');
-  if (skippedAreas.value.some((a) => a.purpose === 'alert')) notes.push('알림용 지역은 선택한 사이트의 조회 범위에서 제외됩니다.');
-  if (skippedAreas.value.some((a) => !a.region && a.purpose !== 'alert')) notes.push('역 지역은 네이버가 아닌 사이트를 하나 이상 골라야 조회합니다.');
-  return notes.join(' ');
-});
 const runExpanded = ref(false);
 watch(() => [activeState.value?.id, activeState.value?.status, pending.value] as const, ([id, status, command], [previousId]) => {
   if (command || status === 'running' || status === 'paused') runExpanded.value = true;
@@ -434,10 +396,8 @@ const runScopeLabel = computed(() => [...new Set(activeState.value?.jobs.map((jo
 const runDate = computed(() => activeState.value ? new Date(activeState.value.createdAt || activeState.value.updatedAt).toLocaleString('ko-KR', {
   month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
 }) : '');
-const scopeVersionReady = computed(() => !selectedSites.value.includes('dabang') || !chosenAreas.value.some((a) => areaScopes.value[a.id]?.length) || extensionAtLeast(8, 4));
-const zigbangVersionReady = computed(() => !selectedSites.value.includes('zigbang') || extensionAtLeast(8, 9));
 const connectionStale = computed(() => !received.value || !!lastResponse.value && now.value - lastResponse.value > 12000);
-const canStart = computed(() => ready.value && scopesReady.value && scopeVersionReady.value && zigbangVersionReady.value && naverSourceReady.value && !connectionStale.value && !pending.value && !running.value && plannedJobs.value.length > 0);
+const canStart = computed(() => ready.value && naverSourceReady.value && !connectionStale.value && !pending.value && !running.value && plannedJobs.value.length > 0);
 const stateLabel = computed(() => state.value?.status === 'running' ? '지역을 차례로 확인하고 있습니다' : state.value?.status === 'paused' ? '순회를 멈췄습니다' : state.value?.status === 'done' ? '순회가 끝났습니다' : '대기 중');
 const workerStale = computed(() => activeState.value?.status === 'running' && !!activeState.value.heartbeatAt && now.value - activeState.value.heartbeatAt > 20000);
 const seconds = (since: number, until = now.value) => Math.max(0, Math.floor((until - since) / 1000));
@@ -639,10 +599,8 @@ function command(command: Command) {
     window.postMessage({
       source: 'hnw-dashboard', type: 'browse-command', command, requestId: pendingRequestId.value,
       ...(command === 'start' ? {
-        areas: startAreas.value.map(({ id, name, lat, lng, radiusM, region, purpose }) => ({ id, name, lat, lng, radiusM,
-          ...(purpose === 'alert' ? { purpose } : {}),
-          ...(region ? { region: { kind: region.kind, code: region.code, name: region.name } }
-            : areaScopes.value[id] ? { dabangRegions: areaScopes.value[id].map(({ kind, name, dong, url }) => ({ kind, name, dong, url })) } : {}),
+        areas: startAreas.value.map(({ id, name, lat, lng, radiusM, region }) => ({ id, name, lat, lng, radiusM,
+          ...(region ? { region: { kind: region.kind, code: region.code, name: region.name } } : {}),
         })),
         // Vue의 반응형 배열(Proxy)은 postMessage로 복제할 수 없다.
         sites: chosenSites.value.filter((site) => plannedJobs.value.some((job) => job.site === site.id)).map((site) => site.id),
@@ -669,6 +627,8 @@ watch(ready, (v) => { if (v) requestStatus(); });
 onMounted(async () => {
   window.addEventListener('message', onMessage);
   requestStatus();
+  // 네이버는 처음부터 골라져 있어 위 watch가 바뀜을 못 보므로, 창을 열 때 열린 네이버 탭 목록을 바로 불러온다.
+  if (naverChosen.value && ready.value) loadNaverTabs();
   poll = window.setInterval(requestStatus, 2000);
   await loadScopes();
 });
@@ -686,11 +646,11 @@ onBeforeUnmount(() => {
   <section id="browse-queue" class="browse-queue management-shell" aria-labelledby="browse-title">
     <div class="heading">
       <div>
-        <h2 id="browse-title" tabindex="-1">확장프로그램으로 순차 조회<HelpTip :text="PANEL_HELP" /></h2>
+        <h2 id="browse-title" tabindex="-1">네이버 조회<HelpTip :text="PANEL_HELP" /></h2>
       </div>
       <div class="heading-actions">
         <button class="btn btn-sm" @click="emit('manageAreas')">지역 추가와 관리</button>
-        <button class="btn btn-sm" aria-label="지역 순차 조회 닫기" @click="emit('close')">닫기 (Esc)</button>
+        <button class="btn btn-sm" aria-label="네이버 조회 닫기" @click="emit('close')">닫기 (Esc)</button>
       </div>
     </div>
     <p v-if="!extension" class="notice">확장이 설치된 크롬에서 대시보드를 열어 주세요.</p>
@@ -699,41 +659,28 @@ onBeforeUnmount(() => {
       <button class="btn btn-sm" @click="reconnect">연결 다시 확인</button>
     </div>
     <template v-else>
-      <div class="choices">
-        <fieldset :disabled="running || !!pending">
-          <legend>1. 지역 <span class="muted">{{ selectedAreas.length }}곳 선택</span></legend>
-          <p v-if="!areas.length" class="muted">지역 탭에서 조회할 지역을 먼저 켜 주세요.</p>
-          <template v-else>
-            <div v-if="areas.length > 1" class="select-actions">
-              <button type="button" @click="selectedAreas = areas.map((a) => a.id)">모두 선택</button>
-              <button type="button" @click="selectedAreas = []">선택 해제</button>
-            </div>
-            <div class="check-list area-list">
-              <label v-for="a in areas" :key="a.id" :class="{ selected: selectedAreas.includes(a.id), unused: !!unusedReason(a) }">
-                <input v-model="selectedAreas" type="checkbox" :value="a.id">
-                <span>{{ a.name }}<small>{{ areaScopeLabel(a) }}</small></span>
-              </label>
-            </div>
-          </template>
-        </fieldset>
-        <fieldset :disabled="running || !!pending">
-          <legend>2. 사이트 <span class="muted">{{ chosenSites.length }}곳 선택</span></legend>
-          <p v-if="!sites.length" class="muted">확장 아이콘에서 조회할 사이트를 켜 주세요.</p>
-          <div class="check-list site-list">
-            <label v-for="s in sites" :key="s.id" :class="{ selected: selectedSites.includes(s.id) }">
-              <input v-model="selectedSites" type="checkbox" :value="s.id">
-              <span>{{ s.name }}<small>{{ s.mode }}</small></span>
-            </label>
-            <div v-if="naverEnabled && !naverVersionReady" class="icon-site" title="확장이 0.8.22 이상으로 자동 업데이트되면 여기서 고를 수 있습니다. 그 전에는 확장 아이콘 메뉴에서 시작하세요.">
-              <span class="icon-mark" aria-hidden="true"></span>
-              <span>네이버<small>확장 업데이트 후 선택</small></span>
-            </div>
+      <p v-if="!naverEnabled" class="notice">확장 아이콘을 눌러 네이버 부동산을 켜 주세요.</p>
+      <p v-else-if="!naverVersionReady" class="notice">확장이 0.8.22 이상으로 자동 업데이트되면 여기서 시작할 수 있습니다. 그 전에는 확장 아이콘 메뉴에서 시작하세요.</p>
+      <fieldset :disabled="running || !!pending">
+        <legend>1. 지역 <span class="muted">{{ selectedAreas.length }}곳 선택</span></legend>
+        <p v-if="!naverAreas.length" class="muted">지역 탭에서 수집할 구나 동을 먼저 켜 주세요. 네이버는 역 반경 지역을 보지 않습니다.</p>
+        <template v-else>
+          <div v-if="naverAreas.length > 1" class="select-actions">
+            <button type="button" @click="selectedAreas = naverAreas.map((a) => a.id)">모두 선택</button>
+            <button type="button" @click="selectedAreas = []">선택 해제</button>
           </div>
-        </fieldset>
-      </div>
+          <div class="check-list area-list">
+            <label v-for="a in naverAreas" :key="a.id" :class="{ selected: selectedAreas.includes(a.id) }">
+              <input v-model="selectedAreas" type="checkbox" :value="a.id">
+              <span>{{ a.name }}<small>{{ areaScopeLabel(a) }}</small></span>
+            </label>
+          </div>
+          <p v-if="otherAreaCount" class="help">역 반경과 알림용 지역 {{ otherAreaCount }}곳은 네이버로 조회하지 않아 뺐습니다(다방과 직방은 '조회하기'가 모읍니다).</p>
+        </template>
+      </fieldset>
 
       <fieldset v-if="naverChosen" class="naver-source" :disabled="running || !!pending">
-        <legend>3. 네이버 필터 <span class="muted">{{ naverSource ? '읽음' : '확인 필요' }}</span><HelpTip :text="NAVER_HELP" /></legend>
+        <legend>2. 네이버 필터 <span class="muted">{{ naverSource ? '읽음' : '확인 필요' }}</span><HelpTip :text="NAVER_HELP" /></legend>
         <div class="naver-source-row">
           <select aria-label="필터를 읽을 네이버 탭" :disabled="!!naverBusy || !naverTabs.length" @change="chooseNaverTab(($event.target as HTMLSelectElement).value)">
             <option value="" :selected="naverTabId === null">{{ naverTabs.length ? '필터를 적용한 네이버 탭을 고르세요' : '열린 네이버 매물 탭이 없습니다' }}</option>
@@ -752,18 +699,15 @@ onBeforeUnmount(() => {
 
       <div class="launch-panel" aria-label="이번 조회 범위">
         <div class="launch-summary">
-          <div class="section-heading"><h3>이번 조회</h3><span v-if="scopesReady && plannedJobs.length" class="count-badge">예상 {{ plannedJobs.length }}개 조회</span></div>
-          <p v-if="scopesLoading" class="help" role="status">저장된 동별 범위를 불러오는 중입니다.</p>
-          <ol v-else-if="scopesReady && plannedJobs.length" class="planned-jobs">
+          <div class="section-heading"><h3>이번 조회</h3><span v-if="plannedJobs.length" class="count-badge">예상 {{ plannedJobs.length }}개 조회</span></div>
+          <ol v-if="plannedJobs.length" class="planned-jobs">
             <li v-for="(job, index) in plannedJobs" :key="job.key">
               <span class="job-number">{{ index + 1 }}</span>
-              <strong :title="job.detail">{{ job.scoped ? job.label : job.areaName }}</strong>
-              <span class="muted">{{ job.siteName }}, {{ job.scoped ? '원/투룸' : job.label }}</span>
+              <strong :title="job.detail">{{ job.areaName }}</strong>
+              <span class="muted">{{ job.siteName }}, {{ job.label }}</span>
             </li>
           </ol>
-          <p v-else-if="scopesReady" class="help">지역과 사이트를 하나 이상 골라 주세요.</p>
-          <!-- 빠지는 지역은 이름만 한 줄로 보이고, 왜 빠지는지는 (?)에 둔다. -->
-          <p v-if="skippedAreas.length" class="skip-line" role="status">빠짐: {{ skippedAreas.map((a) => a.name).join(', ') }}<HelpTip :text="skipNote" /></p>
+          <p v-else class="help">{{ naverAvailable ? '조회할 구나 동을 하나 이상 골라 주세요.' : '위 안내대로 확장에서 네이버를 쓸 수 있게 해 주세요.' }}</p>
         </div>
         <div class="launch-action">
           <button
@@ -773,11 +717,6 @@ onBeforeUnmount(() => {
           <span v-if="!received && !error" class="help" role="status">확장 연결 확인 중…</span>
           <span v-else-if="naverJobs.length && !naverSourceReady" class="help">네이버 필터를 먼저 읽어 주세요</span>
         </div>
-      </div>
-      <p v-if="scopesReady && !scopeVersionReady" class="notice" role="alert">동별 조회는 확장 0.8.4 이상이 필요합니다. 확장이 자동 업데이트된 뒤 대시보드를 새로고침해 주세요. 현재 연결: {{ extension?.version }}</p>
-      <div v-if="scopeError" class="notice" role="alert">
-        <p>{{ scopeError }}</p>
-        <button class="btn btn-sm" :disabled="scopesLoading" @click="loadScopes">조회 범위 다시 불러오기</button>
       </div>
       <div v-if="error" class="notice" role="alert">
         <p>{{ error }}</p>
@@ -891,7 +830,6 @@ h2 { margin: 0 0 6px; font-size: 22px; }
 h3 { margin: 0; font-size: 16px; }
 p { margin: 0; line-height: 1.6; }
 .heading p { font-size: 14px; }
-.choices { display: grid; grid-template-columns: 1fr 1.2fr; gap: 20px; }
 fieldset { min-width: 0; margin: 0; padding: 12px 16px 16px; border: 1px solid var(--line); border-radius: 10px; }
 legend { font-weight: 700; padding: 0 6px; }
 legend .muted { margin-left: 6px; font-weight: 400; font-size: 13px; }
@@ -899,16 +837,11 @@ legend .muted { margin-left: 6px; font-weight: 400; font-size: 13px; }
 .select-actions button { min-height: 36px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--surface-2); font-size: 13px; }
 .check-list { display: grid; gap: 8px; max-height: 220px; overflow-y: auto; padding: 3px; }
 .area-list { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
-.site-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .check-list label { display: flex; align-items: center; gap: 9px; min-height: 58px; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; font-size: 15px; }
 .check-list label:hover { background: var(--surface-2); }
 .check-list label.selected { background: var(--accent-soft); border-color: #b7ccec; }
-/* 고른 사이트가 안 보는 지역: 흐리게 두고 작은 글씨로 까닭을 보인다(골라 둔 것은 그대로 두어 사이트를 바꾸면 다시 쓰인다). */
-.check-list label.unused { opacity: .5; }
 .check-list input { width: 17px; height: 17px; flex: none; margin: 0; accent-color: var(--accent); }
 .check-list small { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; font-weight: 400; }
-.icon-site { display: flex; align-items: center; gap: 9px; min-height: 58px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; font-size: 15px; }
-.icon-mark { width: 17px; flex: none; text-align: center; color: var(--muted); font-size: 13px; }
 .naver-source { display: grid; gap: 10px; }
 .naver-source-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .naver-preset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
@@ -917,7 +850,6 @@ legend .muted { margin-left: 6px; font-weight: 400; font-size: 13px; }
 .naver-conditions { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
 .naver-conditions li { display: inline-flex; gap: 6px; max-width: 100%; padding: 4px 10px; border-radius: 6px; background: var(--surface-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .naver-conditions li b { color: var(--muted); font-weight: 600; }
-.skip-line { margin: 0; font-size: 13px; color: var(--muted); }
 fieldset:disabled { opacity: .65; }
 fieldset:disabled label { cursor: default; }
 .launch-panel { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 20px 24px; background: var(--accent-soft); border: 1px solid #c9d8ee; border-radius: 10px; }
@@ -978,10 +910,8 @@ summary .muted { margin-left: 6px; font-weight: 400; font-size: 13px; }
 .activity time { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .log-counts { margin-top: 8px; }
 button:disabled { cursor: not-allowed; }
-@media (max-width: 1000px) { .choices { grid-template-columns: 1fr 1.25fr; gap: 12px; } .site-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 720px) {
   .browse-queue { margin: 12px auto; padding: 16px; gap: 16px; }
-  .choices { grid-template-columns: 1fr; }
   .launch-panel { align-items: stretch; flex-direction: column; gap: 20px; padding: 16px; }
   .launch-action { justify-items: stretch; text-align: center; }
   .job-results { grid-template-columns: 1fr; }
