@@ -602,11 +602,13 @@ html[data-design='workspace'] .card .actions .btn {
   font-size: 11px;
 }
 
-html[data-design='workspace'] .card .more {
+html[data-design='workspace'] .card .more,
+html[data-design='workspace'] .card .links {
   gap: 2px 4px;
 }
 
-html[data-design='workspace'] .card .more .btn {
+html[data-design='workspace'] .card .more .btn,
+html[data-design='workspace'] .card .links .btn {
   min-height: 29px;
   padding-inline: 7px;
   font-size: 11px;
@@ -701,13 +703,15 @@ html[data-design='workspace'] .card.selected .btn-primary:hover:not(:disabled) {
 }
 
 html[data-design='workspace'] .card.selected .btn-ghost,
-html[data-design='workspace'] .card.selected .more .btn {
+html[data-design='workspace'] .card.selected .more .btn,
+html[data-design='workspace'] .card.selected .links .btn {
   border-color: transparent;
   background: transparent;
   color: #cedcf0;
 }
 
-html[data-design='workspace'] .card.selected .more .btn:hover:not(:disabled) {
+html[data-design='workspace'] .card.selected .more .btn:hover:not(:disabled),
+html[data-design='workspace'] .card.selected .links .btn:hover:not(:disabled) {
   background: #38516f;
   color: #fff;
 }
@@ -1037,6 +1041,7 @@ html[data-design='workspace'] .toast.err {
   html[data-design='workspace'] .btn,
   html[data-design='workspace'] .card .actions .btn,
   html[data-design='workspace'] .card .more .btn,
+  html[data-design='workspace'] .card .links .btn,
   html[data-design='workspace'] .platform,
   html[data-design='workspace'] .area-chip,
   html[data-design='workspace'] .chip-btn,

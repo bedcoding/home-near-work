@@ -344,23 +344,27 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       </div>
 
       <div class="more" @click.stop>
-        <a
-          v-for="s in siteLinks" :key="s.name" class="btn btn-sm site-link" :href="s.url" target="_blank" rel="noopener"
-          :title="`${s.name}에서 이 물건 보기`"
-        >{{ s.name }} ↗</a>
         <button v-if="l.sourceShot" class="btn btn-ghost btn-sm" title="이 매물을 어디서 어떻게 모았는지" @click="emit('source')">출처 보기</button>
         <button class="btn btn-ghost btn-sm" title="사이트가 준 원래 값과 저장한 값 비교" @click="emit('raw')">원본 데이터</button>
-        <a v-if="naver" class="btn btn-ghost btn-sm" :href="naver.url" target="_blank" rel="noopener" :title="naver.title">{{ naver.label }}</a>
-        <a v-if="naverMap" class="btn btn-ghost btn-sm" :href="naverMap.url" target="_blank" rel="noopener" :title="naverMap.title">{{ naverMap.label }}</a>
-        <a
-          v-for="p in priceSites" :key="p.url" class="btn btn-ghost btn-sm" :href="p.url" target="_blank" rel="noopener"
-          :title="p.title"
-        >{{ p.label }}</a>
-        <a
-          v-for="p in addressSites" :key="p.label" class="btn btn-ghost btn-sm" :href="p.url" target="_blank" rel="noopener"
-          :title="p.title" @click="p.copy && copyText(p.copy)"
-        >{{ p.label }}</a>
       </div>
+    </div>
+
+    <!-- 다른 사이트로 가는 링크는 '원본 열기' 단추 줄 바로 위에 한 줄로 둔다. -->
+    <div class="links" @click.stop>
+      <a
+        v-for="s in siteLinks" :key="s.name" class="btn btn-sm site-link" :href="s.url" target="_blank" rel="noopener"
+        :title="`${s.name}에서 이 물건 보기`"
+      >{{ s.name }} ↗</a>
+      <a v-if="naver" class="btn btn-ghost btn-sm" :href="naver.url" target="_blank" rel="noopener" :title="naver.title">{{ naver.label }}</a>
+      <a v-if="naverMap" class="btn btn-ghost btn-sm" :href="naverMap.url" target="_blank" rel="noopener" :title="naverMap.title">{{ naverMap.label }}</a>
+      <a
+        v-for="p in priceSites" :key="p.url" class="btn btn-ghost btn-sm" :href="p.url" target="_blank" rel="noopener"
+        :title="p.title"
+      >{{ p.label }}</a>
+      <a
+        v-for="p in addressSites" :key="p.label" class="btn btn-ghost btn-sm" :href="p.url" target="_blank" rel="noopener"
+        :title="p.title" @click="p.copy && copyText(p.copy)"
+      >{{ p.label }}</a>
     </div>
 
     <div class="actions" @click.stop>
@@ -390,12 +394,15 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 
 <style scoped>
 .selection-label { display: none; }
-/* 넓으면 버튼을 오른쪽 위에 한 줄로 두고 그 아래 작은 버튼들. 좁으면(지도 옆 목록) 버튼을 주소 줄 아래 맨 밑에 한 줄로 둔다. */
+/*
+ * 넓으면 오른쪽 위에 다른 사이트 링크 줄, 그 아래 버튼 한 줄, 맨 아래 작은 버튼들.
+ * 좁으면(지도 옆 목록) 주소 줄 아래에 다른 사이트 링크 줄, 그 아래 맨 밑에 버튼 한 줄을 둔다.
+ */
 .card {
   display: grid; gap: 6px 16px; align-items: start;
   grid-template-columns: 112px minmax(0, 1fr) auto;
   grid-template-areas:
-    'thumb stats actions'
+    'thumb stats links'
     'thumb tags  actions'
     'thumb meta  more';
   padding: 12px 14px; background: var(--surface);
@@ -404,7 +411,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 .card.no-thumb {
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
-    'stats actions'
+    'stats links'
     'tags  actions'
     'meta  more';
 }
@@ -422,8 +429,10 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 .tags { grid-area: tags; }
 .meta { grid-area: meta; }
 .more { grid-area: more; }
-/* 작은 버튼 줄(다른 사이트, 출처, 원본 데이터, 지도)은 마우스를 올리거나 고른 카드에서만 보인다. 자리는 그대로 둔다. */
+/* 작은 버튼 줄(출처 보기, 원본 데이터)은 마우스를 올리거나 고른 카드에서만 보인다. 자리는 그대로 둔다. */
 .card:not(:hover):not(:focus-within):not(.selected) .more { visibility: hidden; }
+/* 다른 사이트로 가는 링크 줄(경매 사이트, 네이버, KB부동산, 호갱노노, 집품, 부동산플래닛)은 버튼 줄 바로 위에 늘 보인다. */
+.links { grid-area: links; }
 .actions { grid-area: actions; }
 
 /* 숫자 줄: 칸 너비를 정해 두어 카드끼리 같은 자리에 같은 값이 온다(값이 길면 그 칸만 늘어남). */
@@ -468,9 +477,9 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 .meta .addr-load { min-height: 0; padding: 0 6px; margin-left: -10px; font-size: 12px; line-height: 1.6; }
 .meta .addr-error { color: var(--new); }
 
-.more { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
-.more .btn { min-height: 30px; padding: 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; }
-.more .site-link { margin-right: 4px; padding: 0 10px; color: var(--accent); font-weight: 700; }
+.more, .links { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
+.more .btn, .links .btn { min-height: 30px; padding: 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.links .site-link { margin-right: 4px; padding: 0 10px; color: var(--accent); font-weight: 700; }
 .actions { display: flex; justify-content: flex-end; gap: 6px; }
 .actions .on { background: var(--star-soft); border-color: var(--star); }
 .actions .contact.on { background: var(--contact-soft); border-color: var(--contact); }
@@ -487,7 +496,8 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 }
 /*
  * 목록 칸 너비에 맞춘다(매물 탭과 경매 탭은 지도 옆이라 좁다). 버튼을 세로로 쌓으면 카드가 버튼 높이만큼 길어져서,
- * 버튼은 주소 줄 아래 맨 밑에 한 줄로 두고(넘치면 다음 줄), 작은 버튼들은 넓을 때처럼 주소 줄 오른쪽에 둔다.
+ * 버튼은 주소 줄 아래 맨 밑에 한 줄로 두고(넘치면 다음 줄), 그 바로 위에 다른 사이트 링크 줄을 둔다.
+ * 작은 버튼들(출처 보기, 원본 데이터)은 넓을 때처럼 주소 줄 오른쪽에 둔다.
  */
 @container (max-width: 1060px) {
   .card {
@@ -496,6 +506,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       'thumb stats   stats'
       'thumb tags    tags'
       'thumb meta    more'
+      'thumb links   links'
       'thumb actions actions';
   }
   .card.no-thumb {
@@ -504,17 +515,20 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
       'stats   stats'
       'tags    tags'
       'meta    more'
+      'links   links'
       'actions actions';
   }
   .actions { flex-wrap: nowrap; justify-content: flex-start; }
+  /* 링크 글자를 아래 버튼의 왼쪽 끝에 맞춘다(링크 단추의 안쪽 여백만큼 당김). */
+  .links { justify-content: flex-start; margin-left: -8px; }
 }
 /* 더 좁으면 사진은 숫자 줄 옆에만 두고, 주소와 버튼은 카드 너비를 다 쓴다. 숫자 칸도 조금 좁힌다. */
 @container (max-width: 780px) {
   .card {
     grid-template-columns: 88px minmax(0, 1fr);
-    grid-template-areas: 'thumb stats' 'thumb tags' 'meta meta' 'actions actions' 'more more';
+    grid-template-areas: 'thumb stats' 'thumb tags' 'meta meta' 'links links' 'actions actions' 'more more';
   }
-  .card.no-thumb { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'stats' 'tags' 'meta' 'actions' 'more'; }
+  .card.no-thumb { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'stats' 'tags' 'meta' 'links' 'actions' 'more'; }
   .thumb { width: 88px; height: 66px; }
   .stats { column-gap: 14px; }
   .stat { min-width: 64px; }
@@ -527,7 +541,7 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
   .more { justify-content: flex-start; margin-left: -8px; }
 }
 @container (max-width: 480px) {
-  .card { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'thumb' 'stats' 'tags' 'meta' 'actions' 'more'; }
+  .card { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'thumb' 'stats' 'tags' 'meta' 'links' 'actions' 'more'; }
   .thumb { width: 100%; height: 160px; }
 }
 </style>
