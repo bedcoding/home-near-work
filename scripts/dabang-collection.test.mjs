@@ -116,6 +116,47 @@ test('malformed responses, missing coordinates, contradictory last-page flags an
   assert.throws(() => new DabangPagination().accept(body(1, 4001, [101, 102]), 1, 'apt'), /한도/);
 });
 
+test('only short pages in a coherent pass can be rechecked and their matching rows can fill the gap', () => {
+  const p = new DabangPagination();
+  p.accept(body(1, 5, [101]), 1, 'one-two');
+  assert.deepEqual(p.pagesToRecheck(), []);
+  p.accept(body(2, 5, [103, 104]), 2, 'one-two');
+  p.accept(body(3, 5, [105]), 3, 'one-two');
+  assert.deepEqual(p.pagesToRecheck(), [1]);
+  const { added } = p.recheck(body(1, 5, [101, 102]), 1, 'one-two');
+  assert.deepEqual([...added], ['102']);
+  assert.deepEqual(p.pagesToRecheck(), []);
+  assert.equal(p.result().complete, true);
+  assert.equal(p.result().pages, 3);
+  assert.throws(() => p.recheck(body(1, 5, [101, 102]), 1, 'one-two'), /다시 확인할 페이지가 아닙니다/);
+});
+
+test('rechecks reject list drift, prior price changes and IDs already seen on other pages', () => {
+  const fixture = () => {
+    const p = new DabangPagination();
+    p.accept(body(1, 7, [101, 103], { limit: 3 }), 1, 'one-two');
+    p.accept(body(2, 7, [104, 105, 106], { limit: 3 }), 2, 'one-two');
+    p.accept(body(3, 7, [107], { limit: 3, hasMore: false }), 3, 'one-two');
+    return p;
+  };
+  for (const rejected of [
+    body(1, 7, [101, 102, 103]),
+    body(1, 8, [101, 102, 103], { limit: 3 }),
+    body(1, 7, [101, 102, 103], { limit: 3, region: { id: 'example' } }),
+    body(1, 7, [101, 102, 103], { limit: 3, roomList: [{ ...row(101), priceTitle: '500/40' }, row(102), row(103)] }),
+    body(1, 7, [103, 102, 101], { limit: 3 }),
+    body(1, 7, [101, 102, 104], { limit: 3 }),
+    body(1, 7, [101, 103, 104], { limit: 3 }),
+  ]) {
+    const p = fixture();
+    assert.deepEqual(p.pagesToRecheck(), [1]);
+    assert.throws(() => p.recheck(rejected, 1, 'one-two'), /달라짐/);
+    assert.deepEqual([...p.ids], ['101', '103', '104', '105', '106', '107']);
+    assert.equal(p.result().complete, false);
+    assert.deepEqual(p.pagesToRecheck(), []);
+  }
+});
+
 test('normalisation preserves the residential category and its matching map link', () => {
   for (const [category, type, route] of [['apt', '아파트', 'apt'], ['house-villa', '빌라와 주택', 'house'], ['officetel', '오피스텔', 'officetel']]) {
     const parsed = parseDabangRoomList(body(1, 1, [101]), category);
@@ -139,6 +180,12 @@ function collectorFixture(mode = 'ok') {
     const first = u.pathname.includes('one-two');
     if (mode === 'blocked') return { status: 429, ok: false };
     if (mode === 'partial' && first && page === 2) throw new Error('synthetic network error');
+    if (mode.startsWith('short-') && first) {
+      const recheck = requests.filter(request => request.href === u.href).length > 1;
+      if (recheck && (mode === 'short-403' || mode === 'short-429')) return { status: Number(mode.slice(-3)), ok: false };
+      const ids = page === 1 ? (recheck && mode === 'short-fixed' ? [101, 102] : [101]) : [103];
+      return { status: 200, ok: true, text: async () => body(page, 3, ids) };
+    }
     if ((mode === 'priced' || mode === 'conflicting-trade') && first) {
       const filters = JSON.parse(u.searchParams.get('filters'));
       const leaseId = mode === 'conflicting-trade' ? 101 : 111;
@@ -182,6 +229,39 @@ test('collector reads all categories and pages, retains incidental advertising a
   assert.equal(f.coverage.filter(row => row.complete).length, 4);
   assert.equal(f.savedFiles.filter(([name]) => name.endsWith('coverage.json')).length, 4);
   assert.equal(f.collector.retainMissing, true);
+});
+
+test('collector rechecks only the short page once and saves only confirmed additional rows', async () => {
+  const fixed = collectorFixture('short-fixed');
+  const published = [];
+  fixed.ctx.publishListings = items => published.push(...Array.from(items, item => item.listing.sourceId));
+  const items = await fixed.collector.collect(fixed.ctx);
+  const listRequests = fixed.requests.filter(url => url.pathname.includes('one-two'));
+  assert.deepEqual(listRequests.map(url => url.searchParams.get('page')), ['1', '2', '1']);
+  assert.equal(listRequests[0].href, listRequests[2].href);
+  assert.equal(fixed.savedFiles.filter(([name]) => name.endsWith('-recheck.json')).length, 1);
+  assert.deepEqual(Array.from(items, item => item.listing.sourceId), ['101', '103', '102']);
+  assert.deepEqual(published, ['101', '103', '102']);
+  assert.equal(fixed.coverage.findLast(row => row.category === 'one-two').complete, true);
+  assert.equal(fixed.partial.length, 0);
+
+  const short = collectorFixture('short-stays');
+  await short.collector.collect(short.ctx);
+  assert.equal(short.requests.filter(url => url.pathname.includes('one-two')).length, 3);
+  assert.equal(short.coverage.findLast(row => row.category === 'one-two').complete, false);
+  assert.match(short.partial[0][0], /응답이 1건 적음/);
+});
+
+test('403 and 429 on the one recheck retain prior rows and stop the collector', async () => {
+  for (const status of [403, 429]) {
+    const f = collectorFixture(`short-${status}`);
+    const items = await f.collector.collect(f.ctx);
+    assert.deepEqual(Array.from(items, item => item.listing.sourceId), ['101', '103']);
+    assert.deepEqual(f.requests.map(url => url.searchParams.get('page')), ['1', '2', '1']);
+    assert.equal(f.coverage.findLast(row => row.category === 'one-two').complete, false);
+    assert.match(f.partial[0][0], new RegExp(String(status)));
+    assert.equal(f.partial[0][1], false);
+  }
 });
 
 test('price-scoped runs retain eligible incidental rows and report unverified regular replies as partial', async () => {

@@ -67,6 +67,10 @@ function listScope(url: URL): string {
   return `${url.pathname}?${query}`;
 }
 
+function listHouses(groups: Record<string, unknown>): any[] {
+  return Object.values(groups).flatMap(group => Object.values(group ?? {}).flat());
+}
+
 /** 원 → 만원 */
 const manwon = (value: unknown) => {
   const n = toNumber(value);
@@ -160,17 +164,31 @@ export const peterpanz: Collector = {
     let current = new Map<string, any>();
     let total = 0;
     let pagesLoaded = 0;
-    const receivedPages = new Set<number>();
+    let receivedPages = new Map<number, Set<string>>();
+    let listChanged = false;
     let bounds: unknown = null;
     let firstPageUrl: string | null = null;
     let firstPageScope: string | null = null;
     let orderId: string | null = null;
     let blockedStatus: number | null = null;
     let viewVersion = 0;
+    let requestedPageUrl: string | null = null;
     const requestViews = new WeakMap<Request, number>();
     const pending: Promise<void>[] = [];
+    const rememberPage = (index: number, houses: any[]) => {
+      const ids = new Set<string>();
+      for (const house of houses) if (house?.hidx) {
+        const id = String(house.hidx);
+        ids.add(id);
+        current.set(id, house);
+      }
+      pagesLoaded = Math.max(pagesLoaded, index);
+      receivedPages.set(index, ids);
+    };
     const onRequest = (request: Request) => {
-      if (listUrl(request.url())) requestViews.set(request, viewVersion);
+      const url = listUrl(request.url());
+      // 직접 확인한 응답은 반환값에서 한 번만 처리한다. 1쪽을 다시 받을 때 기존 페이지 기록을 유지한다.
+      if (url && url.href !== requestedPageUrl) requestViews.set(request, viewVersion);
     };
     const onResponse = (r: Response) => {
       const url = r.url();
@@ -195,7 +213,7 @@ export const peterpanz: Collector = {
           if (!Number.isInteger(pageIndex) || pageIndex < 1) return;
           const scope = listScope(parsed);
           if (pageIndex !== 1 && scope !== firstPageScope) return;
-          const houses = Object.values(data.houses).flatMap((g: any) => Object.values(g ?? {}).flat()) as any[];
+          const houses = listHouses(data.houses);
           if (!collecting) {
             session.record('peterpanz', 'data', url, r.status(), `화면 이동 중에 불러온 목록 ${houses.length}건(전체 ${data.totalCount ?? '?'}건), 저장 안 함`);
             return;
@@ -204,16 +222,17 @@ export const peterpanz: Collector = {
             // 지도가 옮겨질 때마다 1쪽부터 다시 불러오므로 새로 시작한다.
             current = new Map();
             total = count;
+            listChanged = false;
             bounds = data.debug?.search ?? null;
             pagesLoaded = 0;
-            receivedPages.clear();
+            receivedPages = new Map();
             firstPageUrl = url;
             firstPageScope = scope;
             orderId = data.orderId != null ? String(data.orderId) : null;
+          } else if (count !== total || (data.orderId != null && String(data.orderId) !== orderId)) {
+            listChanged = true;
           }
-          for (const h of houses) if (h?.hidx) current.set(String(h.hidx), h);
-          pagesLoaded = Math.max(pagesLoaded, pageIndex);
-          receivedPages.add(pageIndex);
+          rememberPage(pageIndex, houses);
           session.record('peterpanz', 'data', url, r.status(), `목록 ${pageIndex}쪽 ${houses.length}건 (전체 ${data.totalCount ?? '?'}건)`);
         })(),
       );
@@ -221,6 +240,29 @@ export const peterpanz: Collector = {
     const settle = async () => {
       await Promise.allSettled(pending.splice(0));
       if (blockedStatus) throw new BlockedError(`피터팬이 목록 요청을 막았습니다(HTTP ${blockedStatus}). 우회하지 않고 멈춥니다.`);
+    };
+    const fetchListPage = async (firstUrl: string, pageIndex: number) => {
+      const next = new URL(firstUrl);
+      next.searchParams.set('pageIndex', String(pageIndex));
+      if (orderId) next.searchParams.set('order_id', orderId);
+      requestedPageUrl = next.href;
+      try {
+        const response: { status: number; json: any } = await page.evaluate(async (url) => {
+          const result = await fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(15000) });
+          const type = result.headers.get('content-type') ?? '';
+          const json = result.ok && type.includes('json') ? await result.json().catch(() => null) : null;
+          return { status: result.status, json };
+        }, next.href);
+        if (response.status === 403 || response.status === 429) {
+          throw new BlockedError(`피터팬이 요청을 막았습니다(HTTP ${response.status}). 우회하지 않고 멈춥니다.`);
+        }
+        return { ...response, url: next.href };
+      } catch (error) {
+        if (error instanceof BlockedError || ctx.stopped?.()) throw error;
+        return { status: 0, json: null, url: next.href };
+      } finally {
+        requestedPageUrl = null;
+      }
     };
 
     page.on('request', onRequest);
@@ -236,6 +278,7 @@ export const peterpanz: Collector = {
           const scope = { areaId: area.id, areaName: area.name, category: cat.path, label: cat.label, stored: 0 };
           const district = area.region?.kind === 'gu';
           const target = peterpanzTargetBounds(area);
+          const visitedViews: PeterpanzBounds[] = [];
           const confirmedViews: PeterpanzBounds[] = [];
           const viewReceipts: { pages: number; totalPages: number; total: number }[] = [];
           const ids = new Set<string>();
@@ -246,20 +289,19 @@ export const peterpanz: Collector = {
           };
           const reportScope = () => {
             if (ctx.stopped?.()) reportIssue('조회가 중단됨', false);
-            if (!ctx.stopped?.() && target && viewReceipts.length && remainingPeterpanzBounds(target, confirmedViews).length) {
-              const view = confirmedViews[0] ?? parsePeterpanzBounds(bounds);
-              const shortages = view && viewReceipts.length === 1 ? peterpanzBoundsShortages(target, view) : [];
+            if (!ctx.stopped?.() && target && visitedViews.length && remainingPeterpanzBounds(target, visitedViews).length) {
+              const shortages = visitedViews.length === 1 ? peterpanzBoundsShortages(target, visitedViews[0]) : [];
               if (shortages.length) {
                 reportIssue(`${district ? '구 경계' : `반경 ${area.radiusM}m`} 중 ${shortages.join(', ')}`, false);
-              } else if (confirmedViews.length) {
-                reportIssue(`지도 ${viewReceipts.length}곳을 조회했지만 ${district ? '구 경계' : '설정 반경'}에 미확인 구간이 남음`, false);
+              } else {
+                reportIssue(`지도 ${visitedViews.length}곳을 조회했지만 ${district ? '구 경계' : '설정 반경'}에 미확인 구간이 남음`, false);
               }
             }
             ctx.coverage?.({ ...scope,
               pages: viewReceipts.reduce((sum, view) => sum + view.pages, 0),
               totalPages: viewReceipts.length ? viewReceipts.reduce((sum, view) => sum + view.totalPages, 0) : null,
               total: viewReceipts.length === 1 ? viewReceipts[0].total : null, received: ids.size,
-              complete: !issues.length, reason: issues.join(', ') || (district
+              complete: !issues.length && !!target && !remainingPeterpanzBounds(target, confirmedViews).length, reason: issues.join(', ') || (district
                 ? `지도 ${viewReceipts.length}곳에서 구 경계를 덮고 목록을 확인함`
                 : `설정 반경 ${area.radiusM}m의 지도 목록 확인`),
             }, [...ids]);
@@ -269,8 +311,9 @@ export const peterpanz: Collector = {
             if (ctx.stopped?.()) break;
             current = new Map();
             total = 0;
+            listChanged = false;
             pagesLoaded = 0;
-            receivedPages.clear();
+            receivedPages = new Map();
             bounds = null;
             firstPageUrl = null;
             firstPageScope = null;
@@ -285,10 +328,14 @@ export const peterpanz: Collector = {
               if (!view || !target) reportIssue('지도 조회 범위를 확인하지 못함');
 
               const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-              const confirmedPages = [...receivedPages].filter(pageIndex => pageIndex <= totalPages).length;
+              const confirmed = [...receivedPages].filter(([pageIndex]) => pageIndex <= totalPages);
+              const confirmedPages = confirmed.length;
               if (confirmedPages < totalPages) reportIssue(`목록 ${totalPages}쪽 중 ${confirmedPages}쪽만 확인`);
+              if (listChanged) reportIssue('조회 중에 목록 전체 건수 또는 정렬 기준이 바뀜');
+              const confirmedIds = new Set(confirmed.flatMap(([, ids]) => [...ids]));
               ctx.log(`피터팬: ${area.name} ${cat.label} 목록 ${total}건 중 ${current.size}건 읽음`);
               if (current.size !== total) reportIssue(`목록 전체 ${total}건, 고유 매물 ${current.size}건 수신`);
+              else if (confirmedIds.size !== total) reportIssue(`목록 전체 ${total}건 중 페이지별 고유 매물 ${confirmedIds.size}건 확인`);
 
               const pageUrl = page.url();
               for (const raw of current.values()) {
@@ -299,7 +346,10 @@ export const peterpanz: Collector = {
                 }
               }
               viewReceipts.push({ pages: confirmedPages, totalPages, total });
-              if (view && issues.length === initialIssueCount && !ctx.stopped?.()) confirmedViews.push(view);
+              if (view) {
+                visitedViews.push(view);
+                if (issues.length === initialIssueCount && !ctx.stopped?.()) confirmedViews.push(view);
+              }
             };
 
             // 1) 지역이나 아직 못 읽은 구간의 지도를 연다.
@@ -395,25 +445,55 @@ export const peterpanz: Collector = {
               for (const pageIndex of missingPages) {
                 if (ctx.stopped?.()) break;
                 if (receivedPages.has(pageIndex)) continue;
-                const next = new URL(firstPageUrl);
-                next.searchParams.set('pageIndex', String(pageIndex));
-                if (orderId) next.searchParams.set('order_id', orderId);
                 ctx.progress(`피터팬, ${area.name}, ${cat.label}, 나머지 ${pageIndex}/${pageLimit}쪽 이어 받는 중`);
-                const res: { status: number; json: any } = await page.evaluate(async (u) => {
-                  const r = await fetch(u, { credentials: 'omit' });
-                  const type = r.headers.get('content-type') ?? '';
-                  return { status: r.status, json: type.includes('json') ? await r.json() : null };
-                }, next.toString());
-                if (res.status === 403 || res.status === 429) throw new BlockedError(`피터팬이 요청을 막았습니다(HTTP ${res.status}). 우회하지 않고 멈춥니다.`);
-                if (res.status >= 400 || !res.json?.houses || typeof res.json.houses !== 'object') {
+                const list = receivedPages;
+                const res = await fetchListPage(firstPageUrl, pageIndex);
+                await settle();
+                if (receivedPages !== list) {
+                  reportIssue('이어 받는 중에 지도 목록이 바뀜');
+                  break;
+                }
+                if (res.status < 200 || res.status >= 300 || !res.json?.houses || typeof res.json.houses !== 'object') {
                   reportIssue(`${pageIndex}쪽 응답을 읽지 못함`);
                   break;
                 }
-                const houses = Object.values(res.json?.houses ?? {}).flatMap((g: any) => Object.values(g ?? {}).flat()) as any[];
-                for (const h of houses) if (h?.hidx) current.set(String(h.hidx), h);
-                receivedPages.add(pageIndex);
-                session.record('peterpanz', 'data', next.toString(), res.status, `휠로 안 불러와져 이어 받은 목록 ${pageIndex}쪽 ${houses.length}건`);
+                const count = toNumber(res.json.totalCount);
+                if ((count !== null && count !== total) || (res.json.orderId != null && String(res.json.orderId) !== orderId)) listChanged = true;
+                const houses = listHouses(res.json.houses);
+                rememberPage(pageIndex, houses);
+                session.record('peterpanz', 'data', res.url, res.status, `휠로 안 불러와져 이어 받은 목록 ${pageIndex}쪽 ${houses.length}건`);
                 if (!ctx.stopped?.()) await session.pause(1500);
+                await settle();
+              }
+            }
+            // 페이지 번호가 모두 있어도 짧게 받은 페이지가 있으면 그 페이지만 한 번 더 확인한다.
+            if (firstPageUrl && !listChanged && current.size < total &&
+                pageLimit === Math.ceil(total / PAGE_SIZE) && receivedPages.size === pageLimit) {
+              for (let pageIndex = 1; pageIndex <= pageLimit && !ctx.stopped?.() && current.size < total; pageIndex++) {
+                const previous = receivedPages.get(pageIndex);
+                const expected = Math.min(PAGE_SIZE, total - (pageIndex - 1) * PAGE_SIZE);
+                if (!previous || previous.size >= expected) continue;
+                await session.pause(1500);
+                if (ctx.stopped?.()) break;
+                ctx.progress(`피터팬, ${area.name}, ${cat.label}, 매물이 부족했던 ${pageIndex}쪽 재확인`);
+                const list = receivedPages;
+                const res = await fetchListPage(firstPageUrl, pageIndex);
+                await settle();
+                if (receivedPages !== list) {
+                  reportIssue('재확인 중에 지도 목록이 바뀜');
+                  break;
+                }
+                if (res.status < 200 || res.status >= 300 || !res.json?.houses || typeof res.json.houses !== 'object') continue;
+                const count = toNumber(res.json.totalCount);
+                if (count !== total || (res.json.orderId != null && String(res.json.orderId) !== orderId)) {
+                  listChanged = true;
+                  break;
+                }
+                const houses = listHouses(res.json.houses);
+                const retryIds = new Set(houses.filter(house => house?.hidx).map(house => String(house.hidx)));
+                if (retryIds.size !== expected || ![...previous].every(id => retryIds.has(id))) continue;
+                rememberPage(pageIndex, houses);
+                session.record('peterpanz', 'data', res.url, res.status, `부족했던 목록 ${pageIndex}쪽 ${retryIds.size}건 재확인`);
               }
             }
             await settle();
@@ -424,9 +504,12 @@ export const peterpanz: Collector = {
             recordResults(shot);
             if (ctx.stopped?.()) break;
             await session.pause(PAGE_DELAY_MS);
-            if (!district || !target || issues.length !== initialIssueCount) break;
-            const view = confirmedViews.at(-1);
-            const desired = view && nextPeterpanzViewCenter(target, remainingPeterpanzBounds(target, confirmedViews), view);
+            if (!district || !target) break;
+            const view = visitedViews.at(-1);
+            const gaps = remainingPeterpanzBounds(target, visitedViews);
+            const addedArea = view && remainingPeterpanzBounds(target, visitedViews.slice(0, -1)).some(gap =>
+              gap.west < view.east && gap.east > view.west && gap.south < view.north && gap.north > view.south);
+            const desired = view && addedArea && nextPeterpanzViewCenter(target, gaps, view);
             if (!view || !desired) break;
             const actual = peterpanzBoundsCenter(view);
             focus = { ...area, lat: focus.lat + desired.lat - actual.lat, lng: focus.lng + desired.lng - actual.lng };

@@ -128,6 +128,20 @@ export function dabangListUrl(category: DabangCategory, bounds: DabangBounds, pa
   })}`;
 }
 
+function readPage(body: string, requestedPage: number, category: DabangCategory) {
+  let success = false;
+  try { success = JSON.parse(body)?.code === 200; } catch { /* handled below */ }
+  if (!success) throw new Error('사이트가 정상 목록 응답을 반환하지 않았습니다');
+  const parsed = parseDabangRoomList(body, category);
+  if (!parsed || parsed.page !== requestedPage || parsed.total === null || parsed.limit === null || parsed.hasMore === null)
+    throw new Error('목록 페이지, 총건수, 마지막 페이지 정보를 확인하지 못했습니다');
+  return { ...parsed, total: parsed.total, limit: parsed.limit, hasMore: parsed.hasMore };
+}
+
+function regularPrices(parsed: ReturnType<typeof readPage>) {
+  return new Map(parsed.items.slice(0, parsed.regularCount).map(({ listing }) => [listing.sourceId, JSON.stringify(listing.prices)]));
+}
+
 /** Never infer completeness from the last visible page alone. */
 export class DabangPagination {
   pages = 0;
@@ -136,14 +150,11 @@ export class DabangPagination {
   readonly ids = new Set<string>();
   private signatures = new Set<string>();
   private issues = new Set<string>();
+  private shortPages = new Map<number, { expected: number; ids: string[]; prices: Map<string, string>; region: string }>();
+  private rechecked = new Set<number>();
   private last = false;
   accept(body: string, requestedPage: number, category: DabangCategory) {
-    let success = false;
-    try { success = JSON.parse(body)?.code === 200; } catch { /* handled below */ }
-    if (!success) throw new Error('사이트가 정상 목록 응답을 반환하지 않았습니다');
-    const parsed = parseDabangRoomList(body, category);
-    if (!parsed || parsed.page !== requestedPage || parsed.total === null || parsed.limit === null || parsed.hasMore === null)
-      throw new Error('목록 페이지·총건수·마지막 페이지 정보를 확인하지 못했습니다');
+    const parsed = readPage(body, requestedPage, category);
     if (requestedPage !== this.pages + 1) throw new Error('페이지 순서가 이어지지 않습니다');
     if (this.total !== null && (this.total !== parsed.total || this.limit !== parsed.limit)) this.issues.add('조회 중 총건수 또는 페이지 크기가 바뀜');
     this.total ??= parsed.total;
@@ -158,10 +169,45 @@ export class DabangPagination {
     const repeated = !!signature && this.signatures.has(signature);
     if (repeated) this.issues.add('같은 목록 페이지가 반복됨');
     this.signatures.add(signature);
-    for (const id of parsed.regularIds) this.ids.add(id);
+    for (const id of parsed.regularIds) {
+      if (this.ids.has(id)) this.issues.add('목록에서 같은 매물 번호가 겹침');
+      this.ids.add(id);
+    }
+    const expected = Math.min(parsed.limit, Math.max(0, parsed.total - (requestedPage - 1) * parsed.limit));
+    if (parsed.regularCount < expected && !parsed.unreadableRegular) {
+      this.shortPages.set(requestedPage, { expected, ids: parsed.regularIds, prices: regularPrices(parsed), region: JSON.stringify(parsed.region) });
+    }
+    if (parsed.regularCount > expected) this.issues.add('목록 페이지가 예상 건수를 넘음');
     this.pages += 1;
     this.last = !parsed.hasMore;
-    return { parsed, more: parsed.hasMore && !repeated && consistentLastPage, totalPages: pages };
+    return { parsed, expected, more: parsed.hasMore && !repeated && consistentLastPage, totalPages: pages };
+  }
+  pagesToRecheck() {
+    if (!this.last || this.issues.size || this.total === null || this.limit === null || this.ids.size >= this.total ||
+      this.pages !== Math.max(1, Math.ceil(this.total / this.limit))) return [];
+    return [...this.shortPages.keys()].filter(page => !this.rechecked.has(page));
+  }
+  recheck(body: string, page: number, category: DabangCategory) {
+    const original = this.shortPages.get(page);
+    if (!original || !this.last || this.issues.size || this.rechecked.has(page)) throw new Error('다시 확인할 페이지가 아닙니다');
+    this.rechecked.add(page);
+    const parsed = readPage(body, page, category);
+    const { regularIds } = parsed;
+    const originalIds = new Set(original.ids);
+    const added = regularIds.filter(id => !originalIds.has(id));
+    const kept = regularIds.filter(id => originalIds.has(id));
+    const prices = regularPrices(parsed);
+    // The original rows must remain in order. A new ID from any other page indicates a shifted page boundary.
+    if (parsed.total !== this.total || parsed.limit !== this.limit || parsed.hasMore !== (page < this.pages) ||
+      JSON.stringify(parsed.region) !== original.region ||
+      parsed.unreadableRegular || regularIds.length !== parsed.regularCount || regularIds.length > original.expected ||
+      new Set(regularIds).size !== regularIds.length || kept.length !== original.ids.length ||
+      kept.some((id, index) => id !== original.ids[index] || prices.get(id) !== original.prices.get(id)) ||
+      added.some(id => this.ids.has(id))) {
+      throw new Error('페이지 재확인 중 목록 정보, 매물 순서 또는 가격이 달라짐');
+    }
+    for (const id of added) this.ids.add(id);
+    return { parsed, added: new Set(added) };
   }
   result() {
     const issues = [...this.issues];

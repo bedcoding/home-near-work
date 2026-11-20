@@ -11,6 +11,7 @@ const noop = async () => {};
 const toNumber = (v) => v == null || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null;
 const common = {
   '../config.js': { PAGE_DELAY_MS: 0, LOCAL: {} },
+  '../peterpanz-coverage.js': peterpanzCoverage,
   './types.js': { BlockedError, toNumber },
   '../../shared/format.js': { priceText: () => '', floorText: () => '', money: String, yesNo: String },
 };
@@ -100,9 +101,10 @@ test('ziptoss distinguishes completed station pages from administrative coverage
   assert.match(coverage[1].reason, /구나 동 전체 범위/);
 });
 
-async function collectZiptossMap({ block = false, cancel = false } = {}) {
+async function collectZiptossMap({ block = false, cancel = false, district = null, shortWithoutEnd = false, duplicate = false } = {}) {
   const { ziptoss } = load('ziptoss.ts', {
     '../geo.js': { distanceM: (lat, lng, otherLat, otherLng) => Math.hypot(lat - otherLat, lng - otherLng) * 100000 },
+    '../peterpanz-coverage.js': { ...peterpanzCoverage, peterpanzTargetBounds: () => district },
     '../station-catalog.js': { knownStations: () => [{ name: 'SyntheticStation', lat: 1, lng: 1 }] },
   });
   const frame = {};
@@ -110,24 +112,31 @@ async function collectZiptossMap({ block = false, cancel = false } = {}) {
   const opened = [];
   const receipts = [];
   let listingPage = 0;
+  let mapVisits = 0;
+  let focus = { lat: 1, lng: 1 };
   let evaluations = 0;
   let stopped = false;
   const row = id => ({ id, building: { point: { coordinates: [1, 1] } }, prices: [] });
-  async function emit(number, { status = 200, west = '0.99', center = '1', pathname = '/api/zp/search', sort = 'recent' } = {}) {
-    const uri = `https://ziptoss.com${pathname}?zoom=3&page=${number}&minLat=0.99&maxLat=1.01&minLng=${west}&maxLng=1.01&lat=1&lng=${center}&sort=${sort}`;
+  async function emit(number, { status = 200, west = focus.lng - 0.01, center = focus.lng, pathname = '/api/zp/search', sort = 'recent', count = 50, malformed = false, repeatFirst = false } = {}) {
+    const uri = `https://ziptoss.com${pathname}?zoom=3&page=${number}&minLat=${focus.lat - 0.01}&maxLat=${focus.lat + 0.01}&minLng=${west}&maxLng=${focus.lng + 0.01}&lat=${focus.lat}&lng=${center}${sort ? `&sort=${sort}` : ''}`;
     const req = { resourceType: () => 'xhr', method: () => 'GET', url: () => uri, frame: () => frame };
     events.get('request')(req);
-    const listings = Array.from({ length: 50 }, (_, index) => row((number - 1) * 50 + index + 1));
-    await events.get('response')({ request: () => req, url: () => uri, status: () => status, json: async () => listings });
+    const listings = Array.from({ length: count }, (_, index) => row((mapVisits - 1) * 1000 + (repeatFirst ? 0 : (number - 1) * 50) + index + 1));
+    await events.get('response')({ request: () => req, url: () => uri, status: () => status, json: async () => malformed ? {} : listings });
   }
   const ctx = context({
     goto: async (_source, url) => {
-      opened.push(new URL(url).pathname);
+      const u = new URL(url);
+      opened.push(u.pathname);
       if (opened.at(-1) === '/') {
+        mapVisits++;
+        focus = { lat: Number(u.searchParams.get('lat')), lng: Number(u.searchParams.get('lng')) };
         listingPage = 1;
         await emit(1, { pathname: '/other' });
-        await emit(1, { center: '1.01' });
-        await emit(1);
+        await emit(1, { center: focus.lng + 0.01 });
+        await emit(1, { sort: '', count: 0 });
+        await emit(1, { malformed: true });
+        await emit(1, { count: district ? 10 : 50 });
       }
       return { status: () => 200 };
     },
@@ -137,10 +146,12 @@ async function collectZiptossMap({ block = false, cancel = false } = {}) {
         stopped = true;
         return;
       }
+      if (district && shortWithoutEnd && mapVisits === 1) return;
       listingPage++;
-      await emit(listingPage, { west: '0.985', status: 429 });
+      await emit(listingPage, { west: focus.lng - 0.015, status: 429 });
       await emit(listingPage, { sort: 'other', status: 429 });
-      await emit(listingPage, { status: block ? 429 : 200 });
+      const repeatFirst = duplicate && listingPage === 2;
+      await emit(listingPage, { status: block ? 429 : 200, count: repeatFirst ? 1 : district ? 0 : 50, repeatFirst });
     },
     page: {
       on: (event, callback) => events.set(event, callback),
@@ -152,7 +163,7 @@ async function collectZiptossMap({ block = false, cancel = false } = {}) {
       waitForLoadState: noop, waitForFunction: noop, waitForTimeout: noop,
     },
   });
-  Object.assign(ctx.areas[0], { id: 1, region: { kind: 'gu' } });
+  Object.assign(ctx.areas[0], { id: 1, region: { kind: 'gu', code: '99001' } });
   if (block || cancel) ctx.areas.push({ ...ctx.areas[0], id: 2, name: 'SyntheticAreaB' });
   ctx.stopped = () => stopped;
   ctx.coverage = (receipt, ids) => receipts.push({ receipt, ids });
@@ -160,15 +171,15 @@ async function collectZiptossMap({ block = false, cancel = false } = {}) {
   return { items, opened, receipts, partials: ctx.partials, listeners: events.size, listingPage };
 }
 
-test('ziptoss folds four bounded pages into the station results and keeps the district unconfirmed', async () => {
+test('ziptoss uses the sorted list, saves bounded pages, and keeps the district unconfirmed', async () => {
   const result = await collectZiptossMap();
-  assert.equal(result.listingPage, 4);
-  assert.equal(result.items.length, 200);
+  assert.equal(result.listingPage, 12);
+  assert.equal(result.items.length, 600);
   assert.match(result.items[0].pageUrl, /\/map\//);
   assert.equal(result.listeners, 0);
   const { receipt, ids } = result.receipts.find(x => x.receipt.category === 'map-window');
-  assert.equal(ids.length, 200);
-  assert.equal(receipt.pages, 4);
+  assert.equal(ids.length, 600);
+  assert.equal(receipt.pages, 12);
   assert.equal(receipt.total, null);
   assert.equal(receipt.complete, false);
   assert.deepEqual(result.partials, []);
@@ -186,6 +197,27 @@ test('ziptoss preserves station and prior map results on access limits and cance
     assert.equal(map.complete, false);
     assert.match(map.reason, options.block ? /HTTP 429/ : /조회 중단/);
   }
+});
+
+test('ziptoss only confirms the district after verified terminal pages cover every map gap', async () => {
+  const district = { west: 0.984, south: 0.993, east: 1.016, north: 1.007 };
+  const complete = await collectZiptossMap({ district });
+  const coverage = complete.receipts.find(x => x.receipt.category === 'map-window');
+  assert.ok(complete.opened.filter(path => path === '/').length > 1);
+  assert.equal(coverage.receipt.complete, true);
+  assert.equal(coverage.ids.length, complete.items.length);
+  assert.equal(complete.receipts.find(x => x.receipt.category === 'station-pages').receipt.complete, true);
+
+  const partial = await collectZiptossMap({ district, shortWithoutEnd: true });
+  assert.ok(partial.opened.filter(path => path === '/').length > 1, 'continue to other map gaps after an incomplete window');
+  const map = partial.receipts.find(x => x.receipt.category === 'map-window').receipt;
+  assert.equal(map.complete, false);
+  assert.match(map.reason, /목록 끝 표시.*미확인/);
+
+  const overlapping = await collectZiptossMap({ district, duplicate: true });
+  const repeated = overlapping.receipts.find(x => x.receipt.category === 'map-window').receipt;
+  assert.equal(repeated.complete, false, 'a terminal response cannot certify repeated rows within the same list');
+  assert.match(repeated.reason, /목록 안에서 매물 1건이 반복됨/);
 });
 
 async function collectMangrove(secondRooms) {
@@ -284,7 +316,8 @@ test('gobang marks a stalled list with missing rows partial', async () => {
 });
 
 async function collectPeterpanz({ narrow = false, shortList = false, empty = false, skipped = false, recoverSkipped = false,
-  wrongMap = false, missingRows = false, stopOnContinuation = false, district = false } = {}) {
+  wrongMap = false, missingRows = false, stopOnContinuation = false, district = false, incompleteDistrict = false,
+  truncated = false, recheck = 'stable' } = {}) {
   const districtBounds = { west: 0.99, south: 0.99, east: 1.01, north: 1.01 };
   const { peterpanz } = load('peterpanz.ts', { '../peterpanz-coverage.js': {
     ...peterpanzCoverage,
@@ -302,6 +335,7 @@ async function collectPeterpanz({ narrow = false, shortList = false, empty = fal
       // 줌 15 지도(남북 약 2.7km). narrow는 반경 500m를 다 덮지 못하는 좁은 지도.
       const span = wrongMap ? 0.1 : 0.012;
       const { x: lng } = JSON.parse(new URL(url).searchParams.get('center'));
+      const firstDistrictView = district && lng <= 1.005;
       mapCenters.push(lng);
       const responseFor = (pageIndex, ids) => {
         const request = { url: () => `https://api.peterpanz.com/houses/area${district ? '/pc' : ''}?pageIndex=${pageIndex}` };
@@ -309,7 +343,8 @@ async function collectPeterpanz({ narrow = false, shortList = false, empty = fal
         return {
           request: () => request, url: request.url, status: () => 200,
           json: async () => ({
-            totalCount: district ? 2 : empty ? 0 : skipped ? 101 : shortList ? 51 : 1,
+            totalCount: district ? 2 : empty ? 0 : skipped ? 101 : shortList || truncated ? 51 : 1,
+            ...(truncated && { orderId: 'synthetic-order' }),
             houses: missingRows ? null : { group: { rows: ids.map(hidx => ({ hidx })) } },
             debug: { search: { latitudeFrom: 1 - span, latitudeTo: 1 + span,
               longitudeFrom: lng - (district ? 0.018 : narrow ? 0.001 : span), longitudeTo: lng + (district ? 0.004 : span) } },
@@ -317,10 +352,15 @@ async function collectPeterpanz({ narrow = false, shortList = false, empty = fal
         };
       };
       const emit = (pageIndex, ids) => listeners.get('response')(responseFor(pageIndex, ids));
-      emit(1, district ? (lng > 1.005 ? [2, 3] : [1, 2]) : empty ? [] : [1]);
-      if (district && lng <= 1.005) lateFirstPage = responseFor(1, [90, 91]);
-      if (district && lng > 1.005) listeners.get('response')(lateFirstPage);
+      if (district) {
+        emit(1, firstDistrictView ? incompleteDistrict ? [1] : [1, 2] : [2, 3]);
+        if (firstDistrictView) lateFirstPage = responseFor(1, [90, 91]);
+        else listeners.get('response')(lateFirstPage);
+      } else {
+        emit(1, empty ? [] : truncated ? Array.from({ length: 49 }, (_, index) => index + 1) : [1]);
+      }
       if (skipped) emit(3, Array.from({ length: 100 }, (_, index) => index + 2));
+      if (truncated) emit(2, [51]);
       return { status: () => 200 };
     },
     page: {
@@ -333,6 +373,16 @@ async function collectPeterpanz({ narrow = false, shortList = false, empty = fal
         if (stopOnContinuation) {
           stopped = true;
           throw new Error('Synthetic page closed');
+        }
+        if (truncated && pageIndex === 1) {
+          assert.equal(new URL(arg).searchParams.get('order_id'), 'synthetic-order');
+          if (recheck === 'blocked') return { status: 429, json: null };
+          const body = { totalCount: 51, orderId: recheck === 'changed-order' ? 'another-order' : 'synthetic-order',
+            houses: { group: { rows: Array.from({ length: 50 }, (_, index) => ({ hidx: index + (recheck === 'changed-list' ? 2 : 1) })) } } };
+          const request = { url: () => arg };
+          listeners.get('request')(request);
+          listeners.get('response')({ request: () => request, url: request.url, status: () => 200, json: async () => body });
+          return { status: 200, json: body };
         }
         if (recoverSkipped && pageIndex === 2) return { status: 200, json: { houses: { group: { rows: [{ hidx: 2 }] } } } };
         return { status: 500, json: null };
@@ -416,6 +466,40 @@ test('peterpanz collects the uncovered part of a district and deduplicates overl
     assert.equal(row.received, 3);
     assert.equal(ids.join(), '1,2,3');
   }
+});
+
+test('peterpanz checks the next district window after an underfilled list without marking the district complete', async () => {
+  const result = await collectPeterpanz({ district: true, incompleteDistrict: true });
+  assert.equal(result.mapCenters.length, 6);
+  assert.deepEqual(result.continuationPages, [1, 1, 1], 'retry only the underfilled page in each first window');
+  assert.equal(result.items.length, 3);
+  assert.ok(result.coverage.every(({ row, ids }) => !row.complete && row.pages === 2 &&
+    ids.join() === '1,2,3' && !row.reason.includes('미확인 구간')));
+});
+
+test('peterpanz retries only the underfilled page and accepts recovery in the same ordered list', async () => {
+  const result = await collectPeterpanz({ truncated: true });
+  assert.deepEqual(result.continuationPages, [1, 1, 1]);
+  assert.ok(result.coverage.every(({ row }) => row.complete && row.pages === 2 && row.received === 51));
+  assert.equal(result.items.length, 51);
+});
+
+test('peterpanz does not certify a retry with changed ordering or missing previously received IDs', async () => {
+  for (const recheck of ['changed-order', 'changed-list']) {
+    const result = await collectPeterpanz({ truncated: true, recheck });
+    assert.deepEqual(result.continuationPages, [1, 1, 1]);
+    assert.ok(result.coverage.every(({ row }) => !row.complete && row.pages === 2 && row.received === 50));
+    assert.equal(result.items.length, 50);
+  }
+});
+
+test('peterpanz stops after a denied recheck and keeps the previously received pages', async () => {
+  const result = await collectPeterpanz({ truncated: true, recheck: 'blocked' });
+  assert.deepEqual(result.continuationPages, [1]);
+  assert.equal(result.mapCenters.length, 1);
+  assert.equal(result.items.length, 50);
+  assert.equal(result.coverage[0].row.complete, false);
+  assert.match(result.coverage[0].row.reason, /HTTP 429/);
 });
 
 const trustDeps = { './trust-docs.js': { readTrustDocs: noop } };

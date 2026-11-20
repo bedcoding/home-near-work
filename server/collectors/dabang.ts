@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { RUNS_DIR, PAGE_DELAY_MS } from '../config.js';
 import { DABANG_CATEGORIES, DABANG_HEADERS, dabangListUrl, DabangPagination, dabangPriceScopes, dabangPricesMatch, dabangTargets } from '../dabang-client.js';
+import type { DabangRoomList } from '../dabang-parse.js';
 import type { CollectionCoverage } from '../../shared/types.js';
 import type { CollectedItem, Collector } from './types.js';
 
@@ -44,6 +45,45 @@ export const dabang: Collector = {
           openedCategory = category.id;
         }
         let screenshot: string | null = null;
+        const readListPage = async (page: number, recheck = false) => {
+          const requestUrl = dabangListUrl(category.id, bounds, page, scope);
+          let response: Response;
+          try { response = await fetch(requestUrl, { headers: DABANG_HEADERS, signal: AbortSignal.timeout(20000) }); }
+          catch { ctx.session.record('dabang', 'data', requestUrl, null, '목록 응답 시간 초과 또는 연결 실패'); throw new Error('목록 응답을 받지 못했습니다'); }
+          ctx.session.record('dabang', 'data', requestUrl, response.status, `${area.name}, ${label}, ${page}페이지${recheck ? ' 재확인' : ''}`);
+          if (response.status === 403 || response.status === 429) { blocked = true; throw new Error(`사이트 응답 ${response.status}: 잠시 후 다시 확인해 주세요`); }
+          if (!response.ok) throw new Error(`목록 응답 오류 ${response.status}`);
+          const body = await response.text();
+          fs.writeFileSync(path.join(dir, `${area.id}-${key}-${page}${recheck ? '-recheck' : ''}.json`), body);
+          return { body, requestUrl };
+        };
+        const saveRows = (parsed: DabangRoomList, requestUrl: string, recovered?: ReadonlySet<string>) => {
+          const regularIds = hasLimits ? new Set(parsed.regularIds) : null;
+          const received = ctx.publishListings ? new Map<string, CollectedItem>() : null;
+          for (const item of parsed.items) {
+            const { sourceId, prices } = item.listing;
+            if (recovered && !recovered.has(sourceId)) continue;
+            if (limits && regularIds) {
+              const regular = regularIds.delete(sourceId);
+              const verified = regular && dabangPricesMatch(prices, limits, scope);
+              if (regular && !verified) unverified.add(sourceId);
+              if (!dabangPricesMatch(prices, limits)) continue;
+              const prior = items.get(sourceId);
+              // One ID has one trade in the source row. Keep earlier verified data if scopes disagree.
+              if (prior && verifiedPriceIds.has(sourceId) && (!verified || prior.listing.prices[0]?.deal !== prices[0]?.deal)) {
+                if (verified) unverified.add(sourceId);
+                ids.add(sourceId);
+                continue;
+              }
+              if (verified) verifiedPriceIds.add(sourceId);
+            }
+            ids.add(sourceId);
+            const collected = { ...item, pageUrl: requestUrl, screenshot };
+            items.set(sourceId, collected);
+            received?.set(sourceId, collected);
+          }
+          if (received?.size) ctx.publishListings?.([...received.values()]);
+        };
         const publish = (): CollectionCoverage => {
           const result = pagination.result();
           const priceProblem = unverified.size ? `일반 매물 ${unverified.size}건이 조회한 가격 또는 거래 조건과 일치하는지 확인하지 못함` : '';
@@ -58,45 +98,25 @@ export const dabang: Collector = {
           for (let page = 1; page <= 2000; page++) {
             if (ctx.stopped?.()) { failure = '중단함'; break; }
             ctx.progress(`다방, ${area.name}, ${label}, ${page}페이지 읽는 중 (고유 ${ids.size}건)`);
-            const requestUrl = dabangListUrl(category.id, bounds, page, scope);
-            let response: Response;
-            try { response = await fetch(requestUrl, { headers: DABANG_HEADERS, signal: AbortSignal.timeout(20000) }); }
-            catch { ctx.session.record('dabang', 'data', requestUrl, null, '목록 응답 시간 초과 또는 연결 실패'); throw new Error('목록 응답을 받지 못했습니다'); }
-            ctx.session.record('dabang', 'data', requestUrl, response.status, `${area.name}, ${label}, ${page}페이지`);
-            if (response.status === 403 || response.status === 429) { blocked = true; throw new Error(`사이트 응답 ${response.status}: 잠시 후 다시 확인해 주세요`); }
-            if (!response.ok) throw new Error(`목록 응답 오류 ${response.status}`);
-            const body = await response.text();
-            fs.writeFileSync(path.join(dir, `${area.id}-${key}-${page}.json`), body);
-            const { parsed, more, totalPages } = pagination.accept(body, page, category.id);
-            const regularIds = hasLimits ? new Set(parsed.regularIds) : null;
-            const received = ctx.publishListings ? new Map<string, CollectedItem>() : null;
-            for (const item of parsed.items) {
-              const { sourceId, prices } = item.listing;
-              if (limits && regularIds) {
-                const regular = regularIds.delete(sourceId);
-                const verified = regular && dabangPricesMatch(prices, limits, scope);
-                if (regular && !verified) unverified.add(sourceId);
-                if (!dabangPricesMatch(prices, limits)) continue;
-                const prior = items.get(sourceId);
-                // One ID has one trade in the source row. Keep earlier verified data if scopes disagree.
-                if (prior && verifiedPriceIds.has(sourceId) && (!verified || prior.listing.prices[0]?.deal !== prices[0]?.deal)) {
-                  if (verified) unverified.add(sourceId);
-                  ids.add(sourceId);
-                  continue;
-                }
-                if (verified) verifiedPriceIds.add(sourceId);
-              }
-              ids.add(sourceId);
-              const collected = { ...item, pageUrl: requestUrl, screenshot };
-              items.set(sourceId, collected);
-              received?.set(sourceId, collected);
-            }
-            if (received?.size) ctx.publishListings?.([...received.values()]);
-            ctx.log(`다방 ${area.name} ${label}: ${page}/${totalPages}페이지, 일반 ${parsed.regularCount}건, 누적 고유 ${pagination.ids.size}/${parsed.total}건`);
+            const { body, requestUrl } = await readListPage(page);
+            const { parsed, expected, more, totalPages } = pagination.accept(body, page, category.id);
+            saveRows(parsed, requestUrl);
+            ctx.log(`다방 ${area.name} ${label}: ${page}/${totalPages}페이지, 일반 ${parsed.regularCount}/${expected}건, 누적 고유 ${pagination.ids.size}/${parsed.total}건`);
             ctx.coverage?.({ areaId: area.id, areaName: area.name, category: key, label,
               pages: page, totalPages, total: parsed.total, received: pagination.ids.size, stored: 0, complete: false, reason: '목록 조회 중, 수집 후 서버 저장 확인' }, [...ids]);
             if (!more) break;
             await ctx.session.page.waitForTimeout(PAGE_DELAY_MS);
+          }
+          const shortPages = failure || unverified.size ? [] : pagination.pagesToRecheck();
+          for (const page of shortPages) {
+            if (ctx.stopped?.()) { failure = '중단함'; break; }
+            await ctx.session.page.waitForTimeout(PAGE_DELAY_MS);
+            if (ctx.stopped?.()) { failure = '중단함'; break; }
+            ctx.progress(`다방, ${area.name}, ${label}, 건수가 부족했던 ${page}페이지 재확인 중`);
+            const { body, requestUrl } = await readListPage(page, true);
+            const { parsed, added } = pagination.recheck(body, page, category.id);
+            saveRows(parsed, requestUrl, added);
+            ctx.log(`다방 ${area.name} ${label}: ${page}페이지 재확인, 추가 ${added.size}건, 누적 고유 ${pagination.ids.size}/${parsed.total}건`);
           }
           screenshot = await ctx.session.screenshot('dabang', `${area.id}-${key}`);
           for (const id of ids) { const item = items.get(id); if (item) item.screenshot = screenshot; }
