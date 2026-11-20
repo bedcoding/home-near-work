@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { addressSiteLinks, priceSiteLinks, searchAddressOf } from '../web/src/priceSites.ts';
+import { addressSiteLinks, areaAddressOf, priceSiteLinks, searchAddressOf } from '../web/src/priceSites.ts';
 
 // 가상의 매물(좌표는 서울 근처의 아무 자리)
 const at = (buildingType, lat = 37.5665, lng = 126.978) => ({ lat, lng, buildingType });
@@ -65,8 +65,35 @@ test('번지 있는 매물에 집품 검색 링크와 부동산플래닛 주소 
   assert.match(planet.title, /Ctrl\+V/);
 });
 
-test('토지와 상가는 집품(집 리뷰) 없이 부동산플래닛만, 동까지만 있으면 둘 다 없다', () => {
+test('토지와 상가는 집품(집 리뷰) 없이 부동산플래닛만 둔다', () => {
   assert.deepEqual(addressSiteLinks({ buildingType: '토지: 대지' }, '서울특별시 노원구 예시동 101').map((b) => b.label), ['부동산플래닛 ↗']);
   assert.deepEqual(addressSiteLinks({ buildingType: '상업용: 근린상가' }, '서울특별시 노원구 예시동 101').map((b) => b.label), ['부동산플래닛 ↗']);
-  assert.deepEqual(addressSiteLinks({ buildingType: '빌라' }, '노원구 예시동'), []);
+});
+
+test('번지 없이 동까지만 있으면 시도, 구, 동까지 남긴다', () => {
+  assert.equal(areaAddressOf('노원구 예시동'), '서울 노원구 예시동');
+  assert.equal(areaAddressOf('서울시 은평구 예시동2가'), '서울 은평구 예시동2가');
+  assert.equal(areaAddressOf('서울특별시 노원구 예시동 101 예시마을 3층 302호'), '서울 노원구 예시동', '번지는 뺀다');
+  assert.equal(areaAddressOf('예시동2가 예시타워'), null, '구가 없다');
+  assert.equal(areaAddressOf('노원구'), null, '동이 없다');
+  assert.equal(areaAddressOf(null), null);
+});
+
+test('동까지만 있는 매물은 집품을 동 검색으로, 부동산플래닛은 동 이름을 복사해 연다', () => {
+  const [zippoom, planet] = addressSiteLinks({ buildingType: '빌라' }, '노원구 예시동');
+  assert.equal(zippoom.url, `https://zippoom.com/search/${encodeURIComponent('서울 노원구 예시동')}?searchWithAddress=false`);
+  assert.match(zippoom.title, /이 동\(서울 노원구 예시동\)으로/);
+  assert.equal(planet.url, 'https://map.bdsplanet.com/');
+  assert.equal(planet.copy, '서울 노원구 예시동');
+  assert.match(planet.title, /그 동 건물들이 추천에 뜨고/);
+  assert.deepEqual(addressSiteLinks({ buildingType: '빌라' }, '예시동2가 예시타워'), [], '구를 모르면 없다');
+});
+
+test('주소 칸이 비었거나 구가 빠진 매물은 동 이름과 좌표가 든 서울 구로 동을 만든다', () => {
+  // 좌표는 서울시청 근처(중구), 동 이름은 지어낸 값
+  const planet = addressSiteLinks({ buildingType: '빌라', dong: '예시동', lat: 37.5665, lng: 126.978 }, null).at(-1);
+  assert.equal(planet.copy, '서울 중구 예시동');
+  assert.equal(addressSiteLinks({ buildingType: '빌라', dong: '예시동2가', lat: 37.5665, lng: 126.978 }, '예시동2가 예시타워').at(-1).copy, '서울 중구 예시동2가');
+  assert.deepEqual(addressSiteLinks({ buildingType: '빌라', dong: '예시동', lat: 35.1, lng: 129.0 }, null), [], '서울 밖 좌표');
+  assert.deepEqual(addressSiteLinks({ buildingType: '빌라', dong: null, lat: 37.5665, lng: 126.978 }, null), [], '동 이름이 없다');
 });

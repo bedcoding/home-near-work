@@ -885,7 +885,7 @@ function popup(g: Group, items: ListingView[]) {
     // 네이버 단지 단추는 단지 매물이거나 같은 자리 단지를 찾으면 그 단지 화면을 연다(naverLink).
     // 네이버 지도 단추는 네이버 지도에서 이 매물 좌표를 찾아 핀을 찍어 연다(naverMapLink).
     // KB부동산과 호갱노노 단추는 두 사이트 지도를 이 매물 자리 가운데로 연다(priceSiteLinks).
-    // 집품과 부동산플래닛 단추는 번지까지 있는 주소가 있을 때만 붙는다(addressSiteLinks). 부동산플래닛은 주소를 복사하고 연다.
+    // 집품과 부동산플래닛 단추는 번지까지 있으면 그 건물로, 동까지만 있으면 그 동으로 연다(addressSiteLinks). 부동산플래닛은 주소를 복사하고 연다.
     const address = l.address ?? dabangAddresses.get(l.id);
     const links: (SiteButton | null)[] = [naverLink(l), naverMapLink(l), ...priceSiteLinks(l), ...addressSiteLinks(l, address)];
     for (const link of links) {

@@ -105,7 +105,7 @@ const naver = computed(() => naverLink(l.value));
 const naverMap = computed(() => naverMapLink(l.value));
 /** 'KB부동산', '호갱노노' 단추: 두 사이트 지도를 이 매물 자리 가운데로 열어 주변 시세를 본다 */
 const priceSites = computed(() => priceSiteLinks(l.value));
-/** '집품', '부동산플래닛' 단추: 번지까지 있는 주소(다방은 '주소 보기'로 받은 지번 포함)가 있을 때만 */
+/** '집품', '부동산플래닛' 단추: 번지까지 있으면 그 건물로, 동까지만 있으면 그 동으로 연다(다방은 '주소 보기'로 받은 주소도 본다) */
 const addressSites = computed(() => addressSiteLinks(l.value, l.value.address ?? dabangAddresses.get(l.value.id)));
 /** 경매 물건을 다른 경매 사이트에서 여는 주소 */
 const siteLinks = computed(() => auctionSiteLinks(props.listing));

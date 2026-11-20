@@ -1,3 +1,4 @@
+import { pointInGeometry, regionBoundaries } from '../../shared/region-geometry';
 import { SEOUL_GUS, type ListingView } from '../../shared/types';
 import { kindOf } from './kinds';
 import { coord, type NaverLink } from './naverPlaces';
@@ -13,8 +14,9 @@ import { coord, type NaverLink } from './naverPlaces';
 // - 부동산플래닛: 검색창에 주소를 넣으면 그 건물 화면으로 가지만, 검색어를 주소창으로 넘기는 방법이 없다.
 //   건물 화면 주소(map.bdsplanet.com/내부값/N/Z/1/0)는 사이트가 필지 번호를 바꾼 값이라 만들 수 없어서,
 //   주소를 복사해 두고 실거래가 지도를 연다(검색창에 붙여 넣으면 됨). 지도 주소에 좌표를 넣어도 마지막으로 본 자리로 열린다.
-// 집품과 부동산플래닛은 번지나 도로명 번호까지 있는 주소가 있어야 단추를 둔다. 중개 사이트 매물은 대부분 '구 동'까지만 있어
-// 지금은 법원경매, 온비드, 일부 코리빙과 '주소 보기'로 지번을 받은 다방 매물에만 붙는다.
+//   사이트 안쪽 조회 주소를 서버에서 불러 건물 화면 주소를 만드는 방식은 사이트가 허락한 방식이 아니어서 쓰지 않는다.
+// 집품과 부동산플래닛은 번지나 도로명 번호까지 있는 주소(법원경매, 온비드, 일부 코리빙과 당근)면 그 건물로, 중개 사이트 매물처럼
+// '구 동'까지만 있으면 그 동으로 연다(동 검색 결과나 복사한 동 이름에 번지를 더 넣으면 됨). 다방 '주소 보기'도 확인한 한 건(2026-11-21)은 동까지만 줬다.
 
 /** 단추 하나. copy가 있으면 누를 때 그 글자를 복사하고 url을 연다. */
 export interface SiteButton extends NaverLink {
@@ -69,6 +71,21 @@ function sidoOf(word: string): string | null {
  * 동까지만 있거나('노원구 예시동') 시, 군, 구를 못 찾으면 null.
  */
 export function searchAddressOf(address: string | null | undefined): string | null {
+  const p = parseAddress(address);
+  return p?.number ? [p.sido, ...p.gus, ...p.places, p.number].filter(Boolean).join(' ') : null;
+}
+
+/**
+ * 번지 없이 '시도 구 동'까지 남긴 주소('노원구 예시동' → '서울 노원구 예시동', 번지가 있으면 번지를 뺀다).
+ * 중개 사이트 매물처럼 동까지만 있을 때 집품과 부동산플래닛을 그 동으로 여는 데 쓴다. 시, 군, 구나 동을 못 찾으면 null.
+ */
+export function areaAddressOf(address: string | null | undefined): string | null {
+  const p = parseAddress(address);
+  return p ? [p.sido, ...p.gus, ...p.places].filter(Boolean).join(' ') : null;
+}
+
+/** 주소 글자를 시도, 시군구, 동이나 도로명, 번지로 나눈다(번지는 없으면 null). 시, 군, 구나 동, 도로명을 못 찾으면 null. */
+function parseAddress(address: string | null | undefined): { sido: string | null; gus: string[]; places: string[]; number: string | null } | null {
   const words = (address ?? '').replace(/,/g, ' ').trim().split(/\s+/).filter(Boolean);
   let i = 0;
   let sido = words[0] ? sidoOf(words[0]) : null;
@@ -89,31 +106,43 @@ export function searchAddressOf(address: string | null | undefined): string | nu
   if (road && /^\d+(-\d+)?$/.test(next)) number = next;
   else if (!road && /^산?\d+(-\d+)?$/.test(next)) number = next;
   else if (!road && next === '산' && /^\d+(-\d+)?$/.test(bare(words[i + 1]))) number = `산${bare(words[i + 1])}`;
-  if (!number) return null;
-  return [sido, ...gus, ...places, number].filter(Boolean).join(' ');
+  return { sido, gus, places, number };
+}
+
+/** 좌표가 든 서울 구 이름(대시보드 구 경계로 찾음, 서울 밖이거나 위치를 모르면 null) */
+function seoulGuAt(lat: number | null | undefined, lng: number | null | undefined): string | null {
+  if (lat == null || lng == null) return null;
+  return regionBoundaries.features.find((f) => pointInGeometry(f.geometry, lat, lng))?.properties.sggnm ?? null;
 }
 
 /**
- * 번지까지 있는 주소로 집품과 부동산플래닛을 여는 단추들(주소가 동까지만 있으면 없음).
- * 집품은 그 주소 검색 결과를 연다(집 리뷰라 토지, 상가는 뺀다). 부동산플래닛은 주소를 복사하고 실거래가 지도를 연다.
+ * 집품과 부동산플래닛을 여는 단추들. 번지까지 있으면 그 건물로, 동까지만 있으면 그 동으로 연다(주소를 못 읽으면 없음).
+ * 다방처럼 주소 칸이 비었거나 구가 빠진 매물은 매물의 동 이름과 좌표가 든 서울 구로 '서울 구 동'을 만든다.
+ * 집품은 그 주소나 동의 검색 결과를 연다(집 리뷰라 토지, 상가는 뺀다). 부동산플래닛은 주소나 동을 복사하고 실거래가 지도를 연다.
  */
-export function addressSiteLinks(l: Pick<ListingView, 'buildingType'>, address: string | null | undefined): SiteButton[] {
-  const addr = searchAddressOf(address);
-  if (!addr) return [];
+export function addressSiteLinks(l: Pick<ListingView, 'buildingType' | 'dong' | 'lat' | 'lng'>, address: string | null | undefined): SiteButton[] {
+  const exact = searchAddressOf(address);
+  const gu = l.dong && /^[가-힣0-9]+(동|가|리)$/.test(l.dong) ? seoulGuAt(l.lat, l.lng) : null;
+  const target = exact ?? areaAddressOf(address) ?? (gu ? `서울 ${gu} ${l.dong}` : null);
+  if (!target) return [];
   const kind = kindOf(l);
   const out: SiteButton[] = [];
   if (kind !== 'land' && kind !== 'shop') {
     out.push({
-      url: `https://zippoom.com/search/${encodeURIComponent(addr)}?searchWithAddress=false`,
+      url: `https://zippoom.com/search/${encodeURIComponent(target)}?searchWithAddress=false`,
       label: '집품 ↗',
-      title: `집품에서 이 주소(${addr})로 검색한 결과를 엽니다. 맨 위 건물을 누르면 거주 리뷰가 보입니다`,
+      title: exact
+        ? `집품에서 이 주소(${target})로 검색한 결과를 엽니다. 맨 위 건물을 누르면 거주 리뷰가 보입니다`
+        : `집품에서 이 동(${target})으로 검색한 결과를 엽니다. 번지를 모르는 매물이라 건물은 직접 골라야 합니다. 번지를 알면 위 검색창에 더 넣으면 그 건물로 좁혀집니다`,
     });
   }
   out.push({
     url: 'https://map.bdsplanet.com/',
     label: '부동산플래닛 ↗',
-    title: `이 주소(${addr})를 복사하고 부동산플래닛 실거래가 지도를 엽니다. 위 검색창에 Ctrl+V로 붙여 넣고 고르면 그 건물로 갑니다`,
-    copy: addr,
+    title: exact
+      ? `이 주소(${target})를 복사하고 부동산플래닛 실거래가 지도를 엽니다. 위 검색창에 Ctrl+V로 붙여 넣고 고르면 그 건물로 갑니다`
+      : `이 동(${target})을 복사하고 부동산플래닛 실거래가 지도를 엽니다. 위 검색창에 Ctrl+V로 붙여 넣으면 그 동 건물들이 추천에 뜨고, 하나를 고르면 지도가 그 동으로 갑니다. 번지를 알면 뒤에 더 넣으면 그 건물로 갑니다`,
+    copy: target,
   });
   return out;
 }
