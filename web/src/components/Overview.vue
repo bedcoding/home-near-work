@@ -452,6 +452,27 @@ watch(groupSort, (v) => {
 });
 /** 정렬에 쓸 수 있는 거리 핀(표시 핀은 매물까지 거리를 재지 않는다) */
 const sortPins = computed(() => walkPins.value.filter((p) => p.kind !== 'mark'));
+/** 정렬 칸에 마우스를 올리면 바로 뜨는 설명: 지금 고른 기준을 맨 위에, 그 아래 기준마다 한 줄 */
+const sortTip = computed(() => {
+  const lines: [GroupSort, string][] = [
+    ['map', '가격 바뀐 매물 먼저: 누른 지도 표시에 적힌 최저 월세, 최저 전세 매물을 맨 앞에, 그다음 가격이 바뀐 매물, 나머지는 환산 월세 낮은 순. 지도에서 누르면 뜨는 창과 같은 순서'],
+    ...sortPins.value.map((p): [GroupSort, string] => [`pin:${p.id}`, `${p.name}까지 가까운 순: 그 핀까지 길을 따라 걸어서 잰 거리가 짧은 순`]),
+    ['price', deal.value === 'sale' ? '매매가 낮은 순: 매매가가 낮은 순' : '환산 월세 낮은 순: 월세 + 보증금 × 전환율 ÷ 12(전세는 전세금 × 전환율 ÷ 12)가 낮은 순. 카드의 환산시 금액'],
+    ...(deal.value === 'sale' ? [] : [
+      ['monthly', '월세 낮은 순: 월세가 낮은 순. 전세는 월세 0으로 쳐서 맨 앞'],
+      ['deposit', '보증금 낮은 순: 월세 보증금과 전세금 중 낮은 값이 낮은 순'],
+    ] as [GroupSort, string][]),
+    ['area', '넓은 순: 전용 면적이 넓은 순'],
+    ['new', '처음 본 날 최근 순: 이 대시보드가 처음 모은 날이 최근인 순'],
+  ];
+  const now = lines.find(([k]) => k === sortNow.value);
+  return [
+    ...(now ? [`지금: ${now[1]}`, ''] : []),
+    ...lines.filter((x) => x !== now).map(([, t]) => t),
+    '',
+    '어느 기준이든 펼친 가격대 매물, 회색 매물, 별로 칸 순서는 그대로 두고 그 안에서만 다시 늘어놓습니다. 값을 모르는 매물은 칸의 맨 뒤입니다.',
+  ].join('\n');
+});
 /** 지금 쓰는 정렬. 고른 거리 핀을 뺐거나 모르는 값이면 지도 창 순서로 돌아간다. */
 const sortNow = computed<GroupSort>(() => {
   const s = groupSort.value;
@@ -772,10 +793,9 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
           <section v-if="listShown.length" ref="groupEl" class="group" :aria-label="group.length > 1 ? '지도에서 누른 묶음의 매물' : '지도에서 고른 매물'">
             <div v-if="group.length > 1" class="group-head">
               <span>지도에서 누른 매물 <b class="num">{{ group.length }}건</b><template v-if="groupGray">, 회색 <b class="num">{{ groupGray }}건</b></template></span>
-              <label
-                class="group-sort"
-                title="펼친 가격대 매물, 회색 매물, 별로 순서는 그대로 두고 그 안에서 다시 늘어놓습니다.&#10;가격 바뀐 매물 먼저: 지도에서 누른 표시에 적힌 최저 월세, 최저 전세 매물을 맨 앞에, 그다음 가격이 바뀐 매물, 나머지는 환산 월세 낮은 순입니다(지도에서 누르면 뜨는 창과 같은 순서).&#10;핀까지 가까운 순은 걸어서 잰 거리입니다. 월세 낮은 순은 전세를 월세 0으로 쳐서 맨 앞에 둡니다. 환산 월세는 월세 + 보증금 × 전환율 ÷ 12(전세는 전세금 × 전환율 ÷ 12)입니다."
-              >
+              <!-- 정렬 기준 설명은 마우스를 올리면 바로 뜨는 상자로 보인다(브라우저 기본 title은 늦게 떠서). -->
+              <CountTooltip class="group-sort-tip" :text="sortTip" :max-width="460" :focusable="false">
+              <label class="group-sort">
                 <span>정렬</span>
                 <select :value="sortNow" aria-label="지도에서 누른 매물 정렬" @change="groupSort = ($event.target as HTMLSelectElement).value as GroupSort">
                   <option value="map">가격 바뀐 매물 먼저</option>
@@ -789,6 +809,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
                   <option value="new">처음 본 날 최근 순</option>
                 </select>
               </label>
+              </CountTooltip>
             </div>
             <!-- 모두 고른 매물 카드 모양으로 그리고, 고른 매물만 짙은 머리, 나머지는 밝은 머리(quiet)다. 고르기를 바꿔도 카드를 다시 만들지 않는다. -->
             <div
@@ -985,7 +1006,8 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 /* 묶음 목록 머리: 왼쪽에 건수, 오른쪽 끝에 정렬 */
 .group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0; padding: 0 4px; font-size: 12px; color: #5f6e85; }
 .group-head b { color: var(--ink); }
-.group-sort { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--ink-2); font-weight: 700; cursor: help; }
+.group-sort-tip { margin-left: auto; }
+.group-sort { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-weight: 700; }
 .group-sort select {
   min-height: 30px; max-width: 100%; padding: 0 26px 0 9px; border: 1px solid var(--line-strong); border-radius: 6px;
   background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
