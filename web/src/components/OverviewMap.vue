@@ -362,7 +362,7 @@ function tooltip(g: Group, pin: L.Layer) {
         markSeen([l]);
       });
     }
-    if (l.thumbnail) row.appendChild(listingThumb(l.thumbnail));
+    if (l.thumbnail) row.appendChild(listingThumb(l.thumbnail, looksSeen(l)));
 
     const details = document.createElement('span');
     details.className = 'tip-details';
@@ -799,13 +799,26 @@ const POPUP_MAX = 12;
 /** 정보 창 내용 폭의 한계(px). 좁은 지도에서는 지도 폭에 맞춘다. */
 const POPUP_WIDTH = { min: 436, max: 520 };
 
-/** 매물 사진 칸. 사진이 늦게 와도 창 크기는 그대로다. 없거나 못 불러오면 '사진 없음'. */
-function listingThumb(src: string | null) {
+/** 본 매물의 사진 칸 왼쪽 위 구석에 작은 ✓를 붙이거나 뗀다. */
+function setSeenMark(thumb: Element, seen: boolean) {
+  const mark = thumb.querySelector('.mp-seen');
+  if (seen && !mark) {
+    const el = line('mp-seen', '✓');
+    el.title = '이 대시보드에서 본 매물';
+    el.setAttribute('role', 'img');
+    el.setAttribute('aria-label', '봤음');
+    thumb.appendChild(el);
+  } else if (!seen) mark?.remove();
+}
+
+/** 매물 사진 칸. 사진이 늦게 와도 창 크기는 그대로다. 없거나 못 불러오면 '사진 없음'. seen이면 구석에 ✓. */
+function listingThumb(src: string | null, seen = false) {
   const el = document.createElement('span');
   el.className = 'mp-thumb';
   const empty = () => {
     el.replaceChildren();
     el.textContent = '사진 없음';
+    setSeenMark(el, seen);
   };
   if (!src) {
     empty();
@@ -818,6 +831,7 @@ function listingThumb(src: string | null) {
   img.addEventListener('error', empty, { once: true });
   img.src = src;
   el.appendChild(img);
+  setSeenMark(el, seen);
   return el;
 }
 
@@ -849,7 +863,7 @@ function popup(g: Group, items: ListingView[]) {
     card.dataset.listingId = l.id;
     if (withThumb) {
       card.classList.add('has-thumb');
-      card.appendChild(listingThumb(l.thumbnail));
+      card.appendChild(listingThumb(l.thumbnail, looksSeen(l)));
     }
     const top = document.createElement('div');
     top.className = 'mp-top';
@@ -883,6 +897,7 @@ function popup(g: Group, items: ListingView[]) {
         if (props.viewKey !== 'overview') map?.closePopup();
         big.value = false;
         emit('select', l);
+        markSeen([l]);
       });
     }
     const actions = document.createElement('div');
@@ -948,6 +963,8 @@ function markMehCard(card: HTMLElement, l: ListingView) {
   const tag = card.querySelector('.mp-meh');
   if (meh && !tag) card.querySelector('.mp-top strong')?.after(line('mp-meh', '별로'));
   else if (!meh) tag?.remove();
+  // 본 매물의 ✓는 여기서 고치지 않는다. 창을 열면 창에 보인 매물이 모두 '봤음'이 되므로, 고치면 연 순간 전부 ✓가 붙는다.
+  // ✓는 창을 그릴 때(열기 전 상태) 한 번만 붙여, 이번에 처음 보는 매물과 전에 본 매물을 가른다.
   // 관심이면 금색 테두리와 바탕으로 바꾸고 '★ 관심' 딱지를 붙인다.
   const star = l.verdict === 'star';
   card.classList.toggle('star', star);
@@ -1581,13 +1598,16 @@ function drawGroup(layer: L.LayerGroup, g: Group, look: string): Drawn {
   }
   const d: Drawn = { marker, group: g, base, z, look };
   bindListingTip(marker, () => d.group);
-  // 누르면 바로 넘어가지 않고 정보 창을 먼저 띄우고, 창에 보인 매물(POPUP_MAX건까지)을 '봤음'으로 남긴다.
+  // 누르면 바로 넘어가지 않고 정보 창을 먼저 띄운다. '봤음'은 창에 보인 매물 전부가 아니라 실제로 고른 매물에만 남긴다:
+  // 목록이 옆에 있으면 맨 앞 매물이 왼쪽 카드로 바로 뜨므로 그 한 건, 나머지는 창에서 눌러 고를 때(카드 누름) 남긴다.
   marker.on('click', () => {
     marker.closeTooltip();
     const items = withSelectedFirst(withMapPricesFirst(d.group));
     popup(d.group, items);
-    markSeen(items.slice(0, POPUP_MAX));
-    if (props.listMode) emit('reveal', items);
+    if (props.listMode) {
+      if (items[0]) markSeen([items[0]]);
+      emit('reveal', items);
+    }
   });
   marker.addTo(layer);
   return d;
@@ -2408,6 +2428,12 @@ onBeforeUnmount(() => {
   background: #dfe5ea; display: grid; place-items: center; color: var(--muted); font-size: 11px;
 }
 :deep(.mp-thumb img) { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 본 매물: 사진 왼쪽 위 구석에 작은 ✓(사진을 가리지 않게) */
+:deep(.mp-thumb) { position: relative; }
+:deep(.mp-seen) {
+  position: absolute; top: 3px; left: 3px; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%;
+  background: rgba(33, 57, 86, .85); box-shadow: 0 0 0 1.5px #fff; color: #fff; font: 800 10px/1 var(--font);
+}
 :deep(.mp-card.go) { cursor: pointer; }
 :deep(.mp-card.go:hover) { border-color: var(--line-strong); background: #f6f8fb; }
 /* 별로로 표시한 매물: 창의 카드와 올리면 보이는 글의 줄을 회색으로 흐리게(사진은 흑백으로) */
