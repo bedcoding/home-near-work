@@ -598,19 +598,16 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 
     <div class="ov-split">
       <div class="ov-bands">
-        <section v-for="l in visible" :key="l.id" class="picked" aria-label="지도에서 고른 매물">
-          <div class="picked-head">
-            <span class="picked-title">지도에서 고른 매물</span>
-            <button type="button" class="picked-close" @click="pickedId = null">닫기</button>
-          </div>
-          <ListingCard
-            :listing="l" :areas="areas" :selected="l.id === selectedId" :live-collected="liveListingIds?.has(l.id)"
-            @select="selectFromList(l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
-            @source="emit('source', l)" @raw="emit('raw', l)" zone-banner
-          />
-        </section>
-        <p v-if="!visible.length" class="picked-empty">지도에서 매물을 누르면 여기에 카드가 뜹니다</p>
+        <!-- 거래 유형 탭과 이어진 흰 칸 하나에 고른 매물 카드(없으면 안내 한 줄)와 가격대 줄을 차례로 담는다. -->
         <div class="bands" @dragend="onDragEnd">
+          <section v-for="l in visible" :key="l.id" class="picked" aria-label="지도에서 고른 매물">
+            <ListingCard
+              picked :listing="l" :areas="areas" :selected="l.id === selectedId" :live-collected="liveListingIds?.has(l.id)"
+              @select="selectFromList(l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
+              @source="emit('source', l)" @raw="emit('raw', l)" @close="pickedId = null" zone-banner
+            />
+          </section>
+          <p v-if="!visible.length" class="picked-empty">지도에서 매물을 누르면 여기에 카드가 뜹니다</p>
           <div
             v-for="r in rows" :key="r.band.id" class="band"
             :class="{
@@ -768,19 +765,11 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 }
 .tick-new { background: var(--new-soft); color: var(--new); }
 .tick-down { background: var(--down-soft); color: var(--down); }
-/* 지도에서 고른 매물 카드 한 장(가격대 줄 위) */
-.picked { display: grid; gap: 8px; container-type: inline-size; }
-.picked-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.picked-title { font-size: 14px; font-weight: 700; color: var(--ink-2); }
-.picked-close {
-  min-height: 30px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 8px;
-  background: var(--surface); font: 600 13px var(--font); color: var(--ink-2); cursor: pointer;
-}
-.picked-close:hover { border-color: var(--ink-2); }
-/* 아직 고른 매물이 없을 때 카드가 뜰 자리 */
-.picked-empty {
-  margin: 0; padding: 14px 16px; border: 1px dashed var(--line-strong); border-radius: 12px;
-  font-size: 14px; color: var(--muted); text-align: center;
-}
+/* 지도에서 고른 매물 카드 한 장: 가격대 칸 맨 위에 안쪽으로 들여 넣는다(닫기는 카드 안에 있다). */
+.picked { padding: 10px; container-type: inline-size; }
+/* 아직 고른 매물이 없을 때 그 자리에 두는 안내 한 줄 */
+.picked-empty { display: flex; align-items: center; min-height: 42px; margin: 0; padding: 0 16px; font-size: 12px; color: #5f6e85; }
+/* 카드나 안내 바로 아래 가격대 줄은 맨 위 줄이 아니라서 윗선을 그어 가른다(화면 디자인 층의 첫 줄 규칙보다 우선). */
+.bands > .picked + .band, .bands > .picked-empty + .band { border-top: 1px solid var(--line); }
 .empty { padding: 32px 0; text-align: center; }
 </style>

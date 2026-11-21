@@ -37,8 +37,13 @@ const props = defineProps<{
    */
   zoneBanner?: boolean;
   zoneKeySet?: boolean;
+  /**
+   * 매물 탭에서 지도로 고른 매물 한 장을 보이는 모양: 짙은 머리(사진, 가격, 매달 드는 돈), 숫자 상자, 링크 줄, 단추 줄.
+   * 닫기 단추가 있고 누르면 close를 알린다. 다른 탭의 목록은 예전 모양 그대로다.
+   */
+  picked?: boolean;
 }>();
-const emit = defineEmits<{ open: []; verdict: [Verdict | null]; source: []; raw: []; select: [] }>();
+const emit = defineEmits<{ open: []; verdict: [Verdict | null]; source: []; raw: []; select: []; close: [] }>();
 
 const l = computed(() => props.listing);
 /**
@@ -224,10 +229,209 @@ const extras = computed(() => {
  * 대시보드에서 눌러 본 '봤음'(seenAt)과는 따로다.
  */
 const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenAt : null));
+
+// ---------- 고른 매물 카드(picked)에서만 쓰는 값 ----------
+
+/**
+ * 관리비 줄. 환산 월세나 대출 시 월에 더하지 않고 따로 보인다(쓸모 있는 관리비와 월세를 옮겨 적은 관리비가 섞여 있어서).
+ * 세 드는 매물은 관리비를 모르면 '모름'이라고 적고, 사는 매물은 값이 있을 때만 보인다.
+ */
+const fee = computed(() => {
+  const x = l.value;
+  if (room.value) return null;
+  if (x.maintenance != null) return { known: true, text: x.maintenance === 0 ? '0만' : manwon(x.maintenance) };
+  const rental = x.prices.some((p) => p.deal === 'monthly' || p.deal === 'short' || p.deal === 'jeonse');
+  return rental ? { known: false, text: '모름' } : null;
+});
+
+/** 숫자 상자 아랫줄에 이름과 값으로 보일 나머지 정보(예전 카드의 주소 뒤 글과 같은 내용, 관리비는 머리로 올라감) */
+const facts = computed(() => {
+  const x = l.value;
+  const out: { label: string; value: string }[] = [];
+  if (rawType.value) out.push({ label: '유형', value: rawType.value });
+  if (x.elevator != null) out.push({ label: '엘리베이터', value: x.elevator ? '있음' : '없음' });
+  if (x.builtYear) out.push({ label: '준공', value: `${x.builtYear}년` });
+  if (x.availableFrom) out.push({ label: '입주', value: x.availableFrom });
+  const list = x.options?.list ?? [];
+  if (list.length) out.push({ label: '옵션', value: `${list.slice(0, 4).join(', ')}${list.length > 4 ? ` 외 ${list.length - 4}` : ''}` });
+  else if (x.options?.full) out.push({ label: '옵션', value: '풀옵션' });
+  const sale = saleDateOf(x);
+  if (sale && !props.hideSaleDate) out.push({ label: '매각기일', value: saleDay(sale).day });
+  out.push({ label: '처음 본 날', value: ago(x.firstSeenAt) });
+  return out;
+});
+
+/** 링크 글자 끝의 화살표를 뗀다(고른 매물 카드의 링크 줄은 밑줄로 링크임을 보인다). */
+const plain = (label: string) => label.replace(/\s*↗$/, '');
 </script>
 
 <template>
+  <!-- 매물 탭에서 지도로 고른 매물 한 장 -->
   <article
+    v-if="picked" class="pcard" :class="{ discarded: l.verdict === 'discard', gone: l.status === 'gone' }"
+    @click="emit('select'), markSeen([l])"
+  >
+    <header class="pc-head">
+      <div v-if="!noThumb" class="pc-thumb" :style="l.thumbnail ? { backgroundImage: `url(${JSON.stringify(l.thumbnail)})` } : undefined">
+        <span v-if="!l.thumbnail">사진 없음</span>
+      </div>
+      <div class="pc-main">
+        <div class="pc-top">
+          <div class="pc-chips">
+            <ZoneBanner v-if="zoneBanner && l.zone" part="banner" :listing="l" :key-set="zoneKeySet" />
+            <span v-if="!room" class="chip chip-kind" :class="kind" :title="l.buildingType ?? undefined">{{ KIND_LABEL[kind] }}</span>
+            <span v-if="roomChip" class="chip chip-room">{{ roomChip }}</span>
+            <span v-if="liveCollected" class="chip chip-live" title="처음 수집한 지 24시간이 안 된 매물">새 수집</span>
+            <span v-if="l.isNew" class="chip chip-new">신규</span>
+            <span v-if="marks.contactedAt" class="chip chip-contact" :title="`${dateTime(marks.contactedAt)}에 문의함으로 표시`">📞 문의함</span>
+            <span v-else-if="marks.seen" class="chip chip-viewed" :title="`이 대시보드에서 ${dateTime(l.seenAt!)}에 눌러 봄`">봤음</span>
+            <span
+              v-if="seenNaver" class="chip chip-seen"
+              :title="`네이버 지도에서 이 매물이 든 동그라미를 눌러 목록을 본 마지막 시각: ${dateTime(seenNaver)} (크롬 확장이 기록)`"
+            >네이버에서 {{ ago(seenNaver) }} 봄</span>
+            <template v-if="changeText">
+              <span class="chip" :class="changeText.tone">{{ changeText.label }}</span>
+              <span class="change num">{{ changeText.detail }}</span>
+            </template>
+            <span v-if="tradeChip" class="chip trade-chip" :class="tradeChip.tone" :title="tradeChip.title">{{ tradeChip.text }}</span>
+            <CountTooltip v-if="redev" :text="redev.tip" :max-width="480"><span class="chip redev-chip" :class="`chip-${redev.tone}`">{{ redev.label }}</span></CountTooltip>
+            <CountTooltip v-for="c in ledger" :key="c.label" :text="c.tip" :max-width="520"><span class="chip" :class="`chip-${c.tone}`">{{ c.label }}</span></CountTooltip>
+            <CountTooltip v-if="loan" :text="loan.tip" :max-width="500">
+              <span class="chip loan-chip"><span v-for="x in loan.lights" :key="x.id" class="loan" :class="x.state"><i class="ld" />{{ x.name }}</span><span v-if="loan.cap" class="loan-cap">주담대 {{ eokText(loan.cap) }}</span></span>
+            </CountTooltip>
+            <span v-if="l.verdict === 'star'" class="chip chip-star">★ 관심</span>
+            <span v-else-if="l.verdict === 'meh'" class="chip chip-muted">별로</span>
+            <span v-if="l.relistedOf" class="chip chip-muted" :title="`원래 매물: ${l.relistedOf}`">재등록이라 숨김</span>
+            <span v-else-if="l.verdict === 'discard'" class="chip chip-muted">버림</span>
+            <span v-if="l.similarToDiscarded" class="chip chip-warn">버림한 매물과 비슷</span>
+            <span v-if="l.status === 'gone'" class="chip chip-muted">최근 조회에서 안 보임</span>
+            <span v-if="isNoOption(l)" class="chip chip-seen" title="사이트가 준 옵션 목록이 비어 있거나 글에 '무옵션'이라고 적힌 집">무옵션</span>
+            <span v-if="l.auction?.failed != null" class="chip chip-room">유찰 {{ l.auction.failed }}회</span>
+            <span v-if="l.auction && l.auction.lots > 1" class="chip chip-room" title="같은 사건과 물건번호의 목록(토지, 호실)을 한 번에 매각">{{ l.auction.lots }}개 일괄매각</span>
+            <span v-if="l.auction?.share" class="chip chip-warn" title="지분 매각: 집이나 땅 전체가 아니라 일부 지분만 팝니다(다른 공유자가 있음). 땅만 파는 물건의 면적은 지분만큼입니다.">지분</span>
+            <CountTooltip v-if="claims" :text="claims.tip" :max-width="520"><span class="chip" :class="`chip-${claims.tone}`">{{ claims.label }}</span></CountTooltip>
+            <span v-if="l.auction?.mgmt" class="chip chip-warn" :title="`물건 비고: ${l.auction.mgmt.text}`">{{ l.auction.mgmt.label }}</span>
+            <slot name="tags" />
+          </div>
+          <button type="button" class="pc-close" title="이 카드 닫기" @click.stop="emit('close')">✕ 닫기</button>
+        </div>
+
+        <div class="pc-price num" :title="roomRange ? '이 곳 방 중 가장 싼 방 ~ 가장 비싼 방(보증금/월세)' : undefined">
+          <b v-if="roomRange"><span class="pc-deal">월세</span>{{ roomRange }}</b>
+          <template v-else>
+            <b v-for="(p, i) in l.prices" :key="i"><span class="pc-deal">{{ dealName(p) }}</span>{{ priceAmount(p) }}</b>
+            <b v-if="!l.prices.length">가격 모름</b>
+          </template>
+          <small v-if="appraisal" :title="appraisal.title">감정가 {{ appraisal.amount }}의 {{ appraisal.rate }}%</small>
+        </div>
+
+        <!-- 매달 드는 돈: 이름은 세 글자로, '월'과 '만'은 세로로 나란히 서게 칸을 나눈다. 관리비는 위 두 값에 더하지 않는다. -->
+        <div v-if="converted || loanCost || fee" class="pc-monthly num">
+          <CountTooltip v-if="converted" class="pc-mrow" :text="converted.tip" :max-width="520">
+            <span class="pc-mlabel">환산시</span><span class="pc-mwol">월</span><b class="pc-mval">{{ converted.text }}</b>
+          </CountTooltip>
+          <CountTooltip v-if="loanCost" class="pc-mrow" :text="loanCost.tip" :max-width="520">
+            <span class="pc-mlabel">대출시</span><span class="pc-mwol">월</span><b class="pc-mval">{{ loanCost.text }}</b>
+          </CountTooltip>
+          <span v-if="fee" class="pc-mrow plain">
+            <span class="pc-mlabel">관리비</span><span class="pc-mwol">{{ fee.known ? '월' : '' }}</span><b class="pc-mval" :class="{ unknown: !fee.known }">{{ fee.text }}</b>
+          </span>
+        </div>
+      </div>
+    </header>
+
+    <div class="pc-info">
+      <div class="pc-cells num">
+        <template v-if="!room">
+          <div class="pc-cell">
+            <span class="pc-k">{{ kind === 'land' ? '토지 면적' : '전용 면적' }}</span>
+            <span class="pc-v"><b>{{ l.areaM2 != null ? `${pyeong(l.areaM2)}평` : '?' }}</b><span>{{ l.areaM2 != null ? `${l.areaM2}㎡` : '면적 모름' }}</span></span>
+          </div>
+          <div v-if="!monthlyFirst" class="pc-cell" :title="third.title">
+            <span class="pc-k">평당</span>
+            <span class="pc-v"><b>{{ third.value }}</b></span>
+          </div>
+          <div v-if="kind !== 'land'" class="pc-cell">
+            <span class="pc-k">층</span>
+            <span class="pc-v"><b>{{ floor.value }}</b><span>{{ floor.sub }}</span></span>
+          </div>
+        </template>
+        <div class="pc-cell">
+          <span class="pc-k">{{ regionMode ? '지역' : '거리' }}</span>
+          <span class="pc-v">
+            <b>{{ regionMode ? scopeLabel : near ? distanceText(near.distance) : '?' }}</b>
+            <span :title="near?.area.name">{{ regionMode ? (relation === 'selected' ? '선택한 지역' : '기본 목록 밖') : near ? near.area.name : '위치 모름' }}</span>
+          </span>
+        </div>
+        <CountTooltip v-for="w in walks" :key="w.pin.id" class="pc-cell pc-walk" :text="walkTip" :max-width="460">
+          <span class="pc-k">{{ w.pin.name }}까지 걸어서</span>
+          <span class="pc-v"><b>{{ w.minutes }}분</b></span>
+        </CountTooltip>
+      </div>
+      <div class="pc-facts">
+        <span class="pc-fact"><span>주소</span> <b>{{ addressText }}</b></span>
+        <button
+          v-if="canLoadAddress" type="button" class="pc-addr-load" :disabled="dabangAddressBusy.has(l.id)"
+          :title="dabangAddressErrors.get(l.id) ?? '다방에서 이 방의 지번 주소를 받아 옵니다(한 번 받으면 저장됩니다)'"
+          @click.stop="loadDabangAddress(l.id)"
+        >{{ dabangAddressBusy.has(l.id) ? '받는 중' : dabangAddressErrors.has(l.id) ? '다시 받기' : '주소 보기' }}</button>
+        <span v-if="dabangAddressErrors.has(l.id)" class="pc-error">{{ dabangAddressErrors.get(l.id) }}</span>
+        <span v-if="titleText" class="pc-fact" :title="l.title || undefined"><span>{{ l.auction ? '사건' : '이름' }}</span> <b>{{ titleText }}</b></span>
+        <span v-for="f in facts" :key="f.label" class="pc-fact"><span>{{ f.label }}</span> <b>{{ f.value }}</b></span>
+      </div>
+    </div>
+
+    <!-- 내 메모: 누르면 고친다. 비우고 저장하면 지운다. -->
+    <div v-if="editingNote || marks.note" class="pc-note">
+      <form v-if="editingNote" class="memo-edit" @click.stop @submit.prevent="commitNote">
+        <input
+          ref="noteInput" v-model="noteDraft" :maxlength="NOTE_MAX" aria-label="매물 메모" placeholder="예: 집주인 직접, 토요일 방문 예약"
+          title="Enter로 저장, Esc로 취소, 비우고 저장하면 메모를 지웁니다" @keydown.esc.prevent="editingNote = false"
+        />
+        <button class="btn btn-sm btn-primary" type="submit">저장</button>
+        <button class="btn btn-sm" type="button" @click="editingNote = false">취소</button>
+      </form>
+      <p v-else class="memo" :title="`${dateTime(l.noteAt ?? null)}에 남긴 메모, 누르면 고칩니다`" @click.stop="startNote">📝 {{ marks.note }}</p>
+    </div>
+
+    <div class="pc-links" @click.stop>
+      <a v-for="s in siteLinks" :key="s.name" :href="s.url" target="_blank" rel="noopener" :title="`${s.name}에서 이 물건 보기`">{{ s.name }}</a>
+      <a v-if="naver" :href="naver.url" target="_blank" rel="noopener" :title="naver.title">{{ plain(naver.label) }}</a>
+      <a v-if="naverMap" :href="naverMap.url" target="_blank" rel="noopener" :title="naverMap.title">{{ plain(naverMap.label) }}</a>
+      <a v-for="p in priceSites" :key="p.url" :href="p.url" target="_blank" rel="noopener" :title="p.title">{{ plain(p.label) }}</a>
+      <a
+        v-for="p in addressSites" :key="p.label" :href="p.url" target="_blank" rel="noopener" :title="p.title"
+        @click="p.copy && copyText(p.copy)"
+      >{{ plain(p.label) }}</a>
+      <span class="pc-links-end">
+        <button v-if="l.sourceShot" type="button" title="이 매물을 어디서 어떻게 모았는지" @click="emit('source')">출처 보기</button>
+        <button type="button" title="사이트가 준 원래 값과 저장한 값 비교" @click="emit('raw')">원본 데이터</button>
+      </span>
+    </div>
+
+    <div class="pc-actions" @click.stop>
+      <button type="button" class="pc-open" title="원본 사이트에서 보기 (Enter)" @click="emit('open')">{{ SOURCE_LABEL[l.source] }} 열기</button>
+      <button
+        type="button" class="pc-quiet contact" :class="{ on: !!marks.contactedAt }" title="사이트에서 중개사에게 문의했으면 누르세요. 다시 누르면 풉니다."
+        @click="setContacted(l, !marks.contactedAt)"
+      >{{ marks.contactedAt ? '문의함 해제' : '📞 문의함' }}</button>
+      <button type="button" class="pc-quiet" :class="{ on: !!marks.note }" title="이 매물에 짧은 메모를 남깁니다" @click="startNote">📝 메모</button>
+      <div class="pc-verdict">
+        <button type="button" :class="{ on: l.verdict === 'star', star: true }" title="관심 (S)" @click="emit('verdict', l.verdict === 'star' ? null : 'star')">
+          {{ l.verdict === 'star' ? '관심 해제' : '★ 관심' }}
+        </button>
+        <button type="button" :class="{ on: l.verdict === 'meh' }" title="별로: 목록에 남기되 흐리게 맨 뒤로 (B)" @click="emit('verdict', l.verdict === 'meh' ? null : 'meh')">
+          {{ l.verdict === 'meh' ? '별로 해제' : '별로' }}
+        </button>
+        <button type="button" :class="{ on: l.verdict === 'discard' }" title="버림: 없어진 매물, 목록에서 숨김 (X)" @click="emit('verdict', l.verdict === 'discard' ? null : 'discard')">
+          {{ l.verdict === 'discard' ? '되돌리기' : '✕ 버림' }}
+        </button>
+      </div>
+    </div>
+  </article>
+
+  <article
+    v-else
     class="card" :class="{ selected, discarded: l.verdict === 'discard', meh: l.verdict === 'meh', gone: l.status === 'gone', 'no-thumb': noThumb }"
     @click="emit('select'), markSeen([l])"
   >
@@ -543,5 +747,129 @@ const seenNaver = computed(() => (l.value.source === 'naver' ? l.value.lastSeenA
 @container (max-width: 480px) {
   .card { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'thumb' 'stats' 'tags' 'meta' 'links' 'actions' 'more'; }
   .thumb { width: 100%; height: 160px; }
+}
+
+/*
+ * ---------- 고른 매물 카드(picked) ----------
+ * 짙은 머리(사진, 이름표, 가격, 매달 드는 돈) 아래에 숫자 상자, 링크 줄, 단추 줄을 둔다.
+ * 뿌리 이름이 .card가 아니라서 화면 디자인 층(workspace.css)의 카드 규칙은 닿지 않는다.
+ */
+.pcard {
+  display: flex; flex-direction: column; overflow: hidden;
+  border: 1px solid #c9d4e3; border-radius: 14px; background: #fff; color: var(--ink);
+  box-shadow: 0 2px 10px rgba(29, 44, 67, .08); font-size: 13px; line-height: 1.55;
+}
+.pcard.discarded, .pcard.gone { opacity: .8; }
+
+/* 머리는 어두운 바탕이라 이름표가 쓰는 색 값을 밝게 바꾼다. */
+.pc-head {
+  --ink: #f7faff; --ink-2: #e0e8f4; --muted: #bccbe0; --line: #476181; --line-strong: #6380a3;
+  --surface: #2c4666; --surface-2: #38516f; --accent: #d5e6ff; --accent-soft: #365575;
+  --seen: #d7e5fa; --seen-soft: #3b5577; --down: #c0ebd4; --down-soft: #2d514a; --up: #f3d8b8; --up-soft: #594736;
+  --star: #ffe3a3; --star-soft: #5a4a2d;
+  display: flex; gap: 16px; padding: 12px 14px; background: #213956; color: #f7faff;
+}
+.pc-thumb {
+  flex: none; width: 168px; min-height: 126px; border-radius: 10px; background: #38516f center/cover no-repeat;
+  display: grid; place-items: center; font-size: 12px; color: #bccbe0;
+}
+.pc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.pc-top { display: flex; align-items: flex-start; gap: 8px; }
+.pc-chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-height: 28px; }
+.pc-chips :deep(.chip) { padding: 3px 8px; font-size: 12px; }
+.pc-chips :deep(.chip.chip-new) { background: #623d51; color: #ffdbe2; }
+.pc-chips :deep(.chip.chip-kind), .pc-chips :deep(.chip.chip-room), .pc-chips :deep(.chip.chip-muted) { background: #38516f; color: #e5edf8; }
+.pc-chips :deep(.chip.chip-danger) { background: #e03131; color: #fff; }
+.pc-chips :deep(.chip.chip-warn) { background: #5a4a2d; color: #ffe3a3; }
+.pc-chips .change { font-size: 12px; color: #e0e8f4; }
+.pc-close {
+  flex: none; min-height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent;
+  font-size: 13px; font-weight: 600; color: #cedcf0; white-space: nowrap;
+}
+.pc-close:hover { background: #38516f; color: #fff; }
+
+.pc-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 18px; }
+.pc-price b { font-size: 30px; font-weight: 800; line-height: 36px; letter-spacing: -.035em; white-space: nowrap; }
+.pc-deal { margin-right: 8px; font-size: 14px; font-weight: 700; letter-spacing: 0; color: #e0e8f4; }
+.pc-price small { flex: 1 0 100%; font-size: 12px; color: #bccbe0; }
+
+.pc-monthly { display: table; align-self: flex-start; border-spacing: 0; }
+.pc-monthly :deep(.pc-mrow) { display: table-row; line-height: 21px; }
+.pc-monthly .pc-mrow.plain { cursor: default; }
+.pc-mlabel { display: table-cell; padding-right: 12px; font-size: 13px; color: #bccbe0; white-space: nowrap; }
+.pc-mwol { display: table-cell; padding-right: 5px; font-size: 15px; font-weight: 700; }
+.pc-mval { display: table-cell; font-size: 15px; font-weight: 700; text-align: right; white-space: nowrap; }
+.pc-mval.unknown { font-weight: 600; color: #ffe3a3; }
+
+/* 숫자 상자: 칸 사이는 선으로 가르고, 좁아져 줄이 바뀌어도 바깥쪽 선은 상자 밖으로 잘려 안 보인다. */
+.pc-info { margin: 12px 14px 0; overflow: hidden; border: 1px solid #dbe3ee; border-radius: 10px; background: #f3f6fb; }
+.pc-cells { display: flex; flex-wrap: wrap; overflow: hidden; }
+.pc-cells :deep(.pc-cell) {
+  flex: 1 1 auto; display: block; margin: -1px 0 0 -1px; padding: 8px 14px 9px;
+  border-left: 1px solid #dbe3ee; border-top: 1px solid #dbe3ee;
+}
+.pc-k { display: block; font-size: 12px; line-height: 18px; color: #5f6e85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-v { display: flex; align-items: baseline; gap: 5px; line-height: 24px; white-space: nowrap; }
+.pc-v b { font-size: 17px; font-weight: 700; letter-spacing: -.02em; }
+.pc-v span { min-width: 0; font-size: 12px; color: #5f6e85; overflow: hidden; text-overflow: ellipsis; }
+.pc-walk .pc-v b { color: #5235b5; }
+.pc-facts {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 18px; padding: 8px 14px 9px;
+  border-top: 1px solid #dbe3ee; line-height: 20px; color: #5f6e85;
+}
+.pc-fact b { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.pc-addr-load {
+  margin-left: -10px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent;
+  font-size: 12px; font-weight: 600; line-height: 20px; color: var(--accent); text-decoration: underline; text-underline-offset: 3px;
+}
+.pc-error { color: var(--new); }
+
+.pc-note { display: flex; padding: 10px 14px 0; }
+.pc-note .memo { margin: 0; }
+.pc-note .memo-edit { margin: 0; }
+
+/* 다른 사이트로 가는 링크: 단추가 아니라 밑줄 그은 글자 */
+.pc-links { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 16px; padding: 12px 16px; }
+.pc-links a, .pc-links button {
+  padding: 0; border: 0; background: transparent; font-size: 13px; font-weight: 600; line-height: 20px; white-space: nowrap;
+  text-decoration: underline; text-decoration-color: #b9c6d9; text-underline-offset: 4px;
+}
+.pc-links a { color: var(--accent); }
+.pc-links button { color: var(--ink-2); }
+.pc-links a:hover, .pc-links button:hover { text-decoration-color: currentColor; }
+.pc-links-end { margin-left: auto; display: inline-flex; gap: 16px; }
+
+/* 단추 줄: 채운 단추는 여는 단추 하나, 문의함과 메모는 테두리 없이, 관심과 별로와 버림은 오른쪽 끝에 한 묶음 */
+.pc-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.pc-actions button { font-size: 14px; font-weight: 600; white-space: nowrap; }
+.pc-open {
+  min-height: 38px; margin-right: 8px; padding: 0 18px; border: 1px solid #213956; border-radius: 9px;
+  background: #213956; color: #f7faff; font-weight: 700 !important;
+}
+.pc-open:hover { border-color: #304e72; background: #304e72; color: #fff; }
+.pc-quiet { min-height: 38px; padding: 0 12px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--ink-2); }
+.pc-quiet:hover { background: var(--surface-2); }
+.pc-quiet.on { border-color: var(--star); background: var(--star-soft); }
+.pc-quiet.contact.on { border-color: var(--contact); background: var(--contact-soft); }
+.pc-verdict { margin-left: auto; display: inline-flex; gap: 2px; padding: 2px; border: 1px solid #dbe3ee; border-radius: 9px; background: #f3f6fb; }
+.pc-verdict button { min-height: 32px; padding: 0 13px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-2); }
+.pc-verdict button:hover { background: #e4eaf3; }
+.pc-verdict button.on { background: #fff; color: var(--ink); box-shadow: 0 0 0 1px var(--line-strong); }
+.pc-verdict button.star.on { background: var(--star-soft); color: var(--star); box-shadow: 0 0 0 1px var(--star); }
+
+/* 좁은 칸: 사진을 줄이고, 더 좁으면 사진을 위로 올린다. 묶음 단추는 다음 줄 왼쪽으로 내려간다. */
+@container (max-width: 620px) {
+  .pc-thumb { width: 120px; min-height: 96px; }
+  .pc-price b { font-size: 26px; line-height: 32px; }
+  .pc-cells :deep(.pc-cell) { padding-inline: 11px; }
+  .pc-actions { gap: 2px; padding-inline: 12px; }
+  .pc-actions button { font-size: 13px; }
+  .pc-open { margin-right: 4px; padding: 0 12px; }
+  .pc-quiet { padding: 0 8px; }
+  .pc-verdict button { padding: 0 9px; }
+}
+@container (max-width: 440px) {
+  .pc-head { flex-direction: column; }
+  .pc-thumb { width: 100%; height: 160px; }
 }
 </style>
