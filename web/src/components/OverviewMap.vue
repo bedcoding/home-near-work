@@ -1073,15 +1073,20 @@ function renderPopup(box: HTMLElement, turned = false) {
   const shown = s.items.slice(s.page * POPUP_PAGE, (s.page + 1) * POPUP_PAGE);
   // 사진은 이 쪽 매물 중 하나라도 있을 때만 왼쪽 칸에 둔다(같은 매물을 여러 번 올린 것을 사진으로 가려 보게). 경매처럼 사진이 없는 묶음은 칸을 비우지 않는다.
   const withThumb = shown.some((l) => l.thumbnail);
+  // 머리글과 쪽 번호는 창에 고정하고 카드 목록(.mp-list)만 스크롤한다. 예전에는 둘을 스크롤 칸 안에 붙여(sticky) 두어
+  // 화면 배율에 따라 쪽 번호 밑으로 뒤 카드가 조금 비쳐 보였다.
   const parts: HTMLElement[] = [];
   const head = popupHead(s);
   if (head) parts.push(head);
-  for (const l of shown) parts.push(popupCard(l, withThumb, s.seen.has(l.id)));
+  const list = document.createElement('div');
+  list.className = 'mp-list';
+  for (const l of shown) list.appendChild(popupCard(l, withThumb, s.seen.has(l.id)));
+  parts.push(list);
   const pager = popupPager(s, box);
   if (pager) parts.push(pager);
   box.replaceChildren(...parts);
   if (!turned) return;
-  box.scrollTop = 0;
+  list.scrollTop = 0;
   listingPopup?.update();
   highlightPopupCard(props.selectedId);
   box.querySelector<HTMLElement>('.mp-pager [aria-current="page"]')?.focus({ preventScroll: true });
@@ -1235,13 +1240,15 @@ function refreshPopupCards() {
 function highlightPopupCard(id: string | null) {
   const box = listingPopup?.getContent();
   if (!(box instanceof HTMLElement)) return;
+  // 스크롤하는 칸은 카드 목록(.mp-list)이다.
+  const list = box.querySelector<HTMLElement>('.mp-list') ?? box;
   for (const card of box.querySelectorAll<HTMLElement>('.mp-card')) {
     const chosen = card.dataset.listingId === id;
     card.classList.toggle('mp-selected', chosen);
     if (chosen) {
       card.setAttribute('aria-current', 'true');
-      const top = card.offsetTop;
-      if (top < box.scrollTop || top + card.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = top;
+      const top = card.offsetTop - list.offsetTop;
+      if (top < list.scrollTop || top + card.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top;
     } else card.removeAttribute('aria-current');
   }
 }
@@ -2694,10 +2701,11 @@ onBeforeUnmount(() => {
 :deep(.nw) { position: absolute; top: -9px; right: -14px; box-shadow: 0 1px 2px rgba(0, 0, 0, .3); pointer-events: none; }
 .nw-sample { display: inline-block; margin-left: 4px; vertical-align: 1px; }
 :deep(.st-tip) { color: var(--muted); font-size: 12px; }
-/* 여러 건이면 창 안을 스크롤한다(높이 400px까지). */
-:deep(.mp) { display: grid; gap: 8px; max-height: 400px; overflow: auto; font: 13px/1.45 var(--font); }
-/* 건수 머리글: 아래에 구분선을 긋고, 창 안을 스크롤해도 맨 위에 남는다(흰 바탕으로 밑의 내용을 가림). */
-:deep(.mp-head) { position: sticky; top: 0; z-index: 1; padding-bottom: 8px; border-bottom: 1px solid var(--line); background: #fff; font-weight: 700; }
+/* 창(높이 400px까지): 위 건수 머리글과 아래 쪽 번호는 고정하고, 가운데 카드 목록만 스크롤한다. */
+:deep(.mp) { display: flex; flex-direction: column; gap: 8px; max-height: 400px; font: 13px/1.45 var(--font); }
+:deep(.mp-list) { display: grid; gap: 8px; min-height: 0; overflow: auto; }
+/* 건수 머리글: 아래에 구분선을 긋는다. */
+:deep(.mp-head) { flex: none; padding-bottom: 8px; border-bottom: 1px solid var(--line); background: #fff; font-weight: 700; }
 /* 매물 하나 = 카드 하나: 위에 가격(가장 크게)과 평수, 아래 단추 줄 */
 :deep(.mp-card) { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 /* 옆에 목록이 있으면 카드를 누르면 목록에서 그 매물을 고른다. */
@@ -2760,9 +2768,9 @@ onBeforeUnmount(() => {
   text-decoration: underline; text-decoration-color: #b9c6d9; text-underline-offset: 4px;
 }
 :deep(.mp-actions a:hover) { text-decoration-color: currentColor; }
-/* 창 쪽 번호(‹ 1 2 3 4 5 … 16 ›): 창 안을 스크롤해도 맨 아래에 남는다(흰 바탕으로 밑의 카드를 가림). 지금 쪽은 짙은 남색으로 채운다. */
+/* 창 쪽 번호(‹ 1 2 3 4 5 … 16 ›): 카드 목록 밖 창 맨 아래에 고정한다. 지금 쪽은 짙은 남색으로 채운다. */
 :deep(.mp-pager) {
-  position: sticky; bottom: 0; z-index: 1; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px;
+  flex: none; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px;
   padding-top: 8px; border-top: 1px solid var(--line); background: #fff;
 }
 :deep(.mp-pager button) {
