@@ -274,43 +274,52 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
     <header class="pc-head">
       <div v-if="!noThumb" class="pc-thumb" :style="l.thumbnail ? { backgroundImage: `url(${JSON.stringify(l.thumbnail)})` } : undefined">
         <span v-if="!l.thumbnail">사진 없음</span>
+        <!-- 이 대시보드에서 본 매물: 사진 왼쪽 위 구석에 작은 ✓(사진을 가리지 않게) -->
+        <span v-if="marks.seen" class="pc-seen" role="img" aria-label="봤음" :title="`이 대시보드에서 ${dateTime(l.seenAt!)}에 눌러 봄`">✓</span>
       </div>
       <div class="pc-main">
         <div class="pc-top">
           <div class="pc-chips">
+            <!--
+              이름표 순서: 새 수집, 색이 있는 이름표(신규, 가격 변동, 실거래, 주의, 관심, 문의함), 흐린 상태(별로, 버림 등),
+              마지막에 같은 모양의 회색 정보 이름표(유형, 방 구조, 무옵션, 경매 정보, 네이버 확인).
+              유형을 모르는 매물('모름')은 유형 이름표를 두지 않는다. 본 매물은 이름표 대신 사진 구석의 ✓로 보인다.
+            -->
             <ZoneBanner v-if="zoneBanner && l.zone" part="banner" :listing="l" :key-set="zoneKeySet" />
-            <span v-if="!room" class="chip chip-kind" :class="kind" :title="l.buildingType ?? undefined">{{ KIND_LABEL[kind] }}</span>
-            <span v-if="roomChip" class="chip chip-room">{{ roomChip }}</span>
             <span v-if="liveCollected" class="chip chip-live" title="처음 수집한 지 24시간이 안 된 매물">새 수집</span>
             <span v-if="l.isNew" class="chip chip-new">신규</span>
-            <span v-if="marks.contactedAt" class="chip chip-contact" :title="`${dateTime(marks.contactedAt)}에 문의함으로 표시`">📞 문의함</span>
-            <span v-else-if="marks.seen" class="chip chip-viewed" :title="`이 대시보드에서 ${dateTime(l.seenAt!)}에 눌러 봄`">봤음</span>
-            <span
-              v-if="seenNaver" class="chip chip-seen"
-              :title="`네이버 지도에서 이 매물이 든 동그라미를 눌러 목록을 본 마지막 시각: ${dateTime(seenNaver)} (크롬 확장이 기록)`"
-            >{{ ago(seenNaver) }} 확인</span>
             <template v-if="changeText">
               <span class="chip" :class="changeText.tone">{{ changeText.label }}</span>
               <span class="change num">{{ changeText.detail }}</span>
             </template>
-            <span v-if="tradeChip" class="chip trade-chip" :class="tradeChip.tone" :title="tradeChip.title">{{ tradeChip.text }}</span>
+            <span v-if="tradeChip && tradeChip.tone !== 'chip-muted'" class="chip trade-chip" :class="tradeChip.tone" :title="tradeChip.title">{{ tradeChip.text }}</span>
             <CountTooltip v-if="redev" :text="redev.tip" :max-width="480"><span class="chip redev-chip" :class="`chip-${redev.tone}`">{{ redev.label }}</span></CountTooltip>
             <CountTooltip v-for="c in ledger" :key="c.label" :text="c.tip" :max-width="520"><span class="chip" :class="`chip-${c.tone}`">{{ c.label }}</span></CountTooltip>
+            <CountTooltip v-if="claims" :text="claims.tip" :max-width="520"><span class="chip" :class="`chip-${claims.tone}`">{{ claims.label }}</span></CountTooltip>
+            <span v-if="l.auction?.share" class="chip chip-warn" title="지분 매각: 집이나 땅 전체가 아니라 일부 지분만 팝니다(다른 공유자가 있음). 땅만 파는 물건의 면적은 지분만큼입니다.">지분</span>
+            <span v-if="l.auction?.mgmt" class="chip chip-warn" :title="`물건 비고: ${l.auction.mgmt.text}`">{{ l.auction.mgmt.label }}</span>
+            <span v-if="l.similarToDiscarded" class="chip chip-warn">버림한 매물과 비슷</span>
+            <span v-if="l.verdict === 'star'" class="chip chip-star">★ 관심</span>
+            <span v-if="marks.contactedAt" class="chip chip-contact" :title="`${dateTime(marks.contactedAt)}에 문의함으로 표시`">📞 문의함</span>
+            <span v-if="l.verdict === 'meh'" class="chip chip-muted">별로</span>
+            <span v-if="l.relistedOf" class="chip chip-muted" :title="`원래 매물: ${l.relistedOf}`">재등록이라 숨김</span>
+            <span v-else-if="l.verdict === 'discard'" class="chip chip-muted">버림</span>
+            <span v-if="l.status === 'gone'" class="chip chip-muted">최근 조회에서 안 보임</span>
+            <span v-if="!room && kind !== 'unknown'" class="chip chip-kind" :class="kind" :title="l.buildingType ?? undefined">{{ KIND_LABEL[kind] }}</span>
+            <span v-if="roomChip" class="chip chip-room">{{ roomChip }}</span>
+            <span v-if="isNoOption(l)" class="chip chip-room" title="사이트가 준 옵션 목록이 비어 있거나 글에 '무옵션'이라고 적힌 집">무옵션</span>
+            <span v-if="tradeChip && tradeChip.tone === 'chip-muted'" class="chip chip-room trade-chip" :title="tradeChip.title">{{ tradeChip.text }}</span>
+            <span v-if="l.auction?.failed != null" class="chip chip-room">유찰 {{ l.auction.failed }}회</span>
+            <span v-if="l.auction && l.auction.lots > 1" class="chip chip-room" title="같은 사건과 물건번호의 목록(토지, 호실)을 한 번에 매각">{{ l.auction.lots }}개 일괄매각</span>
             <CountTooltip v-if="loan" :text="loan.tip" :max-width="500">
               <span class="chip loan-chip"><span v-for="x in loan.lights" :key="x.id" class="loan" :class="x.state"><i class="ld" />{{ x.name }}</span><span v-if="loan.cap" class="loan-cap">주담대 {{ eokText(loan.cap) }}</span></span>
             </CountTooltip>
-            <span v-if="l.verdict === 'star'" class="chip chip-star">★ 관심</span>
-            <span v-else-if="l.verdict === 'meh'" class="chip chip-muted">별로</span>
-            <span v-if="l.relistedOf" class="chip chip-muted" :title="`원래 매물: ${l.relistedOf}`">재등록이라 숨김</span>
-            <span v-else-if="l.verdict === 'discard'" class="chip chip-muted">버림</span>
-            <span v-if="l.similarToDiscarded" class="chip chip-warn">버림한 매물과 비슷</span>
-            <span v-if="l.status === 'gone'" class="chip chip-muted">최근 조회에서 안 보임</span>
-            <span v-if="isNoOption(l)" class="chip chip-seen" title="사이트가 준 옵션 목록이 비어 있거나 글에 '무옵션'이라고 적힌 집">무옵션</span>
-            <span v-if="l.auction?.failed != null" class="chip chip-room">유찰 {{ l.auction.failed }}회</span>
-            <span v-if="l.auction && l.auction.lots > 1" class="chip chip-room" title="같은 사건과 물건번호의 목록(토지, 호실)을 한 번에 매각">{{ l.auction.lots }}개 일괄매각</span>
-            <span v-if="l.auction?.share" class="chip chip-warn" title="지분 매각: 집이나 땅 전체가 아니라 일부 지분만 팝니다(다른 공유자가 있음). 땅만 파는 물건의 면적은 지분만큼입니다.">지분</span>
-            <CountTooltip v-if="claims" :text="claims.tip" :max-width="520"><span class="chip" :class="`chip-${claims.tone}`">{{ claims.label }}</span></CountTooltip>
-            <span v-if="l.auction?.mgmt" class="chip chip-warn" :title="`물건 비고: ${l.auction.mgmt.text}`">{{ l.auction.mgmt.label }}</span>
+            <span
+              v-if="seenNaver" class="chip chip-room"
+              :title="`네이버 지도에서 이 매물이 든 동그라미를 눌러 목록을 본 마지막 시각: ${dateTime(seenNaver)} (크롬 확장이 기록)`"
+            >{{ ago(seenNaver) }} 확인</span>
+            <!-- 사진 칸이 없는 경매 물건만 본 표시를 이름표로 둔다. -->
+            <span v-if="noThumb && marks.seen && !marks.contactedAt" class="chip chip-viewed" :title="`이 대시보드에서 ${dateTime(l.seenAt!)}에 눌러 봄`">봤음</span>
             <slot name="tags" />
           </div>
           <button type="button" class="pc-close" title="이 카드 닫기" @click.stop="emit('close')">✕ 닫기</button>
@@ -779,8 +788,13 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
   display: flex; gap: 16px; padding: 12px 14px; background: #213956; color: #f7faff;
 }
 .pc-thumb {
+  position: relative;
   flex: none; width: 168px; min-height: 126px; border-radius: 10px; background: #38516f center/cover no-repeat;
   display: grid; place-items: center; font-size: 12px; color: #bccbe0;
+}
+.pc-seen {
+  position: absolute; top: 5px; left: 5px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  background: rgba(33, 57, 86, .85); box-shadow: 0 0 0 1.5px #fff; color: #fff; font-size: 11px; font-weight: 800; line-height: 1;
 }
 .pc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .pc-top { display: flex; align-items: flex-start; gap: 8px; }
