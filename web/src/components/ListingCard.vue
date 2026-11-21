@@ -322,6 +322,8 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
             <b v-for="(p, i) in l.prices" :key="i"><span class="pc-deal">{{ dealName(p) }}</span>{{ priceAmount(p) }}</b>
             <b v-if="!l.prices.length">가격 모름</b>
           </template>
+          <!-- 평수는 가격과 같이 보는 숫자라 가격 줄 끝에 한 번 붙인다(㎡는 아래 숫자 상자에 있다). -->
+          <span v-if="!room && l.areaM2 != null" class="pc-size" :title="`${kind === 'land' ? '토지' : '전용'} ${l.areaM2}㎡`">{{ pyeong(l.areaM2) }}평</span>
           <small v-if="appraisal" :title="appraisal.title">감정가 {{ appraisal.amount }}의 {{ appraisal.rate }}%</small>
         </div>
 
@@ -791,6 +793,14 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
 .pc-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 18px; }
 .pc-price b { font-size: 30px; font-weight: 800; line-height: 36px; letter-spacing: -.035em; white-space: nowrap; }
 .pc-deal { margin-right: 8px; font-size: 14px; font-weight: 700; letter-spacing: 0; color: #e0e8f4; }
+/* 평수 라벨: 가격 숫자와 한 덩어리로 읽히지 않게 테두리 있는 칸에 담아 가격 줄 가운데 높이에 둔다. */
+.pc-price { align-items: center; }
+.pc-size {
+  padding: 0 10px; border: 1px solid #6380a3; border-radius: 8px; background: #2c4666;
+  font-size: 16px; font-weight: 700; line-height: 28px; color: #f7faff; white-space: nowrap;
+  /* 숫자는 줄 높이의 가운데보다 조금 위에 앉아서, 칸을 줄 가운데에 두면 내려가 보인다. 숫자 높이의 가운데에 맞게 살짝 올린다. */
+  transform: translateY(-2px);
+}
 .pc-price small { flex: 1 0 100%; font-size: 12px; color: #bccbe0; }
 
 .pc-monthly { display: table; align-self: flex-start; border-spacing: 0; }
