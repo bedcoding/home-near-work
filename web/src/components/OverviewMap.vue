@@ -346,23 +346,48 @@ function listingBadges(l: ListingView) {
   return badges;
 }
 
+/**
+ * 지도 표시의 두 가격 줄에 든 매물과 그 이름표, 금액. 올리면 보이는 글과 누르면 뜨는 창이 같이 써서, 두 곳에 같은 이름표([최저 월세] 등)가 붙는다.
+ * 윗줄은 최저 월세(월세가 없으면 최저 보증금이나 최저 전세), 아랫줄은 최저 전세나, 월세만 있는 묶음이면 최저 보증금(윗줄과 같은 매물이면 표시처럼 뺀다).
+ * 한 건짜리 표시는 비교할 것이 없어 비운다.
+ */
+function mapPriceLines(sum: Summary): Map<ListingView, { label: string; amount: string }[]> {
+  const out = new Map<ListingView, { label: string; amount: string }[]>();
+  if (sum.n < 2) return out;
+  const monthly = eligibleQuote(sum, sum.monthly);
+  const deposit = eligibleQuote(sum, sum.deposit);
+  const jeonse = eligibleQuote(sum, sum.jeonse);
+  const first = monthly ? { quote: monthly, label: '최저 월세' } : deposit ? { quote: deposit, label: '최저 보증금' } : jeonse ? { quote: jeonse, label: '최저 전세' } : null;
+  const second = sum.secondary ? { quote: sum.secondary.quote, label: sum.secondary.quote.price.deal === 'jeonse' ? '최저 전세' : '최저 보증금' } : null;
+  for (const line of [first, second]) {
+    if (!line) continue;
+    const { quote, label } = line;
+    // 월세는 다른 줄처럼 '1,000/50', 전세는 '전세 6,000'으로 쓴다(금액만 쓰면 무엇인지 헷갈린다).
+    const price = { label, amount: quote.price.deal === 'monthly' ? priceAmount(quote.price) : priceText(quote.price) };
+    const prices = out.get(quote.listing);
+    if (prices) prices.push(price);
+    else out.set(quote.listing, [price]);
+  }
+  return out;
+}
+
+/** [최저 월세] 같은 이름표들을 이름표 줄(badges) 맨 앞에 붙인다. 이름표 줄이 없으면 만든다. */
+function withPriceLabels(badges: HTMLElement | null, labels: string[]) {
+  if (!labels.length) return badges;
+  const box = badges ?? document.createElement('span');
+  box.className = 'listing-map-badges';
+  box.prepend(...labels.map((t) => line('chip chip-low', t)));
+  return box;
+}
+
 /** 최저 월세와 전세 매물 아래에 새 수집, 신규, 나머지 순으로 표시한다. */
 function tooltip(g: Group, pin: L.Layer) {
   const box = document.createElement('div');
   box.className = 'listing-tip';
   const { sum } = g;
-  const previews = new Map<ListingView, string[]>();
-  if (sum.n > 1) {
-    box.appendChild(line('tip-heading', `${g.spots > 1 ? '이 근처' : '이 자리'} ${sum.n}건`));
-    for (const quote of [eligibleQuote(sum, sum.monthly), eligibleQuote(sum, sum.jeonse)]) {
-      if (!quote) continue;
-      const label = quote.price.deal === 'jeonse' ? '최저 전세' : '최저 월세';
-      const text = `${label} ${priceAmount(quote.price)}`;
-      const prices = previews.get(quote.listing);
-      if (prices) prices.push(text);
-      else previews.set(quote.listing, [text]);
-    }
-  }
+  /** 매물 → 맨 앞에 쓸 가격 줄(지도 표시의 가격 줄과 같은 매물이면 그 이름표와 금액) */
+  const previews = mapPriceLines(sum);
+  if (sum.n > 1) box.appendChild(line('tip-heading', `${g.spots > 1 ? '이 근처' : '이 자리'} ${sum.n}건`));
   const remaining = withPriceChangesFirst(g.items).filter(l => !previews.has(l));
   const live = props.liveListingIds;
   // 펼친 가격대 매물을 먼저, 회색(펼친 가격대 밖) 매물을 그 뒤에 두고(각각 새 수집, 신규, 나머지 순), 별로는 창처럼 맨 뒤에 둔다.
@@ -392,15 +417,25 @@ function tooltip(g: Group, pin: L.Layer) {
 
     const details = document.createElement('span');
     details.className = 'tip-details';
-    for (const text of prices.length ? prices : [pricesText(l) || '가격 정보 없음']) {
-      details.appendChild(line('tip-price', text));
-    }
-    const badges = listingBadges(l);
+    // 지도 표시의 가격 줄과 같은 매물은 그 금액을 쓰고, '최저 월세', '최저 보증금', '최저 전세'는 [신규]처럼 이름표 줄 맨 앞에 붙인다.
+    // 사이트 이름은 첫 가격 줄 오른쪽 끝에 작은 회색 글씨로 둔다(따로 한 줄을 쓰면 매물마다 4줄이 됐다).
+    // 봤음은 사진 구석의 ✓로 보이므로 사진이 없는 매물에만 쓰고, 별로, 관심, 문의함은 사이트 이름 옆에 그대로 둔다.
+    const mark = l.verdict === 'meh' ? ', 별로' : l.verdict === 'star' ? ', ★ 관심' : l.contactedAt ? ', 문의함' : looksSeen(l) && !l.thumbnail ? ', 봤음' : '';
+    const texts = prices.length ? prices.map((p) => p.amount) : [pricesText(l) || '가격 정보 없음'];
+    texts.forEach((text, i) => {
+      if (i) {
+        details.appendChild(line('tip-price', text));
+        return;
+      }
+      const top = document.createElement('span');
+      top.className = 'tip-top';
+      top.append(line('tip-price', text), line('tip-site', `${SOURCE_LABEL[l.source]}${mark}`));
+      details.appendChild(top);
+    });
+    const badges = withPriceLabels(listingBadges(l), prices.map((p) => p.label));
     if (badges) details.appendChild(badges);
-    const mark = l.verdict === 'meh' ? ', 별로' : l.verdict === 'star' ? ', ★ 관심' : l.contactedAt ? ', 문의함' : looksSeen(l) ? ', 봤음' : '';
     const description = [l.areaM2 != null ? `${pyeong(l.areaM2)}평` : '', l.title].filter(Boolean).join(', ');
     if (description) details.appendChild(line('tip-description', description));
-    details.appendChild(line('tip-site', `${SOURCE_LABEL[l.source]}${mark}`));
     if (l.note) details.appendChild(line('tip-note', `📝 ${l.note.length > 24 ? `${l.note.slice(0, 24)}…` : l.note}`));
     for (const text of mapPriceChangeLines(l.priceChange ?? l.latestPriceChange ?? null)) details.appendChild(line('tip-price-change', text));
 
@@ -940,6 +975,8 @@ interface PopupState {
   items: ListingView[];
   page: number;
   seen: ReadonlySet<string>;
+  /** 매물 번호 → 지도 표시 가격 줄 이름표([최저 월세] 등). 올리면 보이는 글과 같은 이름표를 카드에도 붙인다. */
+  priceLabels: ReadonlyMap<string, string[]>;
 }
 let popupState: PopupState | null = null;
 /** 정보 창 내용 폭의 한계(px). 좁은 지도에서는 지도 폭에 맞춘다. */
@@ -999,7 +1036,8 @@ function popup(g: Group, items: ListingView[]) {
   if (!map) return;
   const box = document.createElement('div');
   box.className = 'mp';
-  popupState = { g, items, page: 0, seen: new Set(items.filter(looksSeen).map((l) => l.id)) };
+  const priceLabels = new Map([...mapPriceLines(g.sum)].map(([l, ps]) => [l.id, ps.map((p) => p.label)]));
+  popupState = { g, items, page: 0, seen: new Set(items.filter(looksSeen).map((l) => l.id)), priceLabels };
   renderPopup(box);
   const layer = listingPopup ?? L.popup({ className: 'mp-popup' });
   const availableWidth = map.getSize().x - 48;
@@ -1080,7 +1118,7 @@ function renderPopup(box: HTMLElement, turned = false) {
   if (head) parts.push(head);
   const list = document.createElement('div');
   list.className = 'mp-list';
-  for (const l of shown) list.appendChild(popupCard(l, withThumb, s.seen.has(l.id)));
+  for (const l of shown) list.appendChild(popupCard(l, withThumb, s.seen.has(l.id), s.priceLabels.get(l.id) ?? []));
   parts.push(list);
   const pager = popupPager(s, box);
   if (pager) parts.push(pager);
@@ -1092,8 +1130,8 @@ function renderPopup(box: HTMLElement, turned = false) {
   box.querySelector<HTMLElement>('.mp-pager [aria-current="page"]')?.focus({ preventScroll: true });
 }
 
-/** 창의 매물 카드 하나. seen이면 사진 칸 구석에 ✓를 붙인다. */
-function popupCard(l: ListingView, withThumb: boolean, seen: boolean) {
+/** 창의 매물 카드 하나. seen이면 사진 칸 구석에 ✓를 붙이고, labels([최저 월세] 등)는 이름표 줄 맨 앞에 붙인다. */
+function popupCard(l: ListingView, withThumb: boolean, seen: boolean, labels: string[]) {
   const card = document.createElement('div');
   card.className = 'mp-card';
   card.dataset.listingId = l.id;
@@ -1107,7 +1145,7 @@ function popupCard(l: ListingView, withThumb: boolean, seen: boolean) {
   const price = document.createElement('strong');
   price.textContent = pricesText(l) || '가격 정보 없음';
   cost.appendChild(price);
-  const badges = listingBadges(l);
+  const badges = withPriceLabels(listingBadges(l), labels);
   if (badges) cost.appendChild(badges);
   const changes = mapPriceChangeLines(l.priceChange ?? l.latestPriceChange ?? null);
   if (changes.length) {
@@ -2394,6 +2432,7 @@ onBeforeUnmount(() => {
             <dd>
               <b>묶음</b>: 가격 표시끼리 조금이라도 겹치면(NEW 딱지 포함) 한 표시로 묶습니다. 가격 옆 숫자는 묶인 매물 수입니다. 더 확대하면 풀립니다.
               월세와 전세가 함께 있으면 윗줄에 최저 월세, 아랫줄에 최저 전세금을 표시합니다. 월세만 있으면 아랫줄에 최저 보증금을 표시하고, 같은 조건이면 한 줄만 표시합니다. 전세만 있으면 최저 전세금 한 줄이 표시됩니다.
+              마우스를 올리면 두 줄의 매물이 '최저 월세', '최저 보증금', '최저 전세'라는 이름으로 맨 앞에 나옵니다.
               핀을 누르면 고른 매물, 핀에 표시한 매물과 가격이 바뀐 매물을 먼저 볼 수 있습니다.
             </dd>
             <dt><b class="price-sample seen-sample">✓ 500/40</b></dt>
@@ -2677,6 +2716,10 @@ onBeforeUnmount(() => {
 .legend i.live-dot { border: 2px solid #16202e; background: #ffde59; }
 .key-dot.meh-dot { display: inline-grid; place-items: center; color: #fff; font: normal 700 9px/1 var(--font); }
 :deep(.tip-site) { color: var(--muted); }
+/* 툴팁 첫 줄: 왼쪽에 가격, 오른쪽 끝에 사이트 이름(작은 회색 글씨, 별로와 관심 등은 그 옆) */
+:deep(.tip-top) { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+:deep(.tip-top .tip-price) { flex: 1 1 auto; min-width: 0; }
+:deep(.tip-top .tip-site) { flex: none; max-width: 50%; font-size: 12px; }
 :deep(.listing-tooltip.leaflet-interactive:not(.tip-clickable)) { pointer-events: none; }
 :deep(.listing-tooltip.leaflet-tooltip-top::before), :deep(.listing-tooltip.leaflet-tooltip-bottom::before) { left: var(--tip-arrow-x, 50%); }
 :deep(.listing-tip) { overflow: auto; overscroll-behavior: contain; white-space: normal; font-size: 14px; line-height: 1.45; }
@@ -2690,6 +2733,8 @@ onBeforeUnmount(() => {
 :deep(.tip-preview .mp-thumb) { flex: 0 0 auto; width: min(112px, 32%); height: auto; aspect-ratio: 4 / 3; }
 :deep(.tip-details) { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr); min-width: 0; }
 :deep(.tip-price) { font-size: 16px; font-weight: 800; color: var(--ink); }
+/* 지도 표시의 가격 줄 매물에 붙이는 이름표(최저 월세, 최저 보증금, 최저 전세): [신규]와 같은 줄, 남색 칸 */
+:deep(.chip.chip-low) { background: #e4ebf5; color: #213956; }
 :deep(.listing-map-badges) { display: flex; flex-wrap: wrap; gap: 4px; margin-block: 2px; }
 :deep(.listing-map-badges .chip) { padding: 1px 6px; font-size: 11px; }
 :deep(.tip-price), :deep(.tip-description), :deep(.tip-site) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
