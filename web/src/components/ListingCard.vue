@@ -16,6 +16,7 @@ import { walkTimes } from '../walk';
 import { WALK_KMH } from '../../../shared/walk';
 import { convertedRent, loanMonthly } from '../rentRate';
 import { ledgerChips } from '../ledger';
+import { mapPriceChangeLines } from '../mapPriceChange';
 import CountTooltip from './CountTooltip.vue';
 import ZoneBanner from './ZoneBanner.vue';
 import { dabangAddressBusy, dabangAddressErrors, dabangAddresses, loadDabangAddress } from '../dabangAddress';
@@ -261,6 +262,18 @@ const facts = computed(() => {
   return out;
 });
 
+/**
+ * 고른 매물 카드의 가격 변동 줄. 아직 확인하지 않은 변동이 없으면 확인한 마지막 변동(latestPriceChange)을 쓴다.
+ * 내림은 초록, 올림은 주황으로 칠한다.
+ */
+const priceHistory = computed(() => {
+  const c = l.value.priceChange ?? l.value.latestPriceChange ?? null;
+  const lines = mapPriceChangeLines(c);
+  if (!c || !lines.length) return null;
+  const tone = c.type === 'price_down' ? 'down' : c.type === 'price_up' ? 'up' : '';
+  return { lines, tone, when: c.at ? ago(c.at) : '' };
+});
+
 /** 링크 글자 끝의 화살표를 뗀다(고른 매물 카드의 링크 줄은 밑줄로 링크임을 보인다). */
 const plain = (label: string) => label.replace(/\s*↗$/, '');
 </script>
@@ -287,10 +300,8 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
             <ZoneBanner v-if="zoneBanner && l.zone" part="banner" :listing="l" :key-set="zoneKeySet" />
             <span v-if="liveCollected" class="chip chip-live" title="처음 수집한 지 24시간이 안 된 매물">새 수집</span>
             <span v-if="l.isNew" class="chip chip-new">신규</span>
-            <template v-if="changeText">
-              <span class="chip" :class="changeText.tone">{{ changeText.label }}</span>
-              <span class="change num">{{ changeText.detail }}</span>
-            </template>
+            <!-- 바뀐 금액은 가격 바로 아래 줄에 쓴다(확인한 뒤에도 남는다). 여기에는 아직 확인하지 않은 변동의 이름표만 둔다. -->
+            <span v-if="changeText" class="chip" :class="changeText.tone">{{ changeText.label }}</span>
             <span v-if="tradeChip && tradeChip.tone !== 'chip-muted'" class="chip trade-chip" :class="tradeChip.tone" :title="tradeChip.title">{{ tradeChip.text }}</span>
             <CountTooltip v-if="redev" :text="redev.tip" :max-width="480"><span class="chip redev-chip" :class="`chip-${redev.tone}`">{{ redev.label }}</span></CountTooltip>
             <CountTooltip v-for="c in ledger" :key="c.label" :text="c.tip" :max-width="520"><span class="chip" :class="`chip-${c.tone}`">{{ c.label }}</span></CountTooltip>
@@ -331,6 +342,11 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
           <!-- 평수는 가격과 같이 보는 숫자라 가격 줄 끝에 한 번 붙인다(㎡는 아래 숫자 상자에 있다). -->
           <span v-if="!room && l.areaM2 != null" class="pc-size" :title="`${kind === 'land' ? '토지' : '전용'} ${l.areaM2}㎡`">{{ pyeong(l.areaM2) }}평</span>
           <small v-if="appraisal" :title="appraisal.title">감정가 {{ appraisal.amount }}의 {{ appraisal.rate }}%</small>
+        </div>
+        <!-- 마지막 가격 변동: 지도 글과 같은 문장으로, 확인한 뒤에도 남긴다. -->
+        <div v-if="priceHistory" class="pc-change num" :class="priceHistory.tone" :title="`${priceHistory.when}에 바뀜`">
+          <span v-for="t in priceHistory.lines" :key="t">{{ t }}</span>
+          <small>{{ priceHistory.when }}</small>
         </div>
 
         <!-- 매달 드는 돈: 이름은 세 글자로, '월'과 '만'은 세로로 나란히 서게 칸을 나눈다. 관리비는 위 두 값에 더하지 않는다. -->
@@ -817,6 +833,10 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
   transform: translateY(-2px);
 }
 .pc-price small { flex: 1 0 100%; font-size: 12px; color: #bccbe0; }
+.pc-change { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 12px; margin-top: -2px; font-size: 13px; font-weight: 600; line-height: 20px; color: #e0e8f4; }
+.pc-change.down { color: #9fe0bb; }
+.pc-change.up { color: #f6c79a; }
+.pc-change small { font-size: 12px; font-weight: 500; color: #bccbe0; }
 
 .pc-monthly { display: table; align-self: flex-start; border-spacing: 0; }
 .pc-monthly :deep(.pc-mrow) { display: table-row; line-height: 21px; }

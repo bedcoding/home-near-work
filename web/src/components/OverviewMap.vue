@@ -403,7 +403,8 @@ function bindListingTip(pin: L.Layer, current: () => Group) {
 
     const size = map.getSize();
     const point = map.latLngToContainerPoint([g.lat, g.lng]);
-    const width = Math.min(376, size.x - 16);
+    // 376px에서는 매물 이름과 가격 변동 줄('전세금 1억 2,500만원 → 1억 3,000만원')이 잘리거나 두 줄로 내려가서 넓혔다.
+    const width = Math.min(440, size.x - 16);
     const margin = width / 2 + 8;
     const shift = Math.round(Math.max(margin, Math.min(size.x - margin, point.x)) - point.x);
     // 확대 버튼과 지도 도구 아래에서 시작하도록 위쪽 공간을 남긴다.
