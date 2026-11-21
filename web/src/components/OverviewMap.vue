@@ -347,7 +347,8 @@ function tooltip(g: Group, pin: L.Layer) {
   for (const l of remaining) if (!previews.has(l)) previews.set(l, []);
   for (const [l, prices] of previews) {
     const row = document.createElement(props.listMode ? 'button' : 'div');
-    row.className = 'tip-preview';
+    // 별로로 표시한 매물은 줄 전체를 회색으로 흐리게 한다.
+    row.className = l.verdict === 'meh' ? 'tip-preview meh' : 'tip-preview';
     if (row instanceof HTMLButtonElement) {
       row.type = 'button';
       row.addEventListener('click', () => {
@@ -870,6 +871,7 @@ function popup(g: Group, items: ListingView[]) {
       top.appendChild(area);
     }
     card.appendChild(top);
+    markMehCard(card, l);
     if (props.listMode) {
       card.classList.add('go');
       // 매물 탭은 목록 대신 왼쪽에 고른 매물 카드 한 장만 띄운다(Overview.vue).
@@ -934,6 +936,44 @@ function popup(g: Group, items: ListingView[]) {
   hoveredListingPin?.closeTooltip();
   layer.setLatLng([g.lat, g.lng]).setContent(box).openOn(map);
   highlightPopupCard(props.selectedId);
+}
+
+/** 창의 카드 하나를 별로 표시에 맞춘다: 별로면 회색으로 흐리게 하고 가격 옆에 '별로' 딱지를 붙인다. */
+function markMehCard(card: HTMLElement, l: ListingView) {
+  const meh = l.verdict === 'meh';
+  card.classList.toggle('meh', meh);
+  const tag = card.querySelector('.mp-meh');
+  if (meh && !tag) card.querySelector('.mp-top strong')?.after(line('mp-meh', '별로'));
+  else if (!meh) tag?.remove();
+}
+
+/**
+ * 열려 있는 창을 지금 매물에 맞춘다. 창은 열 때 한 번 그리므로, 그 뒤에 카드에서 버림이나 별로를 누르면
+ * 여기서 버린 매물의 카드를 지우고(남은 것이 없으면 창을 닫는다) 별로 매물을 회색으로 바꾼다.
+ */
+function refreshPopupCards() {
+  const box = listingPopup && map?.hasLayer(listingPopup) ? listingPopup.getContent() : null;
+  if (!(box instanceof HTMLElement)) return;
+  const cards = [...box.querySelectorAll<HTMLElement>('.mp-card')];
+  if (!cards.length) return;
+  const ids = new Set(cards.map((c) => c.dataset.listingId));
+  const now = new Map<string, ListingView>();
+  for (const list of [props.listings, props.background]) for (const l of list) if (ids.has(l.id)) now.set(l.id, l);
+  for (const card of cards) {
+    const l = now.get(card.dataset.listingId!);
+    if (l) markMehCard(card, l);
+    else card.remove();
+  }
+  const left = box.querySelectorAll('.mp-card').length;
+  if (!left) {
+    listingPopup?.remove();
+    return;
+  }
+  const head = box.querySelector('.mp-head');
+  if (head && !box.querySelector('.mp-more')) {
+    if (left > 1) head.textContent = (head.textContent ?? '').replace(/\d+건/, `${left}건`);
+    else head.remove();
+  }
 }
 
 function highlightPopupCard(id: string | null) {
@@ -1726,6 +1766,7 @@ function onMapLeave() {
 /** 매물이 바뀌면 처음부터 다시 그린다. fit: 매물에 맞춰 지도를 다시 맞춘다(처음, fitKey가 바뀔 때). */
 function drawDots(fit: boolean) {
   render(true);
+  refreshPopupCards();
   if (fit) fitTo(focusPoints());
 }
 
@@ -2358,6 +2399,15 @@ onBeforeUnmount(() => {
 :deep(.mp-thumb img) { width: 100%; height: 100%; object-fit: cover; display: block; }
 :deep(.mp-card.go) { cursor: pointer; }
 :deep(.mp-card.go:hover) { border-color: var(--line-strong); background: #f6f8fb; }
+/* 별로로 표시한 매물: 창의 카드와 올리면 보이는 글의 줄을 회색으로 흐리게(사진은 흑백으로) */
+:deep(.mp-card.meh), :deep(.mp-card.meh.go:hover) { background: #eef0f3; }
+:deep(.mp-card.meh .mp-thumb img), :deep(.tip-preview.meh .mp-thumb img) { filter: grayscale(1); opacity: .6; }
+:deep(.mp-card.meh .mp-top strong), :deep(.mp-card.meh .mp-area) { color: var(--muted); }
+:deep(.mp-card.meh .mp-actions button) { border-color: #8791a0; background: #8791a0; }
+:deep(.mp-card.meh .mp-actions a) { color: var(--muted); }
+:deep(.mp-meh) { margin-left: 8px; padding: 1px 7px; border-radius: 5px; background: #dfe3e9; color: #5f6e85; font-size: 11px; font-weight: 700; vertical-align: 1px; }
+:deep(.tip-preview.meh) { background: #f1f3f6; }
+:deep(.tip-preview.meh .tip-price), :deep(.tip-preview.meh .tip-description) { color: var(--muted); }
 /* 고른 매물: 테두리만 짙게(옆에 색 띠를 덧대지 않는다) */
 :deep(.mp-card.mp-selected), :deep(.mp-card.mp-selected:hover) { border-color: #213956; background: #f3f6fb; }
 /* 가격 줄: 왼쪽에 가격, 오른쪽 끝에 평수 상자(줄바꿈하지 않아 창 폭이 이 줄보다 좁아지지 않는다). */
