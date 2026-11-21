@@ -333,7 +333,10 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
             <span class="pc-mlabel">환산시</span><span class="pc-mwol">월</span><b class="pc-mval">{{ converted.text }}</b>
           </CountTooltip>
           <CountTooltip v-if="loanCost" class="pc-mrow" :text="loanCost.tip" :max-width="520">
-            <span class="pc-mlabel">대출시</span><span class="pc-mwol">월</span><b class="pc-mval">{{ loanCost.text }}</b>
+            <!-- 대출이 안 나오는 매물은 월세와 같은 금액이 나와 헷갈리므로 금액 대신 '안 됨'을 보인다(이유는 올리면 뜨는 글에 있다). -->
+            <span class="pc-mlabel">대출시</span>
+            <template v-if="loanCost.none"><span class="pc-mnote">소액이라 대출불가</span><b class="pc-mval" /></template>
+            <template v-else><span class="pc-mwol">월</span><b class="pc-mval">{{ loanCost.text }}</b></template>
           </CountTooltip>
           <span v-if="fee" class="pc-mrow plain">
             <span class="pc-mlabel">관리비</span><span class="pc-mwol">{{ fee.known ? '월' : '' }}</span><b class="pc-mval" :class="{ unknown: !fee.known }">{{ fee.text }}</b>
@@ -810,6 +813,8 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
 .pc-mwol { display: table-cell; padding-right: 5px; font-size: 15px; font-weight: 700; }
 .pc-mval { display: table-cell; font-size: 15px; font-weight: 700; text-align: right; white-space: nowrap; }
 .pc-mval.unknown { font-weight: 600; color: #ffe3a3; }
+/* 금액 대신 적는 글('소액이라 대출불가'): '월' 칸에서 시작해 옆 칸 위로 넘쳐 흐르게 해서, 다른 줄의 숫자 칸 폭을 넓히지 않는다. */
+.pc-mnote { display: table-cell; max-width: 0; overflow: visible; font-size: 13px; font-weight: 600; color: #ffe3a3; white-space: nowrap; }
 
 /* 숫자 상자: 칸 사이는 선으로 가르고, 좁아져 줄이 바뀌어도 바깥쪽 선은 상자 밖으로 잘려 안 보인다. */
 .pc-info { margin: 12px 14px 0; overflow: hidden; border: 1px solid #dbe3ee; border-radius: 10px; background: #f3f6fb; }

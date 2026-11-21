@@ -126,6 +126,7 @@ export function convertedRent(l: Pick<ListingView, 'prices'>): { text: string; t
 }
 
 // ---------- 대출 시 매달 나가는 돈 ----------
+// none은 어느 가격 선택지도 대출이 안 나오는 때다(보증금이 월세 2년치보다 적음). 그때 text는 월세와 같아서, 고른 매물 카드는 금액 대신 '안 됨'을 보인다.
 // 환산 월세(그 집의 값을 견줄 때)와 달리, 보증금을 전세대출로 낼 때 실제로 매달 나가는 돈(월세 + 대출 이자)이다.
 // 내 돈으로 낸 나머지 보증금은 매달 나가는 돈이 없어 넣지 않는다.
 
@@ -144,7 +145,7 @@ const RENT_MONTHS = 24;
  * 금리와 비율은 내 조건(profile.ts), 없으면 기본값. 해당 선택지가 없으면 null.
  * 근생이나 위반건축물 표시가 있으면 설명 맨 위에 대출이 막힐 수 있다는 줄을 붙인다.
  */
-export function loanMonthly(l: Pick<ListingView, 'prices' | 'ledger'>): { text: string; tip: string } | null {
+export function loanMonthly(l: Pick<ListingView, 'prices' | 'ledger'>): { text: string; tip: string; none: boolean } | null {
   const me = profile.value;
   const rate = me.loanRate ?? LOAN_RATE.rate;
   const ratio = me.loanRatio ?? LOAN_RATIO;
@@ -176,5 +177,5 @@ export function loanMonthly(l: Pick<ListingView, 'prices' | 'ledger'>): { text: 
     '내 돈으로 낸 나머지 보증금은 매달 나가는 돈이 없어 넣지 않았고, 관리비도 따로입니다.',
     '한도는 HUG 전세안심대출 일반 기준(보증금의 80%, 수도권 4억, 월세가 있으면 보증 기간 월세 합계를 뺀 보증금으로 셈, 1년 이자가 인정소득의 40% 이내)을 따랐고, 실제 한도와 금리는 은행과 보증 상품마다 다릅니다.',
   ];
-  return { text, tip: lines.join('\n') };
+  return { text, tip: lines.join('\n'), none: options.every((p) => !loanOf(p)) };
 }
