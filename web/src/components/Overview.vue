@@ -452,27 +452,43 @@ watch(groupSort, (v) => {
 });
 /** 정렬에 쓸 수 있는 거리 핀(표시 핀은 매물까지 거리를 재지 않는다) */
 const sortPins = computed(() => walkPins.value.filter((p) => p.kind !== 'mark'));
-/** 정렬 칸에 마우스를 올리면 바로 뜨는 설명: 지금 고른 기준을 맨 위에, 그 아래 기준마다 한 줄 */
-const sortTip = computed(() => {
-  const lines: [GroupSort, string][] = [
-    ['map', '가격 바뀐 매물 먼저: 누른 지도 표시에 적힌 최저 월세, 최저 전세 매물을 맨 앞에, 그다음 가격이 바뀐 매물, 나머지는 환산 월세 낮은 순. 지도에서 누르면 뜨는 창과 같은 순서'],
-    ...sortPins.value.map((p): [GroupSort, string] => [`pin:${p.id}`, `${p.name}까지 가까운 순: 그 핀까지 길을 따라 걸어서 잰 거리가 짧은 순`]),
-    ['price', deal.value === 'sale' ? '매매가 낮은 순: 매매가가 낮은 순' : '환산 월세 낮은 순: 월세 + 보증금 × 전환율 ÷ 12(전세는 전세금 × 전환율 ÷ 12)가 낮은 순. 카드의 환산시 금액'],
-    ...(deal.value === 'sale' ? [] : [
-      ['monthly', '월세 낮은 순: 월세가 낮은 순. 전세는 월세 0으로 쳐서 맨 앞'],
-      ['deposit', '보증금 낮은 순: 월세 보증금과 전세금 중 낮은 값이 낮은 순'],
-    ] as [GroupSort, string][]),
-    ['area', '넓은 순: 전용 면적이 넓은 순'],
-    ['new', '처음 본 날 최근 순: 이 대시보드가 처음 모은 날이 최근인 순'],
+/**
+ * 정렬 고르는 칸의 항목: 이름과, 그 항목에 마우스를 올리면 바로 뜨는 짧은 설명.
+ * 브라우저 기본 고르기 칸(select)은 항목마다 설명을 달 수 없고 title도 늦게 떠서, 단추 목록으로 직접 그린다.
+ */
+const sortOptions = computed(() => {
+  const out: { value: GroupSort; label: string; tip: string }[] = [
+    { value: 'map', label: '가격 바뀐 매물 먼저', tip: '누른 지도 표시에 적힌 최저 월세, 최저 전세 매물을 맨 앞에, 그다음 가격이 바뀐 매물, 나머지는 환산 월세 낮은 순입니다.' },
+    ...sortPins.value.map((p) => ({ value: `pin:${p.id}` as GroupSort, label: `${p.name}까지 가까운 순`, tip: `${p.name}까지 길을 따라 걸어서 잰 거리가 짧은 순입니다.` })),
+    deal.value === 'sale'
+      ? { value: 'price' as GroupSort, label: '매매가 낮은 순', tip: '매매가가 낮은 순입니다.' }
+      : { value: 'price' as GroupSort, label: '환산 월세 낮은 순', tip: '월세 + 보증금 × 전환율 ÷ 12(전세는 전세금 × 전환율 ÷ 12)가 낮은 순입니다. 카드의 환산시 금액과 같습니다.' },
   ];
-  const now = lines.find(([k]) => k === sortNow.value);
-  return [
-    ...(now ? [`지금: ${now[1]}`, ''] : []),
-    ...lines.filter((x) => x !== now).map(([, t]) => t),
-    '',
-    '어느 기준이든 펼친 가격대 매물, 회색 매물, 별로 칸 순서는 그대로 두고 그 안에서만 다시 늘어놓습니다. 값을 모르는 매물은 칸의 맨 뒤입니다.',
-  ].join('\n');
+  if (deal.value !== 'sale') {
+    out.push(
+      { value: 'monthly', label: '월세 낮은 순', tip: '월세가 낮은 순입니다. 전세는 월세 0으로 쳐서 맨 앞에 둡니다.' },
+      { value: 'deposit', label: '보증금 낮은 순', tip: '월세 보증금과 전세금 중 낮은 값이 낮은 순입니다.' },
+    );
+  }
+  out.push(
+    { value: 'area', label: '넓은 순', tip: '전용 면적이 넓은 순입니다.' },
+    { value: 'new', label: '처음 본 날 최근 순', tip: '이 대시보드가 처음 모은 날이 최근인 순입니다.' },
+  );
+  return out;
 });
+/** 정렬 목록이 펼쳐져 있는지 */
+const sortOpen = ref(false);
+const sortEl = ref<HTMLElement | null>(null);
+function chooseSort(v: GroupSort) {
+  groupSort.value = v;
+  sortOpen.value = false;
+}
+/** 펼친 정렬 목록 밖을 누르면 접는다. */
+function closeSortOutside(e: PointerEvent) {
+  if (sortOpen.value && !sortEl.value?.contains(e.target as Node)) sortOpen.value = false;
+}
+onMounted(() => document.addEventListener('pointerdown', closeSortOutside));
+onBeforeUnmount(() => document.removeEventListener('pointerdown', closeSortOutside));
 /** 지금 쓰는 정렬. 고른 거리 핀을 뺐거나 모르는 값이면 지도 창 순서로 돌아간다. */
 const sortNow = computed<GroupSort>(() => {
   const s = groupSort.value;
@@ -793,23 +809,21 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
           <section v-if="listShown.length" ref="groupEl" class="group" :aria-label="group.length > 1 ? '지도에서 누른 묶음의 매물' : '지도에서 고른 매물'">
             <div v-if="group.length > 1" class="group-head">
               <span>지도에서 누른 매물 <b class="num">{{ group.length }}건</b><template v-if="groupGray">, 회색 <b class="num">{{ groupGray }}건</b></template></span>
-              <!-- 정렬 기준 설명은 마우스를 올리면 바로 뜨는 상자로 보인다(브라우저 기본 title은 늦게 떠서). -->
-              <CountTooltip class="group-sort-tip" :text="sortTip" :max-width="460" :focusable="false">
-              <label class="group-sort">
+              <!-- 정렬: 단추를 누르면 목록이 펼쳐지고, 항목마다 마우스를 올리면 그 기준 설명이 바로 뜬다. -->
+              <div ref="sortEl" class="group-sort" @keydown.esc.stop="sortOpen = false">
                 <span>정렬</span>
-                <select :value="sortNow" aria-label="지도에서 누른 매물 정렬" @change="groupSort = ($event.target as HTMLSelectElement).value as GroupSort">
-                  <option value="map">가격 바뀐 매물 먼저</option>
-                  <option v-for="p in sortPins" :key="p.id" :value="`pin:${p.id}`">{{ p.name }}까지 가까운 순</option>
-                  <option value="price">{{ deal === 'sale' ? '매매가 낮은 순' : '환산 월세 낮은 순' }}</option>
-                  <template v-if="deal !== 'sale'">
-                    <option value="monthly">월세 낮은 순</option>
-                    <option value="deposit">보증금 낮은 순</option>
-                  </template>
-                  <option value="area">넓은 순</option>
-                  <option value="new">처음 본 날 최근 순</option>
-                </select>
-              </label>
-              </CountTooltip>
+                <button
+                  type="button" class="sort-btn" aria-haspopup="listbox" :aria-expanded="sortOpen" aria-label="지도에서 누른 매물 정렬"
+                  @click="sortOpen = !sortOpen"
+                >{{ sortOptions.find((o) => o.value === sortNow)?.label }}<span class="sort-caret" aria-hidden="true">▾</span></button>
+                <ul v-if="sortOpen" class="sort-list" role="listbox">
+                  <li v-for="o in sortOptions" :key="o.value" role="none">
+                    <CountTooltip class="sort-item-tip" :text="o.tip" :max-width="360" :focusable="false">
+                      <button type="button" role="option" class="sort-item" :aria-selected="o.value === sortNow" @click="chooseSort(o.value)">{{ o.label }}</button>
+                    </CountTooltip>
+                  </li>
+                </ul>
+              </div>
             </div>
             <!-- 모두 고른 매물 카드 모양으로 그리고, 고른 매물만 짙은 머리, 나머지는 밝은 머리(quiet)다. 고르기를 바꿔도 카드를 다시 만들지 않는다. -->
             <div
@@ -1006,12 +1020,25 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 /* 묶음 목록 머리: 왼쪽에 건수, 오른쪽 끝에 정렬 */
 .group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0; padding: 0 4px; font-size: 12px; color: #5f6e85; }
 .group-head b { color: var(--ink); }
-.group-sort-tip { margin-left: auto; }
-.group-sort { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-weight: 700; }
-.group-sort select {
-  min-height: 30px; max-width: 100%; padding: 0 26px 0 9px; border: 1px solid var(--line-strong); border-radius: 6px;
+.group-sort { position: relative; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--ink-2); font-weight: 700; }
+.sort-btn {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 6px;
   background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
 }
+.sort-caret { font-size: 11px; color: var(--muted); }
+/* 펼친 정렬 목록: 단추 바로 아래 오른쪽에 맞춰 띄운다. 항목에 마우스를 올리면 그 기준 설명이 바로 뜬다. */
+.sort-list {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; min-width: 100%; margin: 0; padding: 4px; list-style: none;
+  border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 6px 18px rgba(22, 32, 46, .16);
+}
+.sort-list li { display: block; }
+.sort-list :deep(.sort-item-tip) { display: block; }
+.sort-item {
+  display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; text-align: left;
+  color: var(--ink); font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer;
+}
+.sort-item:hover, .sort-item:focus-visible { background: #f3f6fb; }
+.sort-item[aria-selected='true'] { background: #213956; color: #f7faff; }
 /* 회색 매물과 별로: 밝은 머리 카드는 머리까지 같은 바탕으로 칠한다(고른 매물의 짙은 머리는 그대로). 별로는 회색 매물보다 진하게 하고 흐리게 둔다. */
 .group .out, .group .out.quiet :deep(.pc-head) { background: #ebeef2; }
 .group .meh.quiet, .group .meh.quiet :deep(.pc-head) { background: #dde2e8; }
