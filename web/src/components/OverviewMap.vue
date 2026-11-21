@@ -200,6 +200,8 @@ function setBoundaryCredit(on: boolean) {
   boundaryCredit = on;
 }
 const MEH = '#aab2bd';
+/** 관심으로 표시한 매물의 표시 색(금색) */
+const STAR = '#c48a0a';
 const color = (l: ListingView) => (l.verdict === 'star' ? '#c48a0a' : l.verdict === 'meh' ? MEH : l.isNew ? '#e5484d' : l.priceChange ? '#12825e' : '#1f5fbf');
 /** 묶음 색은 가장 눈여겨볼 매물을 따른다(신규 → 가격 변동 → 관심 → 나머지, 모두 별로면 회색). 별로인 매물은 색을 정할 때 뺀다. */
 const groupColor = (s: Summary) => (!s.nonMeh ? MEH : s.fresh ? '#e5484d' : s.changed ? '#12825e' : s.star ? '#c48a0a' : '#1f5fbf');
@@ -348,7 +350,8 @@ function tooltip(g: Group, pin: L.Layer) {
   for (const [l, prices] of previews) {
     const row = document.createElement(props.listMode ? 'button' : 'div');
     // 별로로 표시한 매물은 줄 전체를 회색으로 흐리게 한다.
-    row.className = l.verdict === 'meh' ? 'tip-preview meh' : 'tip-preview';
+    // 관심으로 표시한 매물은 금색 바탕으로 띄운다.
+    row.className = l.verdict === 'meh' ? 'tip-preview meh' : l.verdict === 'star' ? 'tip-preview star' : 'tip-preview';
     if (row instanceof HTMLButtonElement) {
       row.type = 'button';
       row.addEventListener('click', () => {
@@ -368,7 +371,7 @@ function tooltip(g: Group, pin: L.Layer) {
     }
     const badges = listingBadges(l);
     if (badges) details.appendChild(badges);
-    const mark = l.verdict === 'meh' ? ', 별로' : l.contactedAt ? ', 문의함' : looksSeen(l) ? ', 봤음' : '';
+    const mark = l.verdict === 'meh' ? ', 별로' : l.verdict === 'star' ? ', ★ 관심' : l.contactedAt ? ', 문의함' : looksSeen(l) ? ', 봤음' : '';
     const description = [l.areaM2 != null ? `${pyeong(l.areaM2)}평` : '', l.title].filter(Boolean).join(', ');
     if (description) details.appendChild(line('tip-description', description));
     details.appendChild(line('tip-site', `${SOURCE_LABEL[l.source]}${mark}`));
@@ -945,6 +948,12 @@ function markMehCard(card: HTMLElement, l: ListingView) {
   const tag = card.querySelector('.mp-meh');
   if (meh && !tag) card.querySelector('.mp-top strong')?.after(line('mp-meh', '별로'));
   else if (!meh) tag?.remove();
+  // 관심이면 금색 테두리와 바탕으로 바꾸고 '★ 관심' 딱지를 붙인다.
+  const star = l.verdict === 'star';
+  card.classList.toggle('star', star);
+  const starTag = card.querySelector('.mp-star');
+  if (star && !starTag) card.querySelector('.mp-top strong')?.after(line('mp-star', '★ 관심'));
+  else if (!star) starTag?.remove();
 }
 
 /**
@@ -1500,9 +1509,11 @@ function lookOf(g: Group) {
 /** 묶음 하나를 지도에 그리고, 누르면 정보 창을 띄우게 한다. 가격 표시는 HTML, 점과 숫자 동그라미는 캔버스로 그린다. */
 function drawGroup(layer: L.LayerGroup, g: Group, look: string): Drawn {
   const dim = dimNow;
-  const muted = dim && !g.strong;
+  // 관심으로 표시한 매물이 든 자리는 펼친 가격대 밖이어도 회색으로 죽이지 않고 금색으로 그린다(관심을 눌러도 회색이라 차이가 안 보였다).
+  const starred = dim && !g.strong && g.sum.star && g.sum.nonMeh > 0;
+  const muted = dim && !g.strong && !starred;
   const n = g.sum.n;
-  const c = muted ? MUTED : groupColor(g.sum);
+  const c = muted ? MUTED : starred ? STAR : groupColor(g.sum);
   // 대시보드에서 다 본 자리는 흰 바탕에 색 테두리로 그려, 아직 안 본 자리(색을 칠한 표시)와 구분한다.
   const seen = groupSeen(g.sum);
   // 모두 별로인 자리는 가격(멀리서 보면 동그라미) 앞에 ✕를 붙이고 다른 표시 밑에 그린다.
@@ -2408,8 +2419,15 @@ onBeforeUnmount(() => {
 :deep(.mp-meh) { margin-left: 8px; padding: 1px 7px; border-radius: 5px; background: #dfe3e9; color: #5f6e85; font-size: 11px; font-weight: 700; vertical-align: 1px; }
 :deep(.tip-preview.meh) { background: #f1f3f6; }
 :deep(.tip-preview.meh .tip-price), :deep(.tip-preview.meh .tip-description) { color: var(--muted); }
+/* 관심으로 표시한 매물: 창의 카드와 올리면 보이는 글의 줄을 금색 바탕으로 */
+:deep(.mp-card.star), :deep(.mp-card.star.go:hover) { border-color: #d8b768; background: #fff6d9; }
+:deep(.mp-star) { margin-left: 8px; padding: 1px 7px; border-radius: 5px; background: #ffe8a8; color: #8e650d; font-size: 11px; font-weight: 700; vertical-align: 1px; }
+:deep(.tip-preview.star) { background: #fff6d9; }
+:deep(.tip-preview.star .tip-site) { color: #8e650d; font-weight: 700; }
 /* 고른 매물: 테두리만 짙게(옆에 색 띠를 덧대지 않는다) */
 :deep(.mp-card.mp-selected), :deep(.mp-card.mp-selected:hover) { border-color: #213956; background: #f3f6fb; }
+/* 고른 매물이 관심이면 금색 바탕은 그대로 두고 테두리만 짙게 한다. */
+:deep(.mp-card.star.mp-selected), :deep(.mp-card.star.mp-selected:hover) { background: #fff6d9; }
 /* 가격 줄: 왼쪽에 가격, 오른쪽 끝에 평수 상자(줄바꿈하지 않아 창 폭이 이 줄보다 좁아지지 않는다). */
 :deep(.mp-top) { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; white-space: nowrap; }
 :deep(.mp-top strong) { font-size: 15px; font-weight: 800; color: var(--ink); }

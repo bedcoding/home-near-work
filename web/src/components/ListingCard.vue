@@ -288,7 +288,7 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
             <span
               v-if="seenNaver" class="chip chip-seen"
               :title="`네이버 지도에서 이 매물이 든 동그라미를 눌러 목록을 본 마지막 시각: ${dateTime(seenNaver)} (크롬 확장이 기록)`"
-            >네이버에서 {{ ago(seenNaver) }} 봄</span>
+            >{{ ago(seenNaver) }} 확인</span>
             <template v-if="changeText">
               <span class="chip" :class="changeText.tone">{{ changeText.label }}</span>
               <span class="change num">{{ changeText.detail }}</span>
@@ -789,7 +789,8 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
 .pc-chips :deep(.chip.chip-new) { background: #623d51; color: #ffdbe2; }
 .pc-chips :deep(.chip.chip-kind), .pc-chips :deep(.chip.chip-room), .pc-chips :deep(.chip.chip-muted) { background: #38516f; color: #e5edf8; }
 .pc-chips :deep(.chip.chip-danger) { background: #e03131; color: #fff; }
-.pc-chips :deep(.chip.chip-warn) { background: #5a4a2d; color: #ffe3a3; }
+/* 주의 이름표(근생 섞인 건물 등)는 금색인 관심 이름표와 헷갈리지 않게 주황빛 붉은색으로 둔다. */
+.pc-chips :deep(.chip.chip-warn) { background: #6e3b2c; color: #ffd2bd; }
 .pc-chips .change { font-size: 12px; color: #e0e8f4; }
 .pc-close {
   flex: none; min-height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent;
