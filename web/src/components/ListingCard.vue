@@ -419,17 +419,18 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
       <button
         type="button" class="pc-quiet contact" :class="{ on: !!marks.contactedAt }" title="사이트에서 중개사에게 문의했으면 누르세요. 다시 누르면 풉니다."
         @click="setContacted(l, !marks.contactedAt)"
-      >{{ marks.contactedAt ? '문의함 해제' : '📞 문의함' }}</button>
-      <button type="button" class="pc-quiet" :class="{ on: !!marks.note }" title="이 매물에 짧은 메모를 남깁니다" @click="startNote">📝 메모</button>
+      ><span v-if="!marks.contactedAt" class="pc-ico" aria-hidden="true">📞</span>{{ marks.contactedAt ? '문의함 해제' : '문의함' }}</button>
+      <button type="button" class="pc-quiet" :class="{ on: !!marks.note }" title="이 매물에 짧은 메모를 남깁니다" @click="startNote"><span class="pc-ico" aria-hidden="true">📝</span>메모</button>
+      <!-- 그림은 모두 같은 크기의 이모지를 칸에 담아 글자와 가운데 높이를 맞춘다(★, ✕ 같은 기호 글자는 글꼴마다 앉는 높이가 달랐다). -->
       <div class="pc-verdict">
         <button type="button" :class="{ on: l.verdict === 'star', star: true }" title="관심 (S)" @click="emit('verdict', l.verdict === 'star' ? null : 'star')">
-          {{ l.verdict === 'star' ? '관심 해제' : '★ 관심' }}
+          <span v-if="l.verdict !== 'star'" class="pc-ico" aria-hidden="true">⭐</span>{{ l.verdict === 'star' ? '관심 해제' : '관심' }}
         </button>
         <button type="button" :class="{ on: l.verdict === 'meh' }" title="별로: 목록에 남기되 흐리게 맨 뒤로 (B)" @click="emit('verdict', l.verdict === 'meh' ? null : 'meh')">
-          {{ l.verdict === 'meh' ? '별로 해제' : '별로' }}
+          <span v-if="l.verdict !== 'meh'" class="pc-ico" aria-hidden="true">👎</span>{{ l.verdict === 'meh' ? '별로 해제' : '별로' }}
         </button>
         <button type="button" :class="{ on: l.verdict === 'discard' }" title="버림: 없어진 매물, 목록에서 숨김 (X)" @click="emit('verdict', l.verdict === 'discard' ? null : 'discard')">
-          {{ l.verdict === 'discard' ? '되돌리기' : '✕ 버림' }}
+          <span v-if="l.verdict !== 'discard'" class="pc-ico" aria-hidden="true">🗑️</span>{{ l.verdict === 'discard' ? '되돌리기' : '버림' }}
         </button>
       </div>
     </div>
@@ -856,7 +857,8 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
 
 /* 단추 줄: 채운 단추는 여는 단추 하나, 문의함과 메모는 테두리 없이, 관심과 별로와 버림은 오른쪽 끝에 한 묶음 */
 .pc-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 12px 14px; border-top: 1px solid var(--line); }
-.pc-actions button { font-size: 14px; font-weight: 600; white-space: nowrap; }
+.pc-actions button { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; font-weight: 600; line-height: 1; white-space: nowrap; }
+.pc-ico { display: inline-grid; place-items: center; width: 16px; height: 16px; font-size: 14px; line-height: 1; }
 .pc-open {
   min-height: 38px; margin-right: 8px; padding: 0 18px; border: 1px solid #213956; border-radius: 9px;
   background: #213956; color: #f7faff; font-weight: 700 !important;
