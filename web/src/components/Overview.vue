@@ -16,6 +16,7 @@ import SplitHandle from './SplitHandle.vue';
 import { mapShareStyle } from '../mapWidth';
 import { rememberNaverPlaces } from '../naverPlaces';
 import { pageSlots } from '../pageSlots';
+import { markSeen } from '../marks';
 import { rentRate } from '../rentRate';
 import { walkPins, walkTimes } from '../walk';
 
@@ -672,8 +673,17 @@ async function pick(listing: ListingView | undefined, items?: ListingView[]) {
   await new Promise((done) => requestAnimationFrame(() => setTimeout(done)));
   if (token !== pickToken) return;
   groupIds.value = items.map((l) => l.id);
-  // 지도 창 순서가 아닌 정렬이면 고른 매물(지도 창 맨 위)이 목록 중간에 올 수 있어, 그 매물이 든 쪽을 보인다.
-  groupPage.value = Math.floor(Math.max(0, group.value.findIndex((l) => l.id === listing.id)) / GROUP_PAGE);
+  groupPage.value = 0;
+  // 다른 정렬을 골라 두었으면 지도 창 맨 위 매물이 목록 중간에 묻혀 안 보여서, 그 정렬의 맨 앞 매물을 고른 매물(큰 카드)로 바꾼다.
+  // 봤음도 실제로 큰 카드로 띄운 그 매물에 남긴다.
+  const first = group.value[0];
+  if (first && first.id !== listing.id) {
+    pickedId.value = first.id;
+    await nextTick();
+    emit('select', first);
+    markSeen([first]);
+  }
+  showPicked();
 }
 // 정렬을 바꾸면 새 순서의 맨 앞부터 보인다.
 watch(sortNow, () => {
@@ -809,18 +819,18 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
           <section v-if="listShown.length" ref="groupEl" class="group" :aria-label="group.length > 1 ? '지도에서 누른 묶음의 매물' : '지도에서 고른 매물'">
             <div v-if="group.length > 1" class="group-head">
               <span>지도에서 누른 매물 <b class="num">{{ group.length }}건</b><template v-if="groupGray">, 회색 <b class="num">{{ groupGray }}건</b></template></span>
-              <!-- 정렬: 단추를 누르면 목록이 펼쳐지고, 항목마다 마우스를 올리면 그 기준 설명이 바로 뜬다. -->
+              <!-- 정렬: 단추를 누르면 목록이 펼쳐진다. 지금 고른 기준 설명은 단추에 마우스를 올릴 때만 바로 뜨고(목록이 펼쳐져 있으면 안 뜸), 목록 항목에는 설명을 띄우지 않는다(설명 상자가 아래 항목을 가려 못 눌렀다). -->
               <div ref="sortEl" class="group-sort" @keydown.esc.stop="sortOpen = false">
                 <span>정렬</span>
-                <button
-                  type="button" class="sort-btn" aria-haspopup="listbox" :aria-expanded="sortOpen" aria-label="지도에서 누른 매물 정렬"
-                  @click="sortOpen = !sortOpen"
-                >{{ sortOptions.find((o) => o.value === sortNow)?.label }}<span class="sort-caret" aria-hidden="true">▾</span></button>
+                <CountTooltip :text="sortOpen ? '' : (sortOptions.find((o) => o.value === sortNow)?.tip ?? '')" :max-width="360" :focusable="false">
+                  <button
+                    type="button" class="sort-btn" aria-haspopup="listbox" :aria-expanded="sortOpen" aria-label="지도에서 누른 매물 정렬"
+                    @click="sortOpen = !sortOpen"
+                  >{{ sortOptions.find((o) => o.value === sortNow)?.label }}<span class="sort-caret" aria-hidden="true">▾</span></button>
+                </CountTooltip>
                 <ul v-if="sortOpen" class="sort-list" role="listbox">
                   <li v-for="o in sortOptions" :key="o.value" role="none">
-                    <CountTooltip class="sort-item-tip" :text="o.tip" :max-width="360" :focusable="false">
-                      <button type="button" role="option" class="sort-item" :aria-selected="o.value === sortNow" @click="chooseSort(o.value)">{{ o.label }}</button>
-                    </CountTooltip>
+                    <button type="button" role="option" class="sort-item" :aria-selected="o.value === sortNow" @click="chooseSort(o.value)">{{ o.label }}</button>
                   </li>
                 </ul>
               </div>
@@ -1026,13 +1036,12 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
   background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
 }
 .sort-caret { font-size: 11px; color: var(--muted); }
-/* 펼친 정렬 목록: 단추 바로 아래 오른쪽에 맞춰 띄운다. 항목에 마우스를 올리면 그 기준 설명이 바로 뜬다. */
+/* 펼친 정렬 목록: 단추 바로 아래 오른쪽에 맞춰 띄운다. */
 .sort-list {
   position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; min-width: 100%; margin: 0; padding: 4px; list-style: none;
   border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 6px 18px rgba(22, 32, 46, .16);
 }
 .sort-list li { display: block; }
-.sort-list :deep(.sort-item-tip) { display: block; }
 .sort-item {
   display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; text-align: left;
   color: var(--ink); font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer;
