@@ -423,6 +423,13 @@ function bindListingTip(pin: L.Layer, current: () => Group) {
   });
   pin.on('mouseout', () => scheduleListingTipClose(pin));
   pin.on('tooltipopen', ({ tooltip: preview }: L.TooltipEvent) => {
+    // 이 표시의 창이 떠 있는 동안에는 올리면 보이는 글을 띄우지 않는다(같은 매물이 위아래로 두 번 보인다).
+    const g = current();
+    const at = listingPopup && map?.hasLayer(listingPopup) ? listingPopup.getLatLng() : null;
+    if (at && at.lat === g.lat && at.lng === g.lng) {
+      queueMicrotask(() => pin.closeTooltip());
+      return;
+    }
     hoveredListingPin?.closeTooltip();
     hoveredListingPin = pin;
     const element = preview.getElement();
@@ -878,31 +885,26 @@ function popup(g: Group, items: ListingView[]) {
     // 단추와 링크를 누를 때는 카드 누름(목록에서 보기)으로 번지지 않게 한다.
     actions.addEventListener('click', (e) => e.stopPropagation());
     const open = document.createElement('button');
-    open.textContent = '원본 열기';
+    open.className = 'mp-open';
+    open.textContent = `${SOURCE_LABEL[l.source]} 열기`;
+    open.title = '원본 사이트에서 보기';
     open.addEventListener('click', () => emit('open', l));
     actions.appendChild(open);
-    // '📞 문의함'과 '📝 메모' 단추는 매물 카드에만 둔다.
-    // 네이버 단지 단추는 단지 매물이거나 같은 자리 단지를 찾으면 그 단지 화면을 연다(naverLink).
-    // 네이버 지도 단추는 네이버 지도에서 이 매물 좌표를 찾아 핀을 찍어 연다(naverMapLink).
-    // KB부동산과 호갱노노 단추는 두 사이트 지도를 이 매물 자리 가운데로 연다(priceSiteLinks).
-    // 집품과 부동산플래닛 단추는 번지까지 있으면 그 건물로, 동까지만 있으면 그 동으로 연다(addressSiteLinks). 부동산플래닛은 주소를 복사하고 연다.
-    const address = l.address ?? dabangAddresses.get(l.id);
-    const links: (SiteButton | null)[] = [naverLink(l), naverMapLink(l), ...priceSiteLinks(l), ...addressSiteLinks(l, address)];
-    for (const link of links) {
-      if (!link) continue;
+    // 창에는 여는 단추와 네이버 지도 링크만 둔다. 네이버 지도는 이 매물 좌표를 찾아 핀을 찍어 연다(naverMapLink).
+    // 문의함, 메모, 시세 사이트(KB부동산, 호갱노노, 집품, 부동산플래닛) 링크는 매물 카드에 있다.
+    const link = naverMapLink(l);
+    if (link) {
       const naver = document.createElement('a');
-      naver.textContent = link.label;
+      naver.textContent = link.label.replace(/\s*↗$/, '');
       naver.href = link.url;
       naver.target = '_blank';
       naver.rel = 'noopener';
       naver.title = link.title;
-      const copy = link.copy;
-      if (copy) naver.addEventListener('click', () => copyText(copy));
       actions.appendChild(naver);
     }
     for (const s of auctionSiteLinks(l)) {
       const site = document.createElement('a');
-      site.textContent = `${s.name} ↗`;
+      site.textContent = s.name;
       site.href = s.url;
       site.target = '_blank';
       site.rel = 'noopener';
@@ -928,6 +930,8 @@ function popup(g: Group, items: ListingView[]) {
     });
   }
   listingPopup = layer;
+  // 창이 뜨면 같은 표시의 올리면 보이는 글은 닫는다(창과 글이 위아래로 겹쳐 보이지 않게).
+  hoveredListingPin?.closeTooltip();
   layer.setLatLng([g.lat, g.lng]).setContent(box).openOn(map);
   highlightPopupCard(props.selectedId);
 }
@@ -2249,7 +2253,11 @@ onBeforeUnmount(() => {
 :deep(.walk-pin.mark span), .pin-sample.mark { background: #d9480f; }
 :deep(.walk-pin.mark span)::after { border-top-color: #d9480f; }
 .pin-sample { margin-right: 4px; padding: 0 6px; border-width: 1.5px; font-size: 11px; }
-:deep(.pin-pop) { flex-wrap: nowrap; }
+:deep(.pin-pop) { flex-wrap: nowrap; gap: 6px; }
+/* 핀 이름 상자의 단추는 매물 창의 여는 단추처럼 채우지 않고 흰 단추로 둔다. */
+:deep(.pin-pop button), :deep(.pin-pop button:hover) {
+  min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); background: #fff; color: var(--ink); font-weight: 600;
+}
 :deep(.pin-move-popup .leaflet-popup-content) { margin: 5px 6px; }
 :deep(.pin-move-actions) { display: flex; gap: 5px; }
 :deep(.pin-move-actions[hidden]) { display: none; }
@@ -2336,7 +2344,7 @@ onBeforeUnmount(() => {
 /* 건수 머리글: 아래에 구분선을 긋고, 창 안을 스크롤해도 맨 위에 남는다(흰 바탕으로 밑의 내용을 가림). */
 :deep(.mp-head) { position: sticky; top: 0; z-index: 1; padding-bottom: 8px; border-bottom: 1px solid var(--line); background: #fff; font-weight: 700; }
 /* 매물 하나 = 카드 하나: 위에 가격(가장 크게)과 평수, 아래 단추 줄 */
-:deep(.mp-card) { display: grid; gap: 8px; padding: 9px 10px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+:deep(.mp-card) { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 /* 옆에 목록이 있으면 카드를 누르면 목록에서 그 매물을 고른다. */
 /* 사진이 있으면 왼쪽에 사진, 오른쪽에 가격 줄과 단추 줄. */
 :deep(.mp-card.has-thumb) { grid-template-columns: 88px minmax(0, 1fr); grid-template-areas: 'thumb top' 'thumb actions'; column-gap: 10px; }
@@ -2349,10 +2357,9 @@ onBeforeUnmount(() => {
 }
 :deep(.mp-thumb img) { width: 100%; height: 100%; object-fit: cover; display: block; }
 :deep(.mp-card.go) { cursor: pointer; }
-:deep(.mp-card.go:hover) { border-color: var(--line-strong); background: #e7ebee; }
-:deep(.mp-card.mp-selected), :deep(.mp-card.mp-selected:hover) {
-  border-color: #305b98; background: #e8eff9; box-shadow: inset 3px 0 #305b98;
-}
+:deep(.mp-card.go:hover) { border-color: var(--line-strong); background: #f6f8fb; }
+/* 고른 매물: 테두리만 짙게(옆에 색 띠를 덧대지 않는다) */
+:deep(.mp-card.mp-selected), :deep(.mp-card.mp-selected:hover) { border-color: #213956; background: #f3f6fb; }
 /* 가격 줄: 왼쪽에 가격, 오른쪽 끝에 평수 상자(줄바꿈하지 않아 창 폭이 이 줄보다 좁아지지 않는다). */
 :deep(.mp-top) { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; white-space: nowrap; }
 :deep(.mp-top strong) { font-size: 15px; font-weight: 800; color: var(--ink); }
@@ -2361,11 +2368,18 @@ onBeforeUnmount(() => {
   flex: none; align-self: flex-start; margin-left: auto; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 6px;
   background: #fff; color: var(--ink-2); font-size: 12px; font-weight: 700; line-height: 20px;
 }
-:deep(.mp-actions) { display: flex; flex-wrap: wrap; gap: 6px; }
-:deep(.mp-actions button), :deep(.mp-actions a) {
-  display: inline-flex; align-items: center;
-  min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font: 600 13px var(--font); cursor: pointer;
+/* 단추 줄: 채운 단추는 여는 단추 하나, 나머지 링크는 밑줄 글자(매물 카드와 같은 모양) */
+:deep(.mp-actions) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+:deep(.mp-actions button) {
+  display: inline-flex; align-items: center; min-height: 30px; padding: 0 12px; border: 1px solid #213956; border-radius: 8px;
+  background: #213956; color: #f7faff; font: 700 13px var(--font); cursor: pointer; white-space: nowrap;
 }
+:deep(.mp-actions button:hover) { border-color: #304e72; background: #304e72; }
+:deep(.mp-actions a) {
+  color: var(--accent); font: 600 13px var(--font); white-space: nowrap;
+  text-decoration: underline; text-decoration-color: #b9c6d9; text-underline-offset: 4px;
+}
+:deep(.mp-actions a:hover) { text-decoration-color: currentColor; }
 :deep(.mp-more) { color: var(--muted); }
 /* 올리면 보이는 글의 메모 */
 :deep(.tip-note) { color: var(--star); }

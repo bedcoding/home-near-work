@@ -4,9 +4,9 @@
 **새로 올라온 것과 가격이 바뀐 것만** 알려 주는 개인용 로컬 도구입니다.
 판단은 사용자가 합니다. 도구가 매물을 골라 버리지는 않습니다(사이트에서 내려간 매물만 목록에서 빠지고, 시간이 지나면 지웁니다).
 
-![매물 탭: 가격대로 묶은 목록, 지도에서 고른 매물 카드, 지도](assets/readme/listings-cards.jpg)
+![매물 탭: 가격대로 묶은 목록, 지도에서 고른 매물 카드, 지도](assets/readme/listings-picked.jpg)
 
-![지도에서 가격 표시를 눌러 연 말풍선](assets/readme/map-popup.jpg)
+![지도에서 가격 표시에 마우스를 올리면 뜨는 미리보기: 같은 자리 매물 세 건](assets/readme/map-tooltip.jpg)
 
 ![사이트별 탭: 사이트마다 모으는 범위와 받은 건수](assets/readme/sites.png)
 
