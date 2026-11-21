@@ -429,7 +429,7 @@ const listingById = computed(() => new Map(props.listings.map((l) => [l.id, l]))
 const groupBase = computed(() => groupIds.value.flatMap((id) => listingById.value.get(id) ?? []));
 
 /**
- * 묶음 목록 정렬: map 기본(지도 창 순서), pin:<핀 id> 그 거리 핀까지 걸어서 가까운 순, price 환산 월세(매매는 매매가) 낮은 순,
+ * 묶음 목록 정렬: map 가격 바뀐 매물 먼저(지도 표시에 적힌 최저가 매물, 가격 변동, 나머지 환산 월세 낮은 순. 지도 창과 같은 순서), pin:<핀 id> 그 거리 핀까지 걸어서 가까운 순, price 환산 월세(매매는 매매가) 낮은 순,
  * monthly 월세 낮은 순, deposit 보증금(전세는 전세금) 낮은 순, area 넓은 순, new 처음 본 날 최근 순.
  * 고른 정렬은 이 브라우저에 기억한다.
  */
@@ -475,9 +475,9 @@ function cheapValue(l: ListingView): number | null {
   }
   return best;
 }
-/** 월세 낮은 순에 쓰는 값: 월세(단기 포함) 선택지 중 가장 낮은 월세. 전세만 있는 매물은 null(칸의 맨 뒤). */
+/** 월세 낮은 순에 쓰는 값: 월세(단기 포함) 선택지 중 가장 낮은 월세. 전세는 월세 0으로 쳐서 칸의 맨 앞에 온다. 둘 다 없으면 null(칸의 맨 뒤). */
 function monthlyValue(l: ListingView): number | null {
-  const xs = l.prices.filter((p) => (p.deal === 'monthly' || p.deal === 'short') && p.monthly != null).map((p) => p.monthly!);
+  const xs = l.prices.flatMap((p) => (p.deal === 'jeonse' ? [0] : (p.deal === 'monthly' || p.deal === 'short') && p.monthly != null ? [p.monthly] : []));
   return xs.length ? Math.min(...xs) : null;
 }
 /** 보증금 낮은 순에 쓰는 값: 월세 보증금과 전세금 중 가장 낮은 것. 모르면 null. */
@@ -774,11 +774,11 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
               <span>지도에서 누른 매물 <b class="num">{{ group.length }}건</b><template v-if="groupGray">, 회색 <b class="num">{{ groupGray }}건</b></template></span>
               <label
                 class="group-sort"
-                title="펼친 가격대 매물, 회색 매물, 별로 순서는 그대로 두고 그 안에서 다시 늘어놓습니다.&#10;기본은 지도 창과 같은 순서로, 고른 매물과 지도 표시에 적힌 최저가 매물, 가격 바뀐 매물을 먼저 두고 나머지는 환산 월세 낮은 순입니다.&#10;핀까지 가까운 순은 걸어서 잰 거리입니다. 환산 월세는 월세 + 보증금 × 전환율 ÷ 12(전세는 전세금 × 전환율 ÷ 12)입니다."
+                title="펼친 가격대 매물, 회색 매물, 별로 순서는 그대로 두고 그 안에서 다시 늘어놓습니다.&#10;가격 바뀐 매물 먼저: 지도에서 누른 표시에 적힌 최저 월세, 최저 전세 매물을 맨 앞에, 그다음 가격이 바뀐 매물, 나머지는 환산 월세 낮은 순입니다(지도에서 누르면 뜨는 창과 같은 순서).&#10;핀까지 가까운 순은 걸어서 잰 거리입니다. 월세 낮은 순은 전세를 월세 0으로 쳐서 맨 앞에 둡니다. 환산 월세는 월세 + 보증금 × 전환율 ÷ 12(전세는 전세금 × 전환율 ÷ 12)입니다."
               >
                 <span>정렬</span>
                 <select :value="sortNow" aria-label="지도에서 누른 매물 정렬" @change="groupSort = ($event.target as HTMLSelectElement).value as GroupSort">
-                  <option value="map">기본(지도 창 순서)</option>
+                  <option value="map">가격 바뀐 매물 먼저</option>
                   <option v-for="p in sortPins" :key="p.id" :value="`pin:${p.id}`">{{ p.name }}까지 가까운 순</option>
                   <option value="price">{{ deal === 'sale' ? '매매가 낮은 순' : '환산 월세 낮은 순' }}</option>
                   <template v-if="deal !== 'sale'">
