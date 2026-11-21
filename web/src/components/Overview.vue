@@ -15,6 +15,7 @@ import OverviewMap from './OverviewMap.vue';
 import SplitHandle from './SplitHandle.vue';
 import { mapShareStyle } from '../mapWidth';
 import { rememberNaverPlaces } from '../naverPlaces';
+import { pageSlots } from '../pageSlots';
 
 const props = defineProps<{
   listings: ListingView[];
@@ -404,18 +405,48 @@ function rowOf(band: Band, entries: Entry[], open: Record<string, Pick>, hidden:
 // 맨 위 '새 소식' 줄은 뺐다. 보는 가격대만 펼쳐 보므로, 새 매물은 가격대마다 붙은 신규와 가격 변동 표시로 본다.
 
 /**
- * 지도에서 고른 매물 번호. 왼쪽에는 이 매물 카드 한 장만 띄운다. 예전에는 펼친 가격대의 매물을 카드로 모두 늘어놓았는데,
+ * 지도에서 고른 매물 번호. 왼쪽 맨 위에 이 매물을 큰 카드로 띄운다. 예전에는 펼친 가격대의 매물을 카드로 모두 늘어놓았는데,
  * 수천 장이 되면 문서가 너무 길어져 화면을 한 번 그릴 때마다 40ms 넘게 걸리고, 지도 끌기와 툴팁 스크롤까지 늦어졌다.
+ * 그래서 가격대 매물은 늘어놓지 않고, 지도에서 누른 묶음의 매물만 큰 카드 아래에 작은 카드 목록으로 띄운다(groupIds).
  */
 const pickedId = ref<string | null>(null);
 /** 고른 매물(변화분을 받으면 새 객체로 바뀌므로 번호로 찾는다). 매물이 빠지면 카드도 내린다. */
 const picked = computed(() => (pickedId.value ? props.listings.find((l) => l.id === pickedId.value) ?? null : null));
-// 거래 유형을 바꾸면 지도도 그 거래 유형 매물로 바뀌므로 고른 카드를 내린다.
+/**
+ * 지도에서 누른 묶음의 매물 번호(지도 창과 같은 순서: 고른 매물, 지도 가격 매물, 가격 변동, 싼 순, 회색, 별로).
+ * 두 건 이상이면 큰 카드 아래에 목록으로 띄운다. 다른 묶음을 누르거나, 묶음 밖 매물을 고르거나, 카드를 닫거나, 거래 유형을 바꾸면 비운다.
+ */
+const groupIds = ref<string[]>([]);
+/** 묶음 목록 한 쪽에 보이는 카드 수. 묶음은 대개 이보다 작아 한 번에 다 보이고, 더 크면 쪽 번호로 넘긴다. */
+const GROUP_PAGE = 50;
+/** 묶음 목록에서 보고 있는 쪽(0부터) */
+const groupPage = ref(0);
+const groupEl = ref<HTMLElement | null>(null);
+const listingById = computed(() => new Map(props.listings.map((l) => [l.id, l])));
+/** 묶음 매물(지금 객체). 버림 등으로 빠진 매물은 뺀다. */
+const group = computed(() => groupIds.value.flatMap((id) => listingById.value.get(id) ?? []));
+const groupPages = computed(() => Math.max(1, Math.ceil(group.value.length / GROUP_PAGE)));
+const groupShown = computed(() => {
+  const page = Math.min(groupPage.value, groupPages.value - 1);
+  return group.value.slice(page * GROUP_PAGE, (page + 1) * GROUP_PAGE);
+});
+/** 왼쪽에 늘어놓을 카드: 묶음 목록이 있으면 지금 쪽, 없으면 고른 매물 하나(같은 자리에 그려서 목록이 붙어도 큰 카드를 다시 만들지 않는다) */
+const listShown = computed(() => (group.value.length > 1 ? groupShown.value : picked.value ? [picked.value] : []));
+// 거래 유형을 바꾸면 지도도 그 거래 유형 매물로 바뀌므로 고른 카드와 묶음 목록을 내린다.
 watch(deal, () => {
   pickedId.value = null;
+  groupIds.value = [];
 });
-/** 키보드 단축키(x 버림, s 관심, Enter 원본 열기)가 다룰 매물: 고른 매물 하나 */
-const visible = computed(() => (picked.value ? [picked.value] : []));
+/** 키보드 단축키(↑↓ 이동, x 버림, s 관심, Enter 원본 열기)가 다룰 매물: 묶음 목록이 있으면 그 매물 전체, 없으면 고른 매물 하나 */
+const visible = computed(() => (group.value.length > 1 ? group.value : picked.value ? [picked.value] : []));
+// ↑↓ 키나 버림으로 묶음 안에서 고른 매물이 바뀌면 그 매물을 큰 카드로 펼치고, 그 매물이 든 쪽을 보인다.
+watch(() => props.selectedId, (id) => {
+  const i = id ? group.value.findIndex((l) => l.id === id) : -1;
+  if (i < 0 || id === pickedId.value) return;
+  pickedId.value = id;
+  groupPage.value = Math.floor(i / GROUP_PAGE);
+  showPicked();
+});
 /**
  * 지도에 진하게 보일 매물: 펼친 가격대마다 고른 사이트의 매물, 사이트를 아직 안 골랐으면 그 가격대 매물 전부.
  * 그래서 '월세 50만원 이하'와 '전세 1억 이하'처럼 가격대 여러 개를 펼치기만 해도 지도에서 같이 본다.
@@ -434,6 +465,11 @@ const mapStrong = computed(() => {
   }
   return out;
 });
+/** 펼친 가격대 매물 번호. 묶음 목록에서 그 밖(지도에서 회색) 매물을 가를 때 쓴다. */
+const strongIds = computed(() => new Set(mapStrong.value.map((l) => l.id)));
+/** 펼친 가격대가 있을 때 그 밖(지도에서 회색)인 매물인지. 묶음 목록에서 연한 회색 바탕으로 가른다(지도 창, 올리면 보이는 글과 같다). */
+const isOutside = (l: ListingView) => strongIds.value.size > 0 && !strongIds.value.has(l.id);
+const groupGray = computed(() => group.value.filter(isOutside).length);
 /** 목록 쪽에서 가격대를 펼치거나 접고 사이트를 고른 횟수 */
 const listMoves = ref(0);
 /** 지도를 매물에 다시 맞추는 기준: 거래 유형, 목록 쪽에서 바꾼 펼침, 고른 지역. 매물만 바뀌거나 지도에서 매물을 고르면 지도는 보던 그대로 둔다. */
@@ -495,14 +531,54 @@ function pickPlatform(r: Row, p: SourceId | 'all') {
 
 
 /**
- * 지도에서 누른 매물을 왼쪽 카드로 띄우고 고른다. 가격대 펼침과 고른 사이트는 바꾸지 않는다(지도의 진한 매물이 그대로다).
+ * 지도에서 누른 매물을 왼쪽 큰 카드로 띄우고 고른다. items를 주면(지도에서 묶음을 누름) 그 묶음을 목록으로 띄운다.
+ * 묶음 목록에 없는 매물을 고르면(올리면 보이는 글에서 다른 묶음의 매물을 누름) 목록을 내린다.
+ * 가격대 펼침과 고른 사이트는 바꾸지 않는다(지도의 진한 매물이 그대로다).
  * 카드가 바뀐 뒤(visible을 알린 뒤)에 고르기를 알려야 App이 그 매물을 찾는다.
  */
-async function pick(listing: ListingView | undefined) {
+async function pick(listing: ListingView | undefined, items?: ListingView[]) {
   if (!listing) return;
+  const token = ++pickToken;
+  if (items) {
+    groupIds.value = [];
+    groupPage.value = 0;
+  } else if (!groupIds.value.includes(listing.id)) groupIds.value = [];
   pickedId.value = listing.id;
   await nextTick();
   emit('select', listing);
+  showPicked();
+  if (!items || items.length < 2) return;
+  // 큰 카드와 지도 창을 먼저 그리고, 작은 카드 목록(최대 50장)은 다음 그림에 붙인다. 한 번에 그리면 누른 뒤 화면이 0.2초 넘게 멈췄다.
+  await new Promise((done) => requestAnimationFrame(() => setTimeout(done)));
+  if (token !== pickToken) return;
+  groupIds.value = items.map((l) => l.id);
+}
+/** 지도에서 빨리 여러 번 누르면 늦게 붙는 앞 묶음 목록이 뒤 묶음을 덮지 않게, 누를 때마다 올리는 번호 */
+let pickToken = 0;
+
+/** 묶음 목록의 작은 카드를 누르면 그 매물을 그 자리에서 큰 카드로 펼친다(지도 창의 그 카드도 짙은 테두리로 바뀐다). */
+async function pickFromGroup(l: ListingView) {
+  pickedId.value = l.id;
+  await nextTick();
+  emit('select', l);
+  showPicked();
+}
+
+/** 고른 매물 카드를 닫으면 묶음 목록도 내린다. */
+function closePicked() {
+  pickedId.value = null;
+  groupIds.value = [];
+}
+
+/** 큰 카드가 화면 밖이면 보이게 옮긴다(묶음 목록 안에서 고른 매물이 바뀌면 큰 카드 자리가 바뀐다). */
+function showPicked() {
+  void nextTick(() => overviewEl.value?.querySelector('.group .picked')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+}
+
+/** 묶음 목록 쪽을 넘기고 목록 맨 위가 보이게 올린다. */
+function turnGroupPage(page: number) {
+  groupPage.value = page;
+  void nextTick(() => groupEl.value?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
 }
 
 const depositText = (d: { min: number; max: number }) => (d.min === d.max ? money(d.min) : `${money(d.min)}~${money(d.max)}`);
@@ -600,14 +676,39 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
       <div class="ov-bands">
         <!-- 거래 유형 탭과 이어진 흰 칸 하나에 고른 매물 카드(없으면 안내 한 줄)와 가격대 줄을 차례로 담는다. -->
         <div class="bands" @dragend="onDragEnd">
-          <section v-for="l in visible" :key="l.id" class="picked" aria-label="지도에서 고른 매물">
-            <ListingCard
-              picked :listing="l" :areas="areas" :selected="l.id === selectedId" :live-collected="liveListingIds?.has(l.id)"
-              @select="selectFromList(l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
-              @source="emit('source', l)" @raw="emit('raw', l)" @close="pickedId = null" zone-banner
-            />
+          <!--
+            지도에서 고른 매물은 큰 카드로 띄운다. 누른 표시에 매물이 두 건 이상이면 나머지는 작은 카드로 지도 창과 같은 순서로 늘어놓고,
+            50장이 넘으면 쪽 번호로 넘긴다. 작은 카드를 누르면 그 자리에서 큰 카드로 펼친다.
+          -->
+          <section v-if="listShown.length" ref="groupEl" class="group" :aria-label="group.length > 1 ? '지도에서 누른 묶음의 매물' : '지도에서 고른 매물'">
+            <p v-if="group.length > 1" class="group-head">
+              지도에서 누른 매물 <b class="num">{{ group.length }}건</b><template v-if="groupGray">, 회색 <b class="num">{{ groupGray }}건</b></template>
+            </p>
+            <template v-for="l in listShown" :key="l.id">
+              <div v-if="l.id === pickedId" class="picked" aria-label="지도에서 고른 매물">
+                <ListingCard
+                  picked :listing="l" :areas="areas" :selected="l.id === selectedId" :live-collected="liveListingIds?.has(l.id)"
+                  @select="selectFromList(l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
+                  @source="emit('source', l)" @raw="emit('raw', l)" @close="closePicked" zone-banner
+                />
+              </div>
+              <ListingCard
+                v-else :class="{ out: isOutside(l) }" :listing="l" :areas="areas" :selected="l.id === selectedId"
+                :live-collected="liveListingIds?.has(l.id)" zone-banner
+                @select="pickFromGroup(l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
+                @source="emit('source', l)" @raw="emit('raw', l)"
+              />
+            </template>
+            <nav v-if="groupPages > 1" class="group-pager" aria-label="묶음 목록 쪽 넘기기">
+              <button type="button" aria-label="이전 쪽" :disabled="groupPage === 0" @click="turnGroupPage(groupPage - 1)">‹</button>
+              <template v-for="(p, i) in pageSlots(groupPage, groupPages)" :key="i">
+                <span v-if="p === null" class="gap">…</span>
+                <button v-else type="button" :aria-label="`${p + 1}쪽`" :aria-current="p === groupPage ? 'page' : undefined" @click="turnGroupPage(p)">{{ p + 1 }}</button>
+              </template>
+              <button type="button" aria-label="다음 쪽" :disabled="groupPage >= groupPages - 1" @click="turnGroupPage(groupPage + 1)">›</button>
+            </nav>
           </section>
-          <p v-if="!visible.length" class="picked-empty">지도에서 매물을 누르면 여기에 카드가 뜹니다</p>
+          <p v-else class="picked-empty">지도에서 매물을 누르면 여기에 카드가 뜹니다</p>
           <div
             v-for="r in rows" :key="r.band.id" class="band"
             :class="{
@@ -668,7 +769,7 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
           ref="mapView"
           :listings="mapStrong" :background="mapBackground" :areas="areas" :selected-id="selectedId" :pan-to-selected="panToSelected" :fit-key="mapFitKey" view-key="overview"
           :live-listing-ids="liveListingIds" :rental-options="mapRentalOptions"
-          @select="pick" @reveal="(items) => pick(items[0])" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
+          @select="(l) => pick(l)" @reveal="(items) => pick(items[0], items)" @open="(l) => emit('open', l)" @area="(a) => emit('area', a)"
           @station="(s) => emit('station', s)"
         />
       </aside>
@@ -770,6 +871,26 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 /* 아직 고른 매물이 없을 때 그 자리에 두는 안내 한 줄 */
 .picked-empty { display: flex; align-items: center; min-height: 42px; margin: 0; padding: 0 16px; font-size: 12px; color: #5f6e85; }
 /* 카드나 안내 바로 아래 가격대 줄은 맨 위 줄이 아니라서 윗선을 그어 가른다(화면 디자인 층의 첫 줄 규칙보다 우선). */
-.bands > .picked + .band, .bands > .picked-empty + .band { border-top: 1px solid var(--line); }
+.bands > .picked + .band, .bands > .picked-empty + .band, .bands > .group + .band { border-top: 1px solid var(--line); }
+/*
+ * 지도에서 누른 묶음: 고른 매물은 큰 카드, 나머지는 작은 카드(지도 창과 같은 순서). 회색(펼친 가격대 밖) 매물은
+ * 지도 창과 올리면 보이는 글처럼 연한 회색 바탕으로 가른다. 별로는 작은 카드가 원래 흐리게 보인다.
+ */
+/* 작은 카드는 감싼 칸 폭을 보고 배치를 고르므로(@container) 다른 탭 목록처럼 이 칸을 기준 칸으로 둔다. */
+.group { display: grid; gap: 8px; padding: 10px; container-type: inline-size; }
+.group > .picked { padding: 0; }
+.group-head { margin: 0; padding: 0 4px; font-size: 12px; color: #5f6e85; }
+.group-head b { color: var(--ink); }
+.group .out { background: #ebeef2; }
+/* 묶음 목록 쪽 번호(‹ 1 2 3 4 5 … 10 ›): 지도 창의 쪽 번호와 같은 모양 */
+.group-pager { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px; padding-top: 4px; }
+.group-pager button {
+  min-width: 30px; height: 30px; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 7px; background: #fff;
+  color: var(--ink); font: 700 13px/1 var(--font); cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.group-pager button:hover:not(:disabled) { border-color: #213956; background: #f3f6fb; }
+.group-pager button[aria-current='page'], .group-pager button[aria-current='page']:hover { border-color: #213956; background: #213956; color: #f7faff; }
+.group-pager button:disabled { opacity: .35; cursor: default; }
+.group-pager .gap { padding: 0 2px; color: var(--muted); font-weight: 700; }
 .empty { padding: 32px 0; text-align: center; }
 </style>
