@@ -339,7 +339,10 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
             <template v-else><span class="pc-mwol">월</span><b class="pc-mval">{{ loanCost.text }}</b></template>
           </CountTooltip>
           <span v-if="fee" class="pc-mrow plain">
-            <span class="pc-mlabel">관리비</span><span class="pc-mwol">{{ fee.known ? '월' : '' }}</span><b class="pc-mval" :class="{ unknown: !fee.known }">{{ fee.text }}</b>
+            <span class="pc-mlabel">관리비</span>
+            <!-- 모르는 값은 '소액이라 대출불가'와 같은 자리, 같은 크기로 왼쪽부터 적는다. -->
+            <template v-if="fee.known"><span class="pc-mwol">월</span><b class="pc-mval">{{ fee.text }}</b></template>
+            <template v-else><span class="pc-mnote">{{ fee.text }}</span><b class="pc-mval" /></template>
           </span>
         </div>
       </div>
@@ -813,7 +816,6 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
 .pc-mlabel { display: table-cell; padding-right: 12px; font-size: 13px; color: #bccbe0; white-space: nowrap; }
 .pc-mwol { display: table-cell; padding-right: 5px; font-size: 15px; font-weight: 700; }
 .pc-mval { display: table-cell; font-size: 15px; font-weight: 700; text-align: right; white-space: nowrap; }
-.pc-mval.unknown { font-weight: 600; color: #ffe3a3; }
 /* 금액 대신 적는 글('소액이라 대출불가'): '월' 칸에서 시작해 옆 칸 위로 넘쳐 흐르게 해서, 다른 줄의 숫자 칸 폭을 넓히지 않는다. */
 .pc-mnote { display: table-cell; max-width: 0; overflow: visible; font-size: 13px; font-weight: 600; color: #ffe3a3; white-space: nowrap; }
 
