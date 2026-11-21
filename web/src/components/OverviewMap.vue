@@ -1005,6 +1005,10 @@ function popup(g: Group, items: ListingView[]) {
   const availableWidth = map.getSize().x - 48;
   layer.options.minWidth = Math.min(POPUP_WIDTH.min, availableWidth);
   layer.options.maxWidth = Math.min(POPUP_WIDTH.max, availableWidth);
+  // 창 꼬리를 표시 가운데가 아니라 윗변에 맞춘다(가운데에 두면 창이 누른 가격 표시의 윗부분을 덮었다).
+  // Leaflet 기본 꼬리 자리(아래로 7px)에서 가격 상자 높이의 절반, 동그라미는 반지름만큼 올린다.
+  const half = g.priced ? labelHeight(g.sum, g.strong) / 2 + 2 : g.strong ? 13 : 10;
+  layer.options.offset = L.point(0, 7 - half);
   if (!listingPopup) {
     layer.once('remove', () => {
       if (listingPopup !== layer) return;
