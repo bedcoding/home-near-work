@@ -43,6 +43,11 @@ const props = defineProps<{
    * 닫기 단추가 있고 누르면 close를 알린다. 다른 탭의 목록은 예전 모양 그대로다.
    */
   picked?: boolean;
+  /**
+   * picked 모양을 매물 탭 묶음 목록의 나머지 매물(아직 안 고른 매물)에 쓸 때: 머리를 밝게 두어 고른 매물(짙은 머리)과 가르고 닫기 단추를 숨긴다.
+   * 누르면 select를 알려 그 매물이 짙은 머리 카드가 된다.
+   */
+  quiet?: boolean;
 }>();
 const emit = defineEmits<{ open: []; verdict: [Verdict | null]; source: []; raw: []; select: []; close: [] }>();
 
@@ -281,7 +286,7 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
 <template>
   <!-- 매물 탭에서 지도로 고른 매물 한 장 -->
   <article
-    v-if="picked" class="pcard" :class="{ discarded: l.verdict === 'discard', gone: l.status === 'gone' }"
+    v-if="picked" class="pcard" :class="{ discarded: l.verdict === 'discard', gone: l.status === 'gone', meh: l.verdict === 'meh', quiet }"
     @click="emit('select'), markSeen([l])"
   >
     <header class="pc-head">
@@ -330,7 +335,7 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
             >{{ ago(seenNaver) }} 확인</span>
             <slot name="tags" />
           </div>
-          <button type="button" class="pc-close" title="이 카드 닫기" @click.stop="emit('close')">✕ 닫기</button>
+          <button v-if="!quiet" type="button" class="pc-close" title="이 카드 닫기" @click.stop="emit('close')">✕ 닫기</button>
         </div>
 
         <div class="pc-price num" :title="roomRange ? '이 곳 방 중 가장 싼 방 ~ 가장 비싼 방(보증금/월세)' : undefined">
@@ -809,12 +814,14 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
 .pc-top { display: flex; align-items: flex-start; gap: 8px; }
 .pc-chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-height: 28px; }
 .pc-chips :deep(.chip) { padding: 3px 8px; font-size: 12px; }
-.pc-chips :deep(.chip.chip-new) { background: #623d51; color: #ffdbe2; }
-.pc-chips :deep(.chip.chip-kind), .pc-chips :deep(.chip.chip-room), .pc-chips :deep(.chip.chip-muted) { background: #38516f; color: #e5edf8; }
-.pc-chips :deep(.chip.chip-danger) { background: #e03131; color: #fff; }
+/* 짙은 머리용 이름표 색. 밝은 머리(quiet)에는 걸지 않아 다른 목록과 같은 이름표 색이 그대로 나온다. */
+.pcard:not(.quiet) .pc-chips :deep(.chip.chip-new) { background: #623d51; color: #ffdbe2; }
+.pcard:not(.quiet) .pc-chips :deep(.chip.chip-kind), .pcard:not(.quiet) .pc-chips :deep(.chip.chip-room), .pcard:not(.quiet) .pc-chips :deep(.chip.chip-muted) { background: #38516f; color: #e5edf8; }
+.pcard:not(.quiet) .pc-chips :deep(.chip.chip-danger) { background: #e03131; color: #fff; }
 /* 주의 이름표(근생 섞인 건물 등)는 금색인 관심 이름표와 헷갈리지 않게 주황빛 붉은색으로 둔다. */
-.pc-chips :deep(.chip.chip-warn) { background: #6e3b2c; color: #ffd2bd; }
-.pc-chips .change { font-size: 12px; color: #e0e8f4; }
+.pcard:not(.quiet) .pc-chips :deep(.chip.chip-warn) { background: #6e3b2c; color: #ffd2bd; }
+.pc-chips .change { font-size: 12px; }
+.pcard:not(.quiet) .pc-chips .change { color: #e0e8f4; }
 .pc-close {
   flex: none; min-height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent;
   font-size: 13px; font-weight: 600; color: #cedcf0; white-space: nowrap;
@@ -903,6 +910,27 @@ const plain = (label: string) => label.replace(/\s*↗$/, '');
 .pc-verdict button:hover { background: #e4eaf3; }
 .pc-verdict button.on { background: #fff; color: var(--ink); box-shadow: 0 0 0 1px var(--line-strong); }
 .pc-verdict button.star.on { background: var(--star-soft); color: var(--star); box-shadow: 0 0 0 1px var(--star); }
+
+/*
+ * 묶음 목록의 나머지 매물(quiet): 고른 매물 카드와 같은 모양에 머리만 밝게 두어 고른 매물(짙은 머리)과 가른다. 닫기 단추는 없다.
+ * 짙은 머리가 바꿔 둔 색 값(--ink 등)은 카드 바깥 값으로 되돌리고, 짙은 바탕용으로 밝게 칠한 글자는 밝은 바탕용 색으로 다시 칠한다.
+ */
+.pcard.quiet { box-shadow: none; cursor: pointer; }
+.pcard.quiet:hover { border-color: #9fb0c8; }
+.pcard.quiet .pc-head {
+  --ink: inherit; --ink-2: inherit; --muted: inherit; --line: inherit; --line-strong: inherit;
+  --surface: inherit; --surface-2: inherit; --accent: inherit; --accent-soft: inherit;
+  --seen: inherit; --seen-soft: inherit; --down: inherit; --down-soft: inherit; --up: inherit; --up-soft: inherit;
+  --star: inherit; --star-soft: inherit;
+  background: #fff; color: var(--ink);
+}
+.pcard.quiet .pc-thumb { background-color: #dfe5ea; color: #5f6e85; }
+.pcard.quiet .pc-deal, .pcard.quiet .pc-mlabel, .pcard.quiet .pc-price small, .pcard.quiet .pc-change small { color: #5f6e85; }
+.pcard.quiet .pc-size { border-color: var(--line-strong); background: #fff; color: var(--ink); }
+.pcard.quiet .pc-change { color: var(--ink-2); }
+.pcard.quiet .pc-change.down { color: var(--down); }
+.pcard.quiet .pc-change.up { color: var(--up); }
+.pcard.quiet .pc-mnote { color: #8e650d; }
 
 /* 좁은 칸: 사진을 줄이고, 더 좁으면 사진을 위로 올린다. 묶음 단추는 다음 줄 왼쪽으로 내려간다. */
 @container (max-width: 620px) {

@@ -83,7 +83,7 @@ const round1 = (v: number) => Math.round(v * 10) / 10;
 const pct = (v: number) => `${v.toFixed(1)}%`;
 
 /**
- * 카드에 보일 환산 월세(text)와 설명(tip). 월세는 월세 + 보증금 × 전환율 ÷ 12, 전세는 전세금 × 전환율 ÷ 12.
+ * 카드에 보일 환산 월세(text)와 설명(tip). 월세는 월세 + 보증금 × 전환율 ÷ 12, 전세는 전세금 × 전환율 ÷ 12를 만원 단위로 반올림한다.
  * 가격 선택지마다 하나씩 가격 줄 순서대로 쉼표로 잇고, 매매처럼 바꿀 수 없는 가격이 섞여 있으면 값 앞에 거래 이름을 붙인다.
  * 보증금 있는 월세나 전세가 없거나 쓸 전환율이 없으면 null.
  */
@@ -95,7 +95,8 @@ export function convertedRent(l: Pick<ListingView, 'prices'>): { text: string; t
     (p) => p.deposit != null && ((p.deal === 'monthly' && p.monthly != null) || (p.deal === 'jeonse' && p.deposit > 0)),
   );
   if (!options.some((p) => p.deposit! > 0)) return null;
-  const at = (p: PriceOption, x: number) => round1((p.deal === 'monthly' ? p.monthly! : 0) + (p.deposit! * x) / 100 / 12);
+  // 만원 단위로 반올림한다(49.4만과 49만은 견줄 때 차이가 없고, 전환율도 어림값이라 소수 자리가 뜻이 없다).
+  const at = (p: PriceOption, x: number) => Math.round((p.deal === 'monthly' ? p.monthly! : 0) + (p.deposit! * x) / 100 / 12);
   const mixed = options.length < l.prices.length;
   const text = options.map((p) => `${mixed ? `${DEAL_LABEL[p.deal]} ` : ''}${manwon(at(p, rate))}`).join(', ');
   const formula = (p: PriceOption) =>
@@ -141,7 +142,8 @@ const RENT_MONTHS = 24;
 
 /**
  * 카드에 보일 '대출 시 월'(text)과 설명(tip). 보증금 있는 월세와 전세의 가격 선택지마다 월세 + 이자를 가격 줄 순서대로 쉼표로 잇는다.
- * 대출 = (보증금 - 월세 × 24) × 대출 비율, 4억까지. 이자 = 대출 × 금리 ÷ 12.
+ * 대출 = (보증금 - 월세 × 24) × 대출 비율, 4억까지. 이자 = 대출 × 금리 ÷ 12를 만원 단위로 반올림한다
+ * (금리와 한도가 은행과 상품마다 달라 어차피 소수 자리까지 맞출 수 없어서, 57.8만 대신 58만으로 보인다).
  * 금리와 비율은 내 조건(profile.ts), 없으면 기본값. 해당 선택지가 없으면 null.
  * 근생이나 위반건축물 표시가 있으면 설명 맨 위에 대출이 막힐 수 있다는 줄을 붙인다.
  */
@@ -156,8 +158,8 @@ export function loanMonthly(l: Pick<ListingView, 'prices' | 'ledger'>): { text: 
   const rentSum = (p: PriceOption) => (p.deal === 'monthly' ? p.monthly! * RENT_MONTHS : 0);
   const base = (p: PriceOption) => Math.max(0, p.deposit! - rentSum(p));
   const loanOf = (p: PriceOption) => Math.round(Math.min((base(p) * ratio) / 100, LOAN_CAP));
-  const interest = (p: PriceOption) => round1((loanOf(p) * rate) / 100 / 12);
-  const total = (p: PriceOption) => round1((p.deal === 'monthly' ? p.monthly! : 0) + interest(p));
+  const interest = (p: PriceOption) => Math.round((loanOf(p) * rate) / 100 / 12);
+  const total = (p: PriceOption) => Math.round((p.deal === 'monthly' ? p.monthly! : 0) + interest(p));
   const mixed = options.length < l.prices.length;
   const text = options.map((p) => `${mixed ? `${DEAL_LABEL[p.deal]} ` : ''}${manwon(total(p))}`).join(', ');
   const line = (p: PriceOption) => {

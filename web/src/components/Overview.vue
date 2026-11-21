@@ -16,6 +16,8 @@ import SplitHandle from './SplitHandle.vue';
 import { mapShareStyle } from '../mapWidth';
 import { rememberNaverPlaces } from '../naverPlaces';
 import { pageSlots } from '../pageSlots';
+import { rentRate } from '../rentRate';
+import { walkPins, walkTimes } from '../walk';
 
 const props = defineProps<{
   listings: ListingView[];
@@ -423,8 +425,75 @@ const GROUP_PAGE = 50;
 const groupPage = ref(0);
 const groupEl = ref<HTMLElement | null>(null);
 const listingById = computed(() => new Map(props.listings.map((l) => [l.id, l])));
-/** 묶음 매물(지금 객체). 버림 등으로 빠진 매물은 뺀다. */
-const group = computed(() => groupIds.value.flatMap((id) => listingById.value.get(id) ?? []));
+/** 묶음 매물(지금 객체, 지도 창 순서). 버림 등으로 빠진 매물은 뺀다. */
+const groupBase = computed(() => groupIds.value.flatMap((id) => listingById.value.get(id) ?? []));
+
+/**
+ * 묶음 목록 정렬: map 지도 창 순서, pin:<핀 id> 그 거리 핀까지 걸어서 가까운 순, price 싼 순, area 넓은 순, new 처음 본 날 최근 순.
+ * 고른 정렬은 이 브라우저에 기억한다.
+ */
+type GroupSort = 'map' | 'price' | 'area' | 'new' | `pin:${string}`;
+const GROUP_SORT_KEY = 'hnw-group-sort';
+function loadGroupSort(): GroupSort {
+  try {
+    return (localStorage.getItem(GROUP_SORT_KEY) as GroupSort | null) ?? 'map';
+  } catch {
+    return 'map';
+  }
+}
+const groupSort = ref<GroupSort>(loadGroupSort());
+watch(groupSort, (v) => {
+  try {
+    localStorage.setItem(GROUP_SORT_KEY, v);
+  } catch {
+    /* 저장이 막혀도 정렬은 된다 */
+  }
+});
+/** 정렬에 쓸 수 있는 거리 핀(표시 핀은 매물까지 거리를 재지 않는다) */
+const sortPins = computed(() => walkPins.value.filter((p) => p.kind !== 'mark'));
+/** 지금 쓰는 정렬. 고른 거리 핀을 뺐거나 모르는 값이면 지도 창 순서로 돌아간다. */
+const sortNow = computed<GroupSort>(() => {
+  const s = groupSort.value;
+  if (s.startsWith('pin:')) return sortPins.value.some((p) => `pin:${p.id}` === s) ? s : 'map';
+  return s === 'price' || s === 'area' || s === 'new' ? s : 'map';
+});
+/**
+ * 싼 순에 쓰는 값(만원): 월세는 월세 + 보증금 × 전환율 ÷ 12, 전세는 전세금 × 전환율 ÷ 12(매물 카드의 환산 월세와 같은 식),
+ * 매매와 경매는 값. 가격 선택지가 여럿이면 가장 싼 것. 낼 수 없으면 null.
+ */
+function cheapValue(l: ListingView): number | null {
+  const rate = rentRate.value.local ?? rentRate.value.legal;
+  let best: number | null = null;
+  for (const p of l.prices) {
+    let v: number | null = null;
+    if ((p.deal === 'monthly' || p.deal === 'short') && p.monthly != null) v = p.monthly + (rate != null && p.deposit ? (p.deposit * rate) / 1200 : 0);
+    else if (p.deal === 'jeonse' && p.deposit != null && rate != null) v = (p.deposit * rate) / 1200;
+    else if ((p.deal === 'sale' || p.deal === 'auction') && p.price != null) v = p.price;
+    if (v != null && (best == null || v < best)) best = v;
+  }
+  return best;
+}
+/**
+ * 묶음 매물(고른 정렬). 지도 창처럼 펼친 가격대 매물, 회색 매물, 별로 칸 순서는 그대로 두고 칸 안에서만 다시 늘어놓는다.
+ * 값을 모르는 매물(핀까지 아직 못 잼, 평수 모름 등)은 칸의 맨 뒤, 값이 같으면 지도 창 순서다.
+ */
+const group = computed(() => {
+  const base = groupBase.value;
+  const s = sortNow.value;
+  if (s === 'map' || base.length < 2) return base;
+  const pin = s.startsWith('pin:') ? s.slice(4) : null;
+  const value = (l: ListingView): number | null => {
+    if (pin) return walkTimes(l.id).find((w) => w.pin.id === pin)?.meters ?? null;
+    if (s === 'price') return cheapValue(l);
+    if (s === 'area') return l.areaM2 == null ? null : -l.areaM2;
+    const at = Date.parse(l.firstSeenAt);
+    return Number.isNaN(at) ? null : -at;
+  };
+  const tier = (l: ListingView) => (l.verdict === 'meh' ? 2 : isOutside(l) ? 1 : 0);
+  const rows = base.map((l, i) => ({ l, i, t: tier(l), v: value(l) }));
+  rows.sort((a, b) => a.t - b.t || Number(a.v == null) - Number(b.v == null) || (a.v ?? 0) - (b.v ?? 0) || a.i - b.i);
+  return rows.map((r) => r.l);
+});
 const groupPages = computed(() => Math.max(1, Math.ceil(group.value.length / GROUP_PAGE)));
 const groupShown = computed(() => {
   const page = Math.min(groupPage.value, groupPages.value - 1);
@@ -552,7 +621,13 @@ async function pick(listing: ListingView | undefined, items?: ListingView[]) {
   await new Promise((done) => requestAnimationFrame(() => setTimeout(done)));
   if (token !== pickToken) return;
   groupIds.value = items.map((l) => l.id);
+  // 지도 창 순서가 아닌 정렬이면 고른 매물(지도 창 맨 위)이 목록 중간에 올 수 있어, 그 매물이 든 쪽을 보인다.
+  groupPage.value = Math.floor(Math.max(0, group.value.findIndex((l) => l.id === listing.id)) / GROUP_PAGE);
 }
+// 정렬을 바꾸면 새 순서의 맨 앞부터 보인다.
+watch(sortNow, () => {
+  if (group.value.length > 1) turnGroupPage(0);
+});
 /** 지도에서 빨리 여러 번 누르면 늦게 붙는 앞 묶음 목록이 뒤 묶음을 덮지 않게, 누를 때마다 올리는 번호 */
 let pickToken = 0;
 
@@ -572,7 +647,7 @@ function closePicked() {
 
 /** 큰 카드가 화면 밖이면 보이게 옮긴다(묶음 목록 안에서 고른 매물이 바뀌면 큰 카드 자리가 바뀐다). */
 function showPicked() {
-  void nextTick(() => overviewEl.value?.querySelector('.group .picked')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+  void nextTick(() => overviewEl.value?.querySelector('.group .picked.on')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
 }
 
 /** 묶음 목록 쪽을 넘기고 목록 맨 위가 보이게 올린다. */
@@ -681,24 +756,34 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
             50장이 넘으면 쪽 번호로 넘긴다. 작은 카드를 누르면 그 자리에서 큰 카드로 펼친다.
           -->
           <section v-if="listShown.length" ref="groupEl" class="group" :aria-label="group.length > 1 ? '지도에서 누른 묶음의 매물' : '지도에서 고른 매물'">
-            <p v-if="group.length > 1" class="group-head">
-              지도에서 누른 매물 <b class="num">{{ group.length }}건</b><template v-if="groupGray">, 회색 <b class="num">{{ groupGray }}건</b></template>
-            </p>
-            <template v-for="l in listShown" :key="l.id">
-              <div v-if="l.id === pickedId" class="picked" aria-label="지도에서 고른 매물">
-                <ListingCard
-                  picked :listing="l" :areas="areas" :selected="l.id === selectedId" :live-collected="liveListingIds?.has(l.id)"
-                  @select="selectFromList(l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
-                  @source="emit('source', l)" @raw="emit('raw', l)" @close="closePicked" zone-banner
-                />
-              </div>
+            <div v-if="group.length > 1" class="group-head">
+              <span>지도에서 누른 매물 <b class="num">{{ group.length }}건</b><template v-if="groupGray">, 회색 <b class="num">{{ groupGray }}건</b></template></span>
+              <label
+                class="group-sort"
+                title="펼친 가격대 매물, 회색 매물, 별로 순서는 그대로 두고 그 안에서 다시 늘어놓습니다.&#10;핀까지 가까운 순은 걸어서 잰 거리, 싼 순은 월세와 전세는 환산 월세, 매매는 매매가로 견줍니다."
+              >
+                <span>정렬</span>
+                <select :value="sortNow" aria-label="지도에서 누른 매물 정렬" @change="groupSort = ($event.target as HTMLSelectElement).value as GroupSort">
+                  <option value="map">지도 창 순서</option>
+                  <option v-for="p in sortPins" :key="p.id" :value="`pin:${p.id}`">{{ p.name }}까지 가까운 순</option>
+                  <option value="price">싼 순</option>
+                  <option value="area">넓은 순</option>
+                  <option value="new">처음 본 날 최근 순</option>
+                </select>
+              </label>
+            </div>
+            <!-- 모두 고른 매물 카드 모양으로 그리고, 고른 매물만 짙은 머리, 나머지는 밝은 머리(quiet)다. 고르기를 바꿔도 카드를 다시 만들지 않는다. -->
+            <div
+              v-for="l in listShown" :key="l.id" class="picked" :class="{ on: l.id === pickedId }"
+              :aria-label="l.id === pickedId ? '지도에서 고른 매물' : undefined"
+            >
               <ListingCard
-                v-else :class="{ out: isOutside(l) }" :listing="l" :areas="areas" :selected="l.id === selectedId"
+                picked :quiet="l.id !== pickedId" :class="{ out: isOutside(l) }" :listing="l" :areas="areas" :selected="l.id === selectedId"
                 :live-collected="liveListingIds?.has(l.id)" zone-banner
-                @select="pickFromGroup(l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
-                @source="emit('source', l)" @raw="emit('raw', l)"
+                @select="l.id === pickedId ? selectFromList(l) : pickFromGroup(l)" @open="emit('open', l)" @verdict="(v) => emit('verdict', l, v)"
+                @source="emit('source', l)" @raw="emit('raw', l)" @close="closePicked"
               />
-            </template>
+            </div>
             <nav v-if="groupPages > 1" class="group-pager" aria-label="묶음 목록 쪽 넘기기">
               <button type="button" aria-label="이전 쪽" :disabled="groupPage === 0" @click="turnGroupPage(groupPage - 1)">‹</button>
               <template v-for="(p, i) in pageSlots(groupPage, groupPages)" :key="i">
@@ -879,9 +964,18 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 /* 작은 카드는 감싼 칸 폭을 보고 배치를 고르므로(@container) 다른 탭 목록처럼 이 칸을 기준 칸으로 둔다. */
 .group { display: grid; gap: 8px; padding: 10px; container-type: inline-size; }
 .group > .picked { padding: 0; }
-.group-head { margin: 0; padding: 0 4px; font-size: 12px; color: #5f6e85; }
+/* 묶음 목록 머리: 왼쪽에 건수, 오른쪽 끝에 정렬 */
+.group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0; padding: 0 4px; font-size: 12px; color: #5f6e85; }
 .group-head b { color: var(--ink); }
-.group .out { background: #ebeef2; }
+.group-sort { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--ink-2); font-weight: 700; cursor: help; }
+.group-sort select {
+  min-height: 30px; max-width: 100%; padding: 0 26px 0 9px; border: 1px solid var(--line-strong); border-radius: 6px;
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+/* 회색 매물과 별로: 밝은 머리 카드는 머리까지 같은 바탕으로 칠한다(고른 매물의 짙은 머리는 그대로). 별로는 회색 매물보다 진하게 하고 흐리게 둔다. */
+.group .out, .group .out.quiet :deep(.pc-head) { background: #ebeef2; }
+.group .meh.quiet, .group .meh.quiet :deep(.pc-head) { background: #dde2e8; }
+.group .meh.quiet { opacity: .75; }
 /* 묶음 목록 쪽 번호(‹ 1 2 3 4 5 … 10 ›): 지도 창의 쪽 번호와 같은 모양 */
 .group-pager { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px; padding-top: 4px; }
 .group-pager button {
