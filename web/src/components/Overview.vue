@@ -430,7 +430,7 @@ const listingById = computed(() => new Map(props.listings.map((l) => [l.id, l]))
 const groupBase = computed(() => groupIds.value.flatMap((id) => listingById.value.get(id) ?? []));
 
 /**
- * 묶음 목록 정렬: map 가격 바뀐 매물 먼저(지도 표시에 적힌 최저가 매물, 가격 변동, 나머지 환산 월세 낮은 순. 지도 창과 같은 순서), pin:<핀 id> 그 거리 핀까지 걸어서 가까운 순, price 환산 월세(매매는 매매가) 낮은 순,
+ * 묶음 목록 정렬: map 지도 정렬순(지도에서 누르면 뜨는 창과 같은 순서: 지도 표시에 적힌 최저가 매물, 가격 변동, 나머지 환산 월세 낮은 순), pin:<핀 id> 그 거리 핀까지 걸어서 가까운 순, price 환산 월세(매매는 매매가) 낮은 순,
  * monthly 월세 낮은 순, deposit 보증금(전세는 전세금) 낮은 순, area 넓은 순, new 처음 본 날 최근 순.
  * 고른 정렬은 이 브라우저에 기억한다.
  */
@@ -459,7 +459,7 @@ const sortPins = computed(() => walkPins.value.filter((p) => p.kind !== 'mark'))
  */
 const sortOptions = computed(() => {
   const out: { value: GroupSort; label: string; tip: string }[] = [
-    { value: 'map', label: '가격 바뀐 매물 먼저', tip: '누른 지도 표시에 적힌 최저 월세, 최저 전세 매물을 맨 앞에, 그다음 가격이 바뀐 매물, 나머지는 환산 월세 낮은 순입니다.' },
+    { value: 'map', label: '지도 정렬순', tip: '지도에서 누르면 뜨는 창과 같은 순서입니다. 누른 지도 표시에 적힌 최저 월세, 최저 전세 매물을 맨 앞에, 그다음 가격이 바뀐 매물, 나머지는 환산 월세 낮은 순입니다.' },
     ...sortPins.value.map((p) => ({ value: `pin:${p.id}` as GroupSort, label: `${p.name}까지 가까운 순`, tip: `${p.name}까지 길을 따라 걸어서 잰 거리가 짧은 순입니다.` })),
     deal.value === 'sale'
       ? { value: 'price' as GroupSort, label: '매매가 낮은 순', tip: '매매가가 낮은 순입니다.' }
@@ -1027,6 +1027,8 @@ async function nudge(id: string, delta: number, e: KeyboardEvent) {
 /* 작은 카드는 감싼 칸 폭을 보고 배치를 고르므로(@container) 다른 탭 목록처럼 이 칸을 기준 칸으로 둔다. */
 .group { display: grid; gap: 8px; padding: 10px; container-type: inline-size; }
 .group > .picked { padding: 0; }
+/* 고른 카드나 목록 머리로 화면을 옮길 때 맨 위 고정 머리(--app-header-height)에 윗부분이 가리지 않게 그만큼 띄운다. */
+.group, .group > .picked { scroll-margin-top: calc(var(--app-header-height, 80px) + 12px); }
 /* 묶음 목록 머리: 왼쪽에 건수, 오른쪽 끝에 정렬 */
 .group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0; padding: 0 4px; font-size: 12px; color: #5f6e85; }
 .group-head b { color: var(--ink); }
