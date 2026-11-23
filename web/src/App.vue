@@ -1184,6 +1184,9 @@ onMounted(async () => {
     });
     headerObserver.observe(headerEl.value);
   }
+  // 확장 신호는 자료를 받기 전에 듣는다. 막 켠 서버가 느리게 답하면 자료가 다 올 때까지 확장을 못 알아보기 때문이다.
+  window.addEventListener('message', onExtMessage);
+  window.postMessage({ source: 'hnw-dashboard', type: 'ping' }, location.origin);
   try {
     await refreshState();
     if (state.value) await refreshData(state.value.dataRevision);
@@ -1193,9 +1196,7 @@ onMounted(async () => {
   }
   schedule();
   window.addEventListener('keydown', onKey);
-  window.addEventListener('message', onExtMessage);
   document.addEventListener('click', onDocClick);
-  window.postMessage({ source: 'hnw-dashboard', type: 'ping' }, location.origin);
 });
 onBeforeUnmount(() => {
   headerObserver?.disconnect();
