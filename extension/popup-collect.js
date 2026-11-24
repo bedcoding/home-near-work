@@ -9,7 +9,6 @@
   function paint() {
     const running = state?.status === 'running';
     el('start').disabled = pending || running || reading || !selected.size || !filterContext;
-    el('preset-save').disabled = pending || running || reading || !selected.size || !filterContext;
     el('start').textContent = pending ? '요청 처리 중입니다' : running ? '수집 진행 중' : reading ? '필터 확인 중입니다' : !sourceId ? '네이버 탭 선택 후 수집 가능' : !filterContext ? '필터 확인 후 수집 가능' : !selected.size ? '수집할 지역을 선택하세요' : '현재 필터로 선택 지역 수집';
     el('source').disabled = pending || reading || running || !sources.length;
     el('source-refresh').disabled = pending || reading || running;
@@ -132,15 +131,6 @@
     if(sourceId)void readFilter();
   });
   el('source-refresh').addEventListener('click',()=>void loadSources());
-  el('preset-save').addEventListener('click',async()=>{
-    if(pending || reading || !filterContext || !selected.size || state?.status==='running')return;
-    pending=true;fail('');el('preset-notice').hidden=true;paint();
-    try {
-      const response=await workerMessage({type:'naver-preset-save',tabId:sourceId,filterKey:filterContext.key,areaIds:areas.filter(area=>selected.has(area.region.code)).map(area=>area.id)});
-      if(!response?.preset || response.error)throw new Error(response?.error || '예약 조건 저장을 확인하지 못했습니다.');
-      el('preset-notice').textContent='조건과 지역을 저장했습니다. 대시보드의 브라우저 예약 조회에서 네이버를 추가하고 예약을 켜세요.';el('preset-notice').hidden=false;
-    }catch(error){fail(error.message);}finally{pending=false;paint();}
-  });
   el('filter-read').addEventListener('click',()=>void readFilter());
   el('start').addEventListener('click', () => void send('start'));
   for (const command of ['pause','resume','retry']) el(command).addEventListener('click', () => void send(command));

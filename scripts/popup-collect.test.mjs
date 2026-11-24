@@ -24,7 +24,6 @@ async function popup({offline=false,filterUnavailable=false,tabs=[{id:99,title:'
   const chrome={storage:{local:{get:async key=>({[key]:saved[key]}),set:async value=>Object.assign(saved,value)},onChanged:{addListener:fn=>{onChange=fn;}}},
     runtime:{sendMessage:async message=>{if(message.type==='naver-filter-tabs')return {tabs};
       if(message.type==='naver-filter-state'){filterReads.push(message.tabId);return filterUnavailable?{error:'Refresh the source list'}:{context:{key:'synthetic-filter-key',filter:selectedFilter,summary:ledger.summary(selectedFilter)}};}
-      if(message.type==='naver-preset-save'){messages.push(structuredClone(message));return {preset:{areaIds:message.areaIds,summary:'Synthetic saved filter'}};}
       messages.push(structuredClone(message)); if(offline)throw new Error('Synthetic connection failure'); return {state:{status:'running',jobs:message.areas.map(a=>({areaName:a.name,site:'naver',naverScope:{kind:'naver-region',filter:selectedFilter},status:'pending'})),index:0}};}}};
   vm.runInNewContext(source,{document:{getElementById:id=>{assert.ok(elements.has(id),id);return elements.get(id);},createElement:()=>new Element()},chrome,hnwReadAreas:async()=>areas,HNW_NAVER_LEDGER:ledger,Date,Set,setTimeout,clearTimeout});
   await settle();
@@ -96,12 +95,6 @@ test('no available map explains the disabled start and refresh updates the avail
   assert.deepEqual(p.filterReads,[33]);assert.equal(p.el('start').disabled,false);
 });
 
-test('saving a preset sends only confirmed conditions and selected collection IDs without starting a tour',async()=>{
-  const p=await popup();const boxes=p.el('areas').querySelectorAll('input');boxes[1].checked=false;await boxes[1].listeners.change();
-  await p.el('preset-save').listeners.click();await settle();
-  assert.equal(p.messages.length,1);assert.equal(p.messages[0].type,'naver-preset-save');assert.deepEqual(p.messages[0].areaIds,[1]);
-  assert.equal(p.messages[0].tabId,99);assert.equal(p.messages[0].filterKey,'synthetic-filter-key');assert.equal(p.el('preset-notice').hidden,false);
-});
 test('popup start failure restores controls and displays the worker error',async()=>{
   const p=await popup({offline:true}); p.el('start').listeners.click(); await settle();
   assert.equal(p.el('start').disabled,false); assert.equal(p.el('error').hidden,false);

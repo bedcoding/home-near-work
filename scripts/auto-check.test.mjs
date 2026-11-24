@@ -12,7 +12,7 @@ function fixture({ busy = false, failStart = false, recent = [], notices = false
   let now = new Date(2026, 9, 20, 22, 31).getTime();
   const settings = new Map([['auto_check_time', '22:30'], ['notice_check_time', notices ? '22:30' : 'off']]);
   const runs = [...recent];
-  const state = { busy, failStart, starts: 0, tick: null, browseSlots: [], browseResets: 0 };
+  const state = { busy, failStart, starts: 0, tick: null };
   class Clock extends Date {
     constructor(...args) { super(...(args.length ? args : [now])); }
     static now() { return now; }
@@ -37,10 +37,6 @@ function fixture({ busy = false, failStart = false, recent = [], notices = false
     'node:child_process': { spawn() { throw new Error('OS access forbidden'); } },
     'node:path': {}, './db.js': store, './config.js': {}, './runner.js': runner,
     '../shared/types.js': { CAPTURE_SOURCES: ['naver', 'dabang', 'zigbang'] },
-    './browse-auto.js': {
-      enqueueScheduledBrowse: slot => { state.browseSlots.push(slot); return true; },
-      resetBrowseAutoSchedule: () => { state.browseResets++; },
-    },
   };
   const context = {
     exports: {}, Date: Clock, console: { log() {}, warn() {} }, process: { platform: 'test', env: {} },
@@ -150,28 +146,9 @@ test('known collection limits are reported without repeating an unfixable run', 
   assert.equal(f.state.starts, 1);
 });
 
-test('browser schedule is offered even when regular collectors are busy, recent or already handled', () => {
-  const fixtures = [fixture({ busy: true }), fixture({ recent: [{ id: 100, startedAt: new Date(2026, 9, 20, 22).toISOString(), summary: { sources: [{ source: 'ziptoss' }] } }] }), fixture()];
-  fixtures[2].settings.set('auto_check_last_day', '2026-10-20');
-  for (const f of fixtures) {
-    f.api.runMissedCheck();
-    assert.deepEqual(f.state.browseSlots, [new Date(2026, 9, 20, 22, 30).getTime()]);
-  }
-});
-
-test('notice-only slots do not enqueue a browser tour', () => {
+test('a notice-only slot starts the notice collector when the full schedule is off', () => {
   const f = fixture({ notices: true });
   f.settings.set('auto_check_time', 'off');
   assert.equal(f.api.runMissedCheck(), 'started');
-  assert.deepEqual(f.state.browseSlots, []);
-});
-
-test('only changes to full schedule reset the browser schedule baseline', async () => {
-  const f = fixture();
-  await f.api.setAutoCheck({ visible: false });
-  await f.api.setAutoCheck({ noticeTime: '19:00' });
-  assert.equal(f.state.browseResets, 0);
-  await f.api.setAutoCheck({ time: '21:00' });
-  await f.api.setAutoCheck({ day: 2 });
-  assert.equal(f.state.browseResets, 2);
+  assert.equal(f.runs[0].noticesOnly, true);
 });

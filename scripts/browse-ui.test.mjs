@@ -22,7 +22,7 @@ const sentRegion = (id) => ({ id, name: `예시 구역 ${id}`, lat: 35.1 + id * 
 const job = (status, receipt) => ({ id: 'synthetic-job', areaName: '예시 지역', site: 'dabang', siteName: '다방', url: 'https://www.dabangapp.com/map/onetwo', status, note: '', ...(receipt ? { receipt } : {}) });
 const state = (jobs, status = 'done') => ({ id: 'synthetic-run', status, jobs, index: jobs.length, updatedAt: 1 });
 
-function harness(t, extension = { version: '0.8.33', browse: true, sites: ['naver'] }, options = {}) {
+function harness(t, extension = { version: '0.8.33', browse: true, sites: ['naver'] }) {
   const mounted = [];
   const unmounted = [];
   const messages = [];
@@ -48,19 +48,11 @@ function harness(t, extension = { version: '0.8.33', browse: true, sites: ['nave
   const origin = 'https://example.invalid';
   const props = vue.reactive({ areas: [regionArea(1), regionArea(2)], extension });
   const exports = {};
-  let scopeResponse = options.scopeResponse || (() => ({ scopes: {} }));
-  const fetches = [];
   vm.runInNewContext(compiled, {
-    exports, window: win, location: { origin }, URL, Date: Clock, AbortController,
-    fetch: async (url, init) => {
-      fetches.push({ url, init });
-      const result = await scopeResponse();
-      return { ok: true, json: async () => result };
-    },
+    exports, window: win, location: { origin }, URL, Date: Clock,
     require: (id) => {
       if (id === 'vue') return { ...vue, onMounted: (fn) => mounted.push(fn), onBeforeUnmount: (fn) => unmounted.push(fn) };
       if (id === '../format') return { radiusText: () => '예시 반경' };
-      if (id === './BrowseAuto.vue') return { default: {} };
       if (id === './NaverManual.vue') return { default: {} };
       if (id === './HelpTip.vue') return { default: {} };
       throw new Error(`Unexpected import ${id}`);
@@ -72,8 +64,7 @@ function harness(t, extension = { version: '0.8.33', browse: true, sites: ['nave
   t.after(unmount);
   const ready = Promise.all(mounted.map((fn) => fn()));
   const receive = (data, overrides = {}) => listeners.get('message')?.({ source: win, origin, data: { source: 'hnw-extension', type: 'browse-status', ...data }, ...overrides });
-  return { app, props, messages, receive, win, intervals, timeouts, listeners, unmount, ready, fetches,
-    setScopeResponse: (next) => { scopeResponse = next; },
+  return { app, props, messages, receive, win, intervals, timeouts, listeners, unmount, ready,
     advance: (ms) => { now += ms; }, now: () => now, tick: () => intervals.forEach((fn) => fn()) };
 }
 
@@ -353,7 +344,7 @@ test('복구한 이전 결과는 접고 현재 실행과 중단 상태는 펼치
 });
 
 test('이전 미확인 재조회에는 현재 선택을 섞지 않고 새 조회만 고른 구나 동을 전달한다', async (t) => {
-  const h = harness(t, undefined, { scopeResponse: () => ({ scopes: { 1: [region(), region(70002)] } }) });
+  const h = harness(t);
   await h.ready;
   const previous = state([{ ...job('partial'), areaName: '이전 예시 지역' }]);
   h.receive({ state: previous });
@@ -373,46 +364,9 @@ test('이전 미확인 재조회에는 현재 선택을 섞지 않고 새 조회
   const start = h.messages.at(-1).data;
   assert.equal(start.command, 'start');
   assert.deepEqual(start.areas, [sentRegion(1)]);
-  assert.equal(start.areas[0].dabangRegions, undefined, '저장된 다방 동별 범위는 네이버 조회에 섞지 않는다');
   assert.deepEqual(start.sites, ['naver']);
   assert.equal(h.app.activeState.value, null, '새 실행을 기다리는 동안 이전 결과를 새 실행의 결과로 표시하지 않는다');
   assert.equal(h.app.runExpanded.value, true);
-});
-
-test('저장된 다방 동별 범위는 예약 조회에만 넘기고 네이버 시작 메시지에는 넣지 않는다', async (t) => {
-  let resolveScopes;
-  const h = harness(t, undefined, { scopeResponse: () => new Promise((resolve) => { resolveScopes = resolve; }) });
-  h.receive({ state: null });
-  await readNaver(h);
-  assert.equal(h.app.scopesReady.value, false);
-  assert.equal(h.app.canStart.value, true, '다방 범위를 기다리지 않고 네이버 조회를 시작할 수 있다');
-  resolveScopes({ scopes: { 1: [region(), { ...region(70002), name: '예시시 예시구 상상동', dong: '상상동' }] } });
-  await h.ready;
-  assert.equal(h.app.scopesReady.value, true);
-  assert.equal(h.app.areaScopes.value[1].length, 2);
-  h.app.command('start');
-  const sent = h.messages.at(-1).data;
-  assert.equal(sent.type, 'browse-command');
-  assert.deepEqual(sent.areas, [sentRegion(1), sentRegion(2)]);
-  assert.doesNotThrow(() => structuredClone(sent), 'Vue Proxy가 시작 메시지에 남지 않는다');
-  assert.equal(h.fetches[0].url, '/api/browse/scopes');
-  assert.equal(h.fetches[0].init.cache, 'no-store');
-});
-
-test('다방 동별 범위를 못 불러오거나 잘못 오면 예약 조회에 넘기지 않고 다시 불러오면 풀린다', async (t) => {
-  const h = harness(t, undefined, { scopeResponse: () => { throw new Error('offline'); } });
-  await prepared(h);
-  assert.equal(h.app.scopesReady.value, false);
-  assert.equal(h.app.canStart.value, true, '범위 실패가 네이버 조회를 막지 않는다');
-  for (const scopes of [{ 1: [region(), { ...region(), url: 'https://unrelated.invalid/' }] }, { 1: [] }, []]) {
-    h.setScopeResponse(() => ({ scopes }));
-    await h.app.loadScopes();
-    assert.equal(h.app.scopesReady.value, false);
-  }
-  h.setScopeResponse(() => ({ scopes: { 1: [region()] } }));
-  await h.app.loadScopes();
-  assert.equal(h.app.scopesReady.value, true);
-  assert.equal(h.timeouts.size, 0, '범위 조회 제한 타이머를 정리한다');
 });
 
 test('서버가 확인한 페이지와 동 제외 건수를 표시하고 일부 확인과 완료를 구분한다', async (t) => {
@@ -647,31 +601,4 @@ test('네이버 응답은 마지막 요청만 받고, 닫힌 탭을 다른 탭�
     naverReply(h, { requestId: h.messages.at(-1).data.requestId, requestType: 'naver-filter-state', context });
     assert.equal(h.app.naverSource.value, null, '모양이 다른 필터 응답은 받지 않는다');
   }
-});
-
-test('읽은 네이버 필터와 고른 구나 동을 예약용으로 저장하고 결과를 알린다', async (t) => {
-  const h = harness(t, { ...NAVER_EXT, version: '0.8.23' });
-  h.props.areas = [area(1), regionArea(3), regionArea(4, 'dong')];
-  h.app.selectedAreas.value = h.props.areas.map((a) => a.id);
-  await h.ready;
-  h.receive({ state: null });
-  h.app.selectedSites.value = ['naver'];
-  assert.equal(h.app.canSaveNaverPreset.value, false, '필터를 읽기 전에는 저장하지 않는다');
-  await readNaver(h);
-  assert.equal(h.app.canSaveNaverPreset.value, true);
-  h.app.saveNaverPreset();
-  const save = h.messages.at(-1).data;
-  assert.deepEqual([save.type, save.tabId, save.filterKey, save.areaIds], ['naver-preset-save', 99, 'synthetic-key', [3, 4]]);
-  assert.equal(h.app.canStart.value, false, '저장 중에는 시작하지 않는다');
-  naverReply(h, { requestId: save.requestId, requestType: 'naver-preset-save', preset: { areaIds: [3, 4], updatedAt: 1, summary: 'Synthetic', conditions: [] } });
-  assert.match(h.app.naverPresetNotice.value, /예약용으로 저장했습니다/);
-  assert.equal(h.app.canStart.value, true);
-  h.app.saveNaverPreset();
-  naverReply(h, { requestId: h.messages.at(-1).data.requestId, requestType: 'naver-preset-save', error: '예약에는 켜진 구나 동 수집 지역을 선택해 주세요.' });
-  assert.equal(h.app.naverPresetNotice.value, null);
-  assert.match(h.app.naverError.value, /구나 동/);
-
-  const old = harness(t, NAVER_EXT);
-  await old.ready;
-  assert.equal(old.app.naverPresetVersionReady.value, false, '0.8.22 확장에는 대시보드 예약용 저장을 열지 않는다');
 });

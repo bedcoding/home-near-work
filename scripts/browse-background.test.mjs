@@ -11,6 +11,7 @@ const dashboard = { frameId: 0, url: 'http://localhost:8787/' };
 function worker({ storageFails = false } = {}) {
   const listeners = [];
   const imported = [];
+  const clearedAlarms = [];
   const event = { addListener() {} };
   const chrome = {
     storage: {
@@ -29,7 +30,7 @@ function worker({ storageFails = false } = {}) {
       getManifest: () => ({ version: 'synthetic-test' }),
     },
     downloads: { onChanged: event },
-    alarms: { onAlarm: event },
+    alarms: { onAlarm: event, clear: async (name) => clearedAlarms.push(name) },
   };
   const context = vm.createContext({
     chrome, URL, AbortSignal, setTimeout,
@@ -45,7 +46,8 @@ function worker({ storageFails = false } = {}) {
     }
   };
   vm.runInContext(source('background.js'), context, { filename: 'background.js' });
-  assert.deepEqual(imported, ['sites.js', 'areas.js', 'daangn-capture.js', 'naver-ledger.js', 'vendor/lz-string.js', 'naver-context.js', 'naver-fetch.js', 'browse-queue.js', 'browse-auto.js']);
+  assert.deepEqual(imported, ['sites.js', 'areas.js', 'daangn-capture.js', 'naver-ledger.js', 'vendor/lz-string.js', 'naver-context.js', 'naver-fetch.js', 'browse-queue.js']);
+  assert.deepEqual(clearedAlarms, ['hnw-browse-auto']);
   assert.equal(listeners.length, 1);
   return (sender = dashboard) => new Promise((resolve, reject) => {
     try {

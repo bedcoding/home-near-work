@@ -34,9 +34,6 @@ import { updateZonesNow, zoneFileCheckState } from './redev-zones-update.js';
 import { getProgress, runPlan, staleText, startLineRun, startRun, stopRun } from './runner.js';
 import { knownStations, stationCatalog } from './station-catalog.js';
 import { browseConsole, normalizeBrowseProgress, type BrowseProgress } from './browse-progress.js';
-import { BROWSE_SCOPES_KEY, readBrowseScopes } from './browse-settings.js';
-import { browseAutoState, setBrowseAuto, runBrowseAutoNow, pollBrowseAuto, reportBrowseAuto, migrateDabangSchedule } from './browse-auto.js';
-import { saveNaverPreset, naverPresetState } from './naver-preset.js';
 import { refreshTradeSignals } from './trade-signals.js';
 import { collectPeakSources } from './peak-sources.js';
 import { collectRegionVolume } from './region-volume.js';
@@ -76,7 +73,7 @@ const warmedDb = warmDbFiles([DB_PATH, `${DB_PATH}-wal`]);
 if (warmedDb.read) console.log(`DB를 미리 읽었습니다(${Math.round(warmedDb.bytes / 1e6)}MB, ${(warmedDb.ms / 1000).toFixed(1)}초).`);
 
 store.closeInterruptedRuns();
-if (migrateDabangSchedule()) console.log('다방 예약을 구 전체 자동수집으로 전환했습니다. 기존 동별 예약 설정은 로컬에 보관했습니다.');
+
 const tidy = store.tidyListings();
 if (tidy.stale) console.log(`14일 넘게 다시 못 본 매물을 사라짐으로 두었습니다: ${staleText(tidy.staleBy)}`);
 if (tidy.purged) console.log(`사라진 지 오래된 매물 ${tidy.purged}건을 지웠습니다.`);
@@ -737,14 +734,6 @@ app.post<{ Body: { captures?: CaptureInput[] } }>('/api/naver/capture', { bodyLi
   return { stored, total: naverCaptureState().total };
 });
 
-function browseAutoReply(reply: { code: (status: number) => unknown }, action: () => unknown) {
-  try { return action(); }
-  catch (error) {
-    const status = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number' ? error.statusCode : 503;
-    reply.code(status);
-    return { error: status < 500 && error instanceof Error ? error.message : '예약 조회 상태를 처리하지 못했습니다.' };
-  }
-}
 const dashboardOrigins = new Set([DASHBOARD_URL, `http://${HOST}:${PORT}`, 'http://localhost:5173', 'http://127.0.0.1:5173']);
 const fromDashboard = (origin: string | undefined) => !origin || dashboardOrigins.has(origin);
 app.get('/api/collection/price-limits', async (req, reply) => {
@@ -760,38 +749,6 @@ app.put('/api/collection/price-limits', async (req, reply) => {
   store.setQuietSetting(collectionPriceLimitsKey(change.source), JSON.stringify(change.limits));
   return collectionPriceLimitsState(store.getSetting);
 });
-app.get('/api/browse/naver-preset',async (_req,reply)=>{reply.header('Cache-Control','no-store');return browseAutoReply(reply,()=>({preset:naverPresetState()}));});
-app.put<{Body:Parameters<typeof saveNaverPreset>[0]}>('/api/browse/naver-preset',async (req,reply)=>{
-  if(!fromExtension(req.headers.origin) && !fromDashboard(req.headers.origin)){reply.code(403);return {error:'확장 팝업이나 로컬 대시보드에서만 조건을 저장할 수 있습니다.'};}
-  return browseAutoReply(reply,()=>({preset:saveNaverPreset(req.body)}));
-});
-app.get('/api/browse/auto', async (_req, reply) => {
-  reply.header('Cache-Control', 'no-store');
-  return browseAutoReply(reply, browseAutoState);
-});
-app.put<{ Body: { enabled?: unknown; areaIds?: unknown; sites?: unknown } }>('/api/browse/auto', async (req, reply) => {
-  if (!fromDashboard(req.headers.origin)) { reply.code(403); return { error: '대시보드에서만 예약 설정을 바꿀 수 있습니다.' }; }
-  return browseAutoReply(reply, () => setBrowseAuto(req.body));
-});
-app.post<{ Body: { areaIds?: unknown; sites?: unknown } }>('/api/browse/auto/run', async (req, reply) => {
-  if (!fromDashboard(req.headers.origin)) { reply.code(403); return { error: '대시보드에서만 실행할 수 있습니다.' }; }
-  return browseAutoReply(reply, () => runBrowseAutoNow(req.body));
-});
-app.post<{ Body: Parameters<typeof pollBrowseAuto>[0] }>('/api/browse/auto/poll', async (req, reply) => {
-  if (!fromExtension(req.headers.origin)) { reply.code(403); return { error: '확장 프로그램에서 온 요청만 받습니다.' }; }
-  return browseAutoReply(reply, () => pollBrowseAuto(req.body));
-});
-app.post<{ Body: Parameters<typeof reportBrowseAuto>[0] }>('/api/browse/auto/report', async (req, reply) => {
-  if (!fromExtension(req.headers.origin)) { reply.code(403); return { error: '확장 프로그램에서 온 요청만 받습니다.' }; }
-  return browseAutoReply(reply, () => reportBrowseAuto(req.body));
-});
-
-app.get('/api/browse/scopes', async (_req, reply) => {
-  reply.header('Cache-Control', 'no-store');
-  try { return { scopes: readBrowseScopes(store.getSetting(BROWSE_SCOPES_KEY), store.listAreas()) }; }
-  catch { reply.code(409); return { error: '저장한 동별 범위와 현재 지역 설정을 확인해 주세요.' }; }
-});
-
 app.post<{ Body: { jobId?: unknown; batchId?: unknown; captures?: unknown; scope?: unknown; naverScope?: unknown; daangnScope?: unknown } }>('/api/browse/capture', { bodyLimit: EXTENSION_BODY_LIMIT }, async (req, reply) => {
   if (!fromExtension(req.headers.origin)) {
     reply.code(403);

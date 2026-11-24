@@ -4,7 +4,6 @@ import * as store from './db.js';
 import { DATA_DIR, ROOT } from './config.js';
 import { isRunning, startRun } from './runner.js';
 import { CAPTURE_SOURCES, type AutoCheckState } from '../shared/types.js';
-import { enqueueScheduledBrowse, resetBrowseAutoSchedule } from './browse-auto.js';
 
 // 정해진 때에 알아서 조회한다. 두 가지가 있다.
 // - 자동 확인(full): 정한 요일(또는 매일)과 시각에 '조회하기'와 같은 조회(모든 사이트와 공고).
@@ -110,11 +109,6 @@ function noticeRunSince(since: number): boolean {
  * 시작한 뒤에는 실패하거나 일부만 보거나 중단돼도 다시 돌리지 않는다. 공고 확인은 창 없이 공고만 모은다(알림은 runner의 noticesOnly 규칙).
  */
 function runSlot(kind: Kind, slot: Date): MissedCheckResult {
-  // 확장 순회는 일반 수집기의 최근 실행 여부와 별도로 회차를 관리한다.
-  if (kind === 'full') {
-    try { enqueueScheduledBrowse(slot.getTime()); }
-    catch { console.warn('다방 예약 요청을 보관하지 못했습니다. 예약 조회 상태를 확인해 주세요.'); }
-  }
   const day = localDay(slot);
   if (store.getSetting(LAST_DAY[kind]) === day) return 'done';
   const done = () => {
@@ -189,7 +183,6 @@ export async function setAutoCheck(input: { time?: unknown; day?: unknown; visib
   if (input.noticeTime !== undefined) store.setSetting('notice_check_time', input.noticeTime ?? 'off');
   if (typeof input.visible === 'boolean') store.setSetting('auto_check_visible', input.visible ? '1' : '0');
   if (!fullChanged && !noticeChanged) return;
-  if (fullChanged) resetBrowseAutoSchedule();
   const now = new Date();
   for (const kind of KINDS) {
     if (kind === 'full' ? !fullChanged : !noticeChanged) continue;

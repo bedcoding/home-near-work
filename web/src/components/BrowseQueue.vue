@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Area } from '../../../shared/types';
-import BrowseAuto from './BrowseAuto.vue';
 import HelpTip from './HelpTip.vue';
 import NaverManual from './NaverManual.vue';
 
@@ -85,7 +84,7 @@ interface BrowseState {
 type Command = 'start' | 'pause' | 'resume' | 'retry';
 
 // 네이버 조회: 이 순회는 네이버(고른 구나 동 전체 목록)만 돈다. 다방과 직방은 '조회하기'가 서버에서 구, 동, 역 반경까지 모으고,
-// KB부동산과 호갱노노는 매물 카드와 지도 정보 창의 단추로 그 자리 지도만 연다(priceSites.ts). 확장은 예약 조회와 예전 기록 때문에 다른 사이트도 안다.
+// KB부동산과 호갱노노는 매물 카드와 지도 정보 창의 단추로 그 자리 지도만 연다(priceSites.ts). 순회 기록에는 다른 사이트도 표시될 수 있다.
 const SITES = [{ id: 'naver', name: '네이버', mode: '구나 동 전체', defaultOn: true }];
 /** 지금은 순회에서 뺐지만 확장에 남은 예전 순회 기록에 나올 수 있는 사이트 */
 const PAST_SITES: Record<string, string> = { dabang: '다방', zigbang: '직방', daangn: '당근부동산', kbland: 'KB부동산', hogangnono: '호갱노노' };
@@ -288,44 +287,6 @@ const naverAreas = computed(() => props.areas.filter((a) => !!a.region && a.purp
 const otherAreaCount = computed(() => props.areas.length - naverAreas.value.length);
 const selectedAreas = ref<number[]>([]);
 const selectedSites = ref<string[]>([]);
-// 다방 동별 범위: 이제 네이버 조회에는 쓰지 않고, 아래 브라우저 예약 조회(BrowseAuto)의 다방 예약에만 넘긴다.
-// 못 불러오면 예약 조회의 다방만 못 고르고 네이버 조회는 그대로 시작할 수 있다.
-const areaScopes = ref<Record<string, DabangRegionScope[]>>({});
-const scopesReady = ref(false);
-const scopesLoading = ref(false);
-let scopeController: AbortController | undefined;
-let scopeTimeout: number | undefined;
-async function loadScopes() {
-  if (scopesLoading.value) return;
-  scopesReady.value = false;
-  scopesLoading.value = true;
-  const controller = new AbortController();
-  scopeController = controller;
-  scopeTimeout = window.setTimeout(() => controller.abort(), 8000);
-  try {
-    const response = await fetch('/api/browse/scopes', { signal: controller.signal, cache: 'no-store' });
-    if (!response.ok) throw new Error('scopes unavailable');
-    const data = await response.json();
-    if (!data?.scopes || typeof data.scopes !== 'object' || Array.isArray(data.scopes)) throw new Error('invalid scopes');
-    const next: Record<string, DabangRegionScope[]> = {};
-    for (const [id, regions] of Object.entries(data.scopes)) {
-      if (!/^\d+$/.test(id) || !Array.isArray(regions) || !regions.length || regions.length > 50) throw new Error('invalid scopes');
-      next[id] = regions.map((region) => {
-        const parsed = readRegion(region);
-        if (!parsed) throw new Error('invalid scope');
-        return parsed;
-      });
-    }
-    areaScopes.value = next;
-    scopesReady.value = true;
-  } catch {
-    // 범위를 못 읽으면 scopesReady가 false로 남아 예약 조회가 다방 예약을 막는다.
-  } finally {
-    window.clearTimeout(scopeTimeout);
-    scopesLoading.value = false;
-    scopeController = undefined;
-  }
-}
 let initializedAreas = false;
 let initializedSites = false;
 watch(() => naverAreas.value.map((a) => a.id), (ids) => {
@@ -436,21 +397,17 @@ let commandTimeout: number | undefined;
 // 네이버 필터는 열린 네이버 탭의 주소에서 확장이 읽는다. 대시보드는 탭 목록과 조건 문구, 시작 때 대조할 키만 받는다.
 interface NaverTab { id: number; title: string; active: boolean }
 interface NaverSource { key: string; tabId: number; conditions: { label: string; value: string }[] }
-type NaverRequest = 'naver-filter-tabs' | 'naver-filter-state' | 'naver-preset-save';
+type NaverRequest = 'naver-filter-tabs' | 'naver-filter-state';
 const naverChosen = computed(() => chosenSites.value.some((site) => site.id === 'naver'));
 const naverTabs = ref<NaverTab[]>([]);
 const naverTabId = ref<number | null>(null);
 const naverSource = ref<NaverSource | null>(null);
 const naverBusy = ref<NaverRequest | null>(null);
 const naverError = ref<string | null>(null);
-const naverPresetNotice = ref<string | null>(null);
 let naverRequestId: string | null = null;
 let naverSequence = 0;
 let naverTimeout: number | undefined;
 const naverSourceReady = computed(() => !naverJobs.value.length || !naverBusy.value && !!naverSource.value && naverSource.value.tabId === naverTabId.value);
-// 0.8.23부터 대시보드에서도 읽은 필터와 고른 구나 동을 브라우저 예약 조회용으로 저장한다.
-const naverPresetVersionReady = computed(() => extensionAtLeast(8, 23));
-const canSaveNaverPreset = computed(() => naverPresetVersionReady.value && naverJobs.value.length > 0 && naverSourceReady.value);
 const naverStatus = computed(() => naverBusy.value === 'naver-filter-tabs' ? '열린 네이버 매물 탭을 찾고 있습니다.'
   : naverBusy.value === 'naver-filter-state' ? '고른 탭의 필터를 읽고 있습니다.'
   : naverError.value ?? (naverSource.value ? '고른 탭의 주소에서 읽은 조건입니다. 시작할 때 다시 읽어 같을 때만 수집하고, 수집 창의 응답도 같은 조건인지 확인합니다.'
@@ -469,12 +426,11 @@ function readNaverSource(value: unknown): NaverSource | null {
     || !x.conditions.every((row) => row && typeof row.label === 'string' && row.label.length <= 80 && typeof row.value === 'string' && row.value.length <= 1000)) return null;
   return { key: x.key, tabId: x.tabId, conditions: x.conditions.map(({ label, value }) => ({ label, value })) };
 }
-function naverRequest(type: NaverRequest, extra: { tabId?: number; filterKey?: string; areaIds?: number[] } = {}) {
+function naverRequest(type: NaverRequest, extra: { tabId?: number } = {}) {
   if (!ready.value) return;
   naverRequestId = `${requestPrefix}-naver-${++naverSequence}`;
   naverBusy.value = type;
   naverError.value = null;
-  naverPresetNotice.value = null;
   window.clearTimeout(naverTimeout);
   naverTimeout = window.setTimeout(() => {
     naverRequestId = null;
@@ -490,16 +446,12 @@ function readNaverFilter() {
   naverSource.value = null;
   if (naverTabId.value !== null) naverRequest('naver-filter-state', { tabId: naverTabId.value });
 }
-function saveNaverPreset() {
-  if (!canSaveNaverPreset.value || !naverSource.value) return;
-  naverRequest('naver-preset-save', { tabId: naverSource.value.tabId, filterKey: naverSource.value.key, areaIds: naverJobs.value.map((job) => job.areaId) });
-}
 function chooseNaverTab(value: string) {
   const id = Number(value);
   naverTabId.value = naverTabs.value.some((tab) => tab.id === id) ? id : null;
   readNaverFilter();
 }
-function onNaverReply(data: { requestId?: unknown; requestType?: unknown; error?: unknown; tabs?: unknown; context?: unknown; preset?: unknown }) {
+function onNaverReply(data: { requestId?: unknown; requestType?: unknown; error?: unknown; tabs?: unknown; context?: unknown }) {
   if (!naverRequestId || data.requestId !== naverRequestId) return;
   naverRequestId = null;
   naverBusy.value = null;
@@ -519,10 +471,6 @@ function onNaverReply(data: { requestId?: unknown; requestType?: unknown; error?
     const source = readNaverSource(data.context);
     if (source && source.tabId === naverTabId.value) naverSource.value = source;
     else naverError.value = '고른 탭의 필터를 확인하지 못했습니다. 필터를 다시 읽어 주세요.';
-  } else if (data.requestType === 'naver-preset-save') {
-    const preset = data.preset as { areaIds?: unknown } | null;
-    if (preset && Array.isArray(preset.areaIds)) naverPresetNotice.value = '이 조건과 지역을 예약용으로 저장했습니다. 아래 브라우저 예약 조회의 ‘예약 설정’에서 네이버를 켜세요.';
-    else naverError.value = '예약용 저장을 확인하지 못했습니다. 아래 브라우저 예약 조회에서 저장한 필터를 확인해 주세요.';
   }
 }
 watch(() => naverChosen.value && ready.value, (load) => { if (load) loadNaverTabs(); });
@@ -624,21 +572,18 @@ function command(command: Command) {
   }, 12000);
 }
 watch(ready, (v) => { if (v) requestStatus(); });
-onMounted(async () => {
+onMounted(() => {
   window.addEventListener('message', onMessage);
   requestStatus();
   // 네이버는 처음부터 골라져 있어 위 watch가 바뀜을 못 보므로, 창을 열 때 열린 네이버 탭 목록을 바로 불러온다.
   if (naverChosen.value && ready.value) loadNaverTabs();
   poll = window.setInterval(requestStatus, 2000);
-  await loadScopes();
 });
 onBeforeUnmount(() => {
   window.removeEventListener('message', onMessage);
   window.clearInterval(poll);
   window.clearTimeout(commandTimeout);
   window.clearTimeout(naverTimeout);
-  scopeController?.abort();
-  window.clearTimeout(scopeTimeout);
 });
 </script>
 
@@ -804,21 +749,7 @@ onBeforeUnmount(() => {
           </details>
         </div>
       </section>
-
     </template>
-    <BrowseAuto :areas="areas" :scopes="areaScopes" :scopes-ready="scopesReady">
-      <!-- 네이버 필터를 예약용으로 저장하는 단추는 예약 칸 안에 둔다(예약을 안 쓰면 접힌 채로 안 보인다). -->
-      <template #preset>
-        <div v-if="ready && naverChosen" class="naver-preset-row">
-          <template v-if="naverPresetVersionReady">
-            <button type="button" class="btn btn-sm" :disabled="!canSaveNaverPreset" @click="saveNaverPreset">{{ naverBusy === 'naver-preset-save' ? '저장하는 중…' : '지금 고른 네이버 필터와 지역을 예약용으로 저장' }}</button>
-            <HelpTip text="1번에서 고른 구나 동과 위에서 읽은 네이버 필터를 예약 조회용으로 저장합니다. 바로 수집하지는 않습니다." />
-            <span v-if="naverPresetNotice" class="help" role="status">{{ naverPresetNotice }}</span>
-          </template>
-          <span v-else class="help">예약용 저장은 확장 0.8.23 이상에서 됩니다.</span>
-        </div>
-      </template>
-    </BrowseAuto>
   </section>
 </template>
 
@@ -844,7 +775,7 @@ legend .muted { margin-left: 6px; font-weight: 400; font-size: 13px; }
 .check-list small { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .naver-source { display: grid; gap: 10px; }
 .naver-source-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.naver-preset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+
 .naver-source-row select { flex: 1 1 260px; min-width: 0; min-height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: inherit; font: inherit; font-size: 14px; }
 /* 읽은 네이버 필터: 표 대신 한 줄씩 늘어나는 작은 칸(긴 값은 줄이고 마우스를 올리면 전부 보인다) */
 .naver-conditions { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13px; }

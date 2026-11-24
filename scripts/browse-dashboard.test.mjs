@@ -128,13 +128,3 @@ test('a worker reply without the requested Naver field gives recovery steps inst
   assert.match(h.messages.at(-1).error, /새로고침/);
   assert.equal(Object.hasOwn(h.messages.at(-1), 'tabs'), false);
 });
-
-test('saving a Naver preset forwards the tab, key and regions and returns the saved preset', async () => {
-  const h = harness(async (message) => message.type === 'naver-preset-save' ? { preset: { areaIds: message.areaIds, updatedAt: 1, summary: 'Synthetic', conditions: [] } } : { state: null });
-  await settle();
-  h.receive('naver-preset-save', { data: { source: 'hnw-dashboard', type: 'naver-preset-save', tabId: 99, filterKey: 'synthetic-key', areaIds: [7], requestId: 'synthetic-preset' } });
-  await settle();
-  assert.deepEqual(h.requests.at(-1), { type: 'naver-preset-save', tabId: 99, filterKey: 'synthetic-key', areaIds: [7] });
-  assert.equal(h.messages.at(-1).requestType, 'naver-preset-save');
-  assert.deepEqual(h.messages.at(-1).preset.areaIds, [7]);
-});

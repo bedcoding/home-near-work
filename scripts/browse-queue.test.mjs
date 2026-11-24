@@ -5,7 +5,6 @@ import vm from 'node:vm';
 import { normalizeBrowseProgress } from '../server/browse-progress.ts';
 import {page as naverPage} from './fixtures/naver-region.mjs';
 import {snapshot,selectedFilter} from './fixtures/naver-context.mjs';
-import naverContext from '../server/naver-context.ts';
 
 // Execute the production queue with synthetic Chrome state. No private config,
 // production database, browser profile, or external network is accessed.
@@ -18,67 +17,9 @@ const KEY = 'hnw-browse-state';
 const PREFIX = 'hnw-browse-pending:';
 const DONG = { kind: 'dabang-region', name: '예시구 예시동', dong: '예시동', url: 'https://www.dabangapp.com/map/onetwo?search_type=region&search_id=99991' };
 
-test('예약 회차를 다시 받아도 같은 두 동 순회를 재사용하고 새 실행을 만들지 않는다', async () => {
-  const h = harness();
-  const request = { id: 'scheduled-123', sites: ['dabang'], areas: [{ ...AREA, dabangRegions: [DONG, { ...DONG, dong: '가상동', url: DONG.url.replace('99991', '99992') }] }] };
-  const first = await h.api.startAutomatic(request);
-  assert.equal(first.id, request.id);
-  assert.equal(first.jobs.length, 2);
-  assert.equal(first.jobs[0].id, `${request.id}:0`);
-  await h.api.tick();
-  await h.api.startAutomatic(request);
-  assert.equal(h.windows(), 1);
-  assert.equal(h.navigations.length, 1);
-  assert.equal(h.saved['hnw-browse-auto-report'].requestId, request.id);
-  assert.equal(h.saved['hnw-browse-auto-report'].status, 'running');
-});
-
-test('예약 조회는 동 범위 없이 실행되지 않고 수동 실행과 중단 작업을 덮어쓰지 않는다', async () => {
-  const h = harness();
-  const request = { id: 'scheduled-safe', sites: ['dabang'], areas: [{ ...AREA, dabangRegions: [DONG] }] };
-  await assert.rejects(h.api.startAutomatic({ ...request, areas: [AREA] }), /invalid automatic request/);
-  await h.start();
-  const manualId = h.saved[KEY].id;
-  await assert.rejects(h.api.startAutomatic(request), (error) => error.code === 'busy');
-  await h.command('pause');
-  await assert.rejects(h.api.startAutomatic(request), (error) => error.code === 'busy');
-  assert.equal(h.saved[KEY].id, manualId);
-});
-
-test('시작 기록만 남기고 종료된 워커는 같은 예약 회차를 임의로 다시 실행하지 않는다', async () => {
-  const h = harness({ 'hnw-browse-auto-started': 'consumed-run' });
-  await assert.rejects(h.api.startAutomatic({ id: 'consumed-run', sites: ['dabang'], areas: [{ ...AREA, dabangRegions: [DONG] }] }), (error) => error.code === 'consumed');
-  assert.equal(h.windows(), 0);
-});
-
-test('중단된 예약을 수동 새 조회로 대체하면 이전 예약은 실패 보고로 남긴다', async () => {
-  const h = harness();
-  await h.api.startAutomatic({ id: 'scheduled-replaced', sites: ['dabang'], areas: [{ ...AREA, dabangRegions: [DONG] }] });
-  await h.command('pause');
-  await h.command('start', { sites: ['dabang'], areas: [AREA] });
-  assert.equal(h.saved[KEY].automaticRequestId, undefined);
-  assert.equal(h.saved['hnw-browse-auto-report'].requestId, 'scheduled-replaced');
-  assert.equal(h.saved['hnw-browse-auto-report'].status, 'failed');
-  const replaced = h.writes.filter((v) => v['hnw-browse-auto-report']?.status === 'failed');
-  assert.ok(replaced.length > 0);
-  assert.ok(replaced.every((v) => v[KEY] && !v[KEY].automaticRequestId), '종료 보고와 새 상태를 같은 저장 작업으로 교체한다');
-});
-
-test('예약 수동 재시도도 이전 보고와 새 실행 상태를 함께 저장한다', async () => {
-  const h = harness();
-  await h.api.startAutomatic({ id: 'scheduled-retry', sites: ['dabang'], areas: [{ ...AREA, dabangRegions: [DONG] }] });
-  await h.command('pause');
-  h.saved[KEY].jobs[0].status = 'partial';
-  await h.command('retry');
-  const replacement = h.writes.find((v) => v['hnw-browse-auto-report']?.status === 'failed');
-  assert.equal(replacement[KEY].automaticRequestId, undefined);
-  assert.notEqual(replacement[KEY].id, 'scheduled-retry');
-  assert.equal(replacement[KEY].status, 'running');
-});
-
 function harness(initial = {}) {
   const saved = copy(initial), tabs = new Map(), timers = new Map(), handlers = {};
-  const posts = [], navigations = [], receipts = new Map(), batches = new Set(), alarms = [], writes = [], requests = [], naverLedgers = new Map();
+  const posts = [], navigations = [], receipts = new Map(), batches = new Set(), alarms = [], requests = [], naverLedgers = new Map();
   let requestResult = {status:200,json:true}, naverStorage = false, daangnCoverage = null, filterSnapshot = snapshot();
   let random=0.5,storeDelay=0;
   const math=Object.create(Math);math.random=()=>random;
@@ -96,7 +37,7 @@ function harness(initial = {}) {
         return copy(Object.fromEntries(names.filter((k) => k in saved).map((k) => [k, saved[k]])));
       },
       getKeys: async () => Object.keys(saved),
-      set: async (value) => { writes.push(copy(value)); Object.assign(saved, copy(value)); },
+      set: async (value) => { Object.assign(saved, copy(value)); },
       remove: async (keys) => { for (const k of Array.isArray(keys) ? keys : [keys]) delete saved[k]; },
     } },
     alarms: { create: async (name) => { alarms.push(name); }, clear: async () => {}, onAlarm: { addListener: (fn) => { handlers.alarm = fn; } } },
@@ -146,7 +87,7 @@ function harness(initial = {}) {
       site: job.site, pageUrl: job.url, status: 200, body: '{}', url: 'https://www.dabangapp.com/api/v5/room-list/search',
     }, ...overrides }, from);
   };
-  return { api, saved, tabs, handlers, posts, navigations, alarms, writes, command, start, bind, capture,
+  return { api, saved, tabs, handlers, posts, navigations, alarms, command, start, bind, capture,
     advance: (ms = 3000) => { now += ms; }, setResult: (r) => { result = r; },
     setOffline: (v) => { offline = v; }, loseAck: () => { loseAck = true; },
     setStations: (value) => { stations = value; },
@@ -323,28 +264,6 @@ test('missing or changed preview context and nonregional targets cannot start un
   }
 });
 
-test('automatic Naver uses the frozen URL and filters without querying an open source tab',async()=>{
-  const h=harness();h.setSourceTabs([]);h.setActiveTab({id:55,url:'http://localhost:8787/'});h.setNaverStorage(true);
-  const preset=naverContext.read({pageUrl:snapshot(selectedFilter).pageUrl});
-  const pinned=naverContext.forArea(NAVER_AREA,preset,'https://fin.land.naver.com/map?center=synthetic');
-  const request={id:'scheduled-naver',sites:['naver'],areas:[{...NAVER_AREA,naver:pinned}]};
-  await h.api.startAutomatic(request);await h.api.tick();await h.bind();
-  assert.equal(h.saved[KEY].jobs.length,1);assert.deepEqual(h.sourceReads,[]);assert.deepEqual(h.filterReads,[]);
-  assert.equal(h.saved[KEY].jobs[0].naverScope.filter.rentPrice.max,770000);
-  await naverCapture(h,['101'],{filter:selectedFilter});await h.api.tick();
-  assert.equal(h.saved[KEY].jobs[0].receipt.naverCoverage.complete,true);
-  assert.equal(h.saved['hnw-browse-auto-report'].requestId,request.id);
-});
-
-test('automatic mixed-source planning keeps region and station jobs separate and rejects changed saved filters',async()=>{
-  const h=harness(),preset=naverContext.read({pageUrl:snapshot(selectedFilter).pageUrl}),pinned=naverContext.forArea(NAVER_AREA,preset,'https://fin.land.naver.com/map?center=synthetic');
-  await h.api.startAutomatic({id:'mixed-naver',sites:['dabang','naver'],areas:[{...AREA,dabangRegions:[DONG]},{...NAVER_AREA,naver:pinned}]});
-  assert.deepEqual(plain(h.saved[KEY].jobs.map(job=>job.site)),['dabang','naver']);
-  const broken=harness();
-  await assert.rejects(broken.api.startAutomatic({id:'bad-naver',sites:['naver'],areas:[{...NAVER_AREA,naver:{...pinned,scope:{...pinned.scope,filter:{...pinned.scope.filter,rentPrice:{max:999}}}}}]}),/필터/);
-  assert.equal(broken.windows(),0);
-});
-
 test('popup can select a source map while the dashboard is active and pins that exact tab through start',async()=>{
   const h=harness(),popup={id:'synthetic-extension',url:'chrome-extension://synthetic-extension/popup.html'};
   h.setActiveTab({id:55,url:'http://localhost:8787/'});h.setFilter(snapshot(selectedFilter));
@@ -370,18 +289,6 @@ test('the dashboard lists Naver tabs and reads only preview text and the key bef
     await assert.rejects(h.api.message({type:'naver-filter-tabs'},sender),/대시보드/);
     await assert.rejects(h.api.message({type:'naver-filter-state',tabId:99},sender),/대시보드/);
   }
-});
-
-test('the dashboard saves the previewed filter and regions for reservations through the extension',async()=>{
-  const h=harness();h.setActiveTab({id:55,url:'http://localhost:8787/'});h.setFilter(snapshot(selectedFilter));
-  const key=(await h.api.message({type:'naver-filter-state',tabId:99},DASH)).context.key;
-  await h.api.message({type:'naver-preset-save',tabId:99,filterKey:key,areaIds:[7]},DASH);
-  const saves=()=>h.posts.filter(post=>post.path==='/api/browse/naver-preset');
-  assert.deepEqual(plain(saves()[0].payload.areaIds),[7]);
-  assert.equal(new URL(saves()[0].payload.pageUrl).searchParams.get('rentPrice'),'0-770000');
-  await assert.rejects(h.api.message({type:'naver-preset-save',tabId:99,filterKey:'outdated',areaIds:[7]},DASH),/달라졌습니다/);
-  await assert.rejects(h.api.message({type:'naver-preset-save',tabId:99,filterKey:key,areaIds:[7]},{frameId:0,url:'https://example.invalid/'}),/대시보드/);
-  assert.equal(saves().length,1,'stale previews and other pages do not save a preset');
 });
 
 test('a dashboard run gives region areas to Naver and station areas to the other sites',async()=>{
@@ -519,7 +426,7 @@ test('scoped Dabang runs past old bounds and completes only with matching server
 });
 
 const ZIGBANG_STATION = { name: '예시역', lat: AREA.lat, lng: AREA.lng, zigbangId: '99991' };
-const ZIGBANG_PIN = { stationId: '99991', radiusKm: 1, url: 'https://www.zigbang.com/home/oneroom/subways/99991/items' };
+
 const zigbangProof = (extra = {}) => ({ stationId: '99991', radiusKm: 1, total: 3, received: 3, missing: 0, complete: true, reason: 'complete', ...extra });
 async function startZigbang() {
   const h = harness(); h.setStations([ZIGBANG_STATION]); await h.start(['zigbang']);
@@ -571,41 +478,6 @@ test('Zigbang reaches a bounded partial result after thirty minutes without comp
   const h = await startZigbang(); h.advance(1800000); await h.api.tick();
   assert.equal(h.saved[KEY].jobs[0].status, 'partial');
   assert.equal(h.pageCalls(), 0, 'no further page actions are issued after the safety bound');
-});
-
-test('automatic mixed tours keep server-pinned station and area-major job order despite changed extension hints', async () => {
-  const h = harness(); h.setStations([{ ...ZIGBANG_STATION, zigbangId: '99992' }]);
-  await h.api.startAutomatic({ id: 'mixed-request', sites: ['dabang', 'zigbang'], areas: [
-    { ...AREA, dabangRegions: [DONG], zigbangStation: ZIGBANG_PIN },
-    { ...AREA, lat: 35.2, dabangRegions: [{ ...DONG, url: DONG.url.replace('99991', '99992') }], zigbangStation: { ...ZIGBANG_PIN, stationId: '99993', url: ZIGBANG_PIN.url.replace('99991', '99993') } },
-  ] });
-  const jobs = h.saved[KEY].jobs;
-  assert.deepEqual(plain(jobs.map(j => j.site)), ['dabang', 'zigbang', 'dabang', 'zigbang']);
-  assert.equal(jobs[1].url, ZIGBANG_PIN.url, 'learned hints cannot replace the frozen station');
-  assert.match(jobs[3].url, /99993\/items$/);
-  assert.deepEqual(plain(jobs.map(j=>j.id)), ['mixed-request:0','mixed-request:1','mixed-request:2','mixed-request:3']);
-});
-
-test('Zigbang-only automatic request requires no Dabang scope and rejects an invalid station pin', async () => {
-  const h = harness();
-  await h.api.startAutomatic({ id: 'zigbang-request', sites: ['zigbang'], areas: [{ ...AREA, zigbangStation: ZIGBANG_PIN }] });
-  assert.equal(h.saved[KEY].jobs.length, 1);
-  assert.equal(h.saved[KEY].jobs[0].url, ZIGBANG_PIN.url);
-  for (const pin of [undefined, { ...ZIGBANG_PIN, radiusKm: 2 }, { ...ZIGBANG_PIN, stationId: '99992' }, { ...ZIGBANG_PIN, url: ZIGBANG_PIN.url + '?radius=2' }]) {
-    const invalid = harness();
-    await assert.rejects(invalid.api.startAutomatic({ id: 'bad-pin', sites: ['zigbang'], areas: [{ ...AREA, zigbangStation: pin }] }));
-    assert.equal(invalid.saved['hnw-browse-auto-started'], undefined);
-    assert.equal(invalid.windows(), 0);
-  }
-});
-
-test('automatic request cannot silently drop a disabled site or become stuck after preparation fails', async () => {
-  const h = harness({ sites: { dabang: true, zigbang: false } });
-  await assert.rejects(h.api.startAutomatic({ id: 'disabled-mixed', sites: ['dabang','zigbang'], areas: [{ ...AREA, dabangRegions: [DONG], zigbangStation: ZIGBANG_PIN }] }), /꺼져/);
-  assert.equal(h.saved[KEY].jobs.length, 0);
-  assert.equal(h.saved['hnw-browse-auto-report'].status, 'failed');
-  assert.equal(h.windows(), 0);
-  assert.equal(await h.api.automaticReady(), true);
 });
 
 test('retry preserves dong URL and scope instead of returning to radius URL', async () => {
@@ -772,6 +644,30 @@ test('worker recovery restores scheduling while extension updates pause invalida
   assert.equal(recovered.pageCalls(), 0);
 });
 
+test('a legacy scheduled tour pauses on recovery, saves its pending capture and resumes by explicit command', async () => {
+  const original = harness();
+  await original.start(['dabang'], [{ ...AREA, dabangRegions: [DONG] }]);
+  await original.bind();
+  await original.capture();
+  assert.equal(original.pending().length, 1);
+
+  original.saved[KEY].automaticRequestId = original.saved[KEY].id;
+  const recovered = harness(original.saved);
+  await recovered.api.recover();
+  await recovered.api.tick();
+  assert.equal(recovered.saved[KEY].status, 'paused');
+  assert.equal(recovered.saved[KEY].jobs[0].receipt.listings, 2);
+  assert.equal(recovered.pending().length, 0);
+  assert.equal(recovered.pageCalls(), 0);
+  assert.equal(recovered.windows(), 0);
+
+  await recovered.command('resume');
+  await recovered.api.tick();
+  assert.equal(recovered.saved[KEY].automaticRequestId, undefined);
+  assert.equal(recovered.saved[KEY].status, 'running');
+  assert.equal(recovered.navigations[0].url, original.saved[KEY].jobs[0].url);
+});
+
 test('loading and missing page scripts fail visibly instead of reporting collection success', async () => {
   const loading = harness(); await loading.start(); loading.advance(46000); await loading.api.tick();
   assert.equal(loading.saved[KEY].jobs[0].status, 'failed');
@@ -801,10 +697,9 @@ test('retry fetches newly learned station hints instead of revisiting missing hi
   assert.match(h.navigations[0].url, /subways\/synthetic-station\/items$/);
 });
 
-test('new tours exclude Daangn sent by a stale dashboard or an automatic request', async () => {
+test('new tours exclude Daangn sent by a stale dashboard', async () => {
   const h = harness({ sites: { daangn: true } });
   await assert.rejects(h.start(['daangn'], [DAANGN_AREA]), /일반 조회/);
-  await assert.rejects(h.api.startAutomatic({ id: 'synthetic-old-daangn', sites: ['daangn'], areas: [DAANGN_AREA] }), /invalid automatic request/);
   assert.equal(h.saved[KEY], undefined);
   assert.equal(h.windows(), 0);
 

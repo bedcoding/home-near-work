@@ -3,8 +3,6 @@
 const HNW_BROWSE = (() => {
   const KEY = 'hnw-browse-state';
   const OUTBOX = 'hnw-browse-pending:';
-  const AUTO_REPORT = 'hnw-browse-auto-report';
-  const AUTO_STARTED = 'hnw-browse-auto-started';
   const ALARM = 'hnw-browse';
   // KB부동산과 호갱노노는 확장에서 뺐다(대시보드 매물 단추가 그 자리 지도를 연다).
   const SITES = ['naver', 'dabang', 'zigbang'];
@@ -66,11 +64,10 @@ const HNW_BROWSE = (() => {
       finally { reporting = false; if (latestReport) reportSnapshot(latestReport); }
     }, 500);
   }
-  const save = async (state, replacedReport = null) => {
+  const save = async (state) => {
     state.updatedAt = Date.now();
     state.heartbeatAt = Date.now();
-    const autoReport = state.automaticRequestId ? automaticReport(state) : replacedReport;
-    await chrome.storage.local.set({ [KEY]: state, ...(autoReport ? { [AUTO_REPORT]: autoReport } : {}) });
+    await chrome.storage.local.set({ [KEY]: state });
     report(state);
     const job = state.jobs?.[state.index] || state.jobs?.[state.index - 1];
     if (state.tabId != null && job?.site === 'naver' && job.naverScope) {
@@ -83,15 +80,6 @@ const HNW_BROWSE = (() => {
       }, job.documentId ? { documentId: job.documentId } : { frameId: 0 }).catch(() => {});
     }
   };
-  function automaticReport(state, status = state.status) {
-    if (!state.jobs.length && state.phase === 'error') status = 'failed';
-    return { requestId: state.automaticRequestId, runId: state.id, status,
-      totalJobs: state.jobs.length,
-      completeJobs: state.jobs.filter((j) => j.status === 'complete').length,
-      partialJobs: state.jobs.filter((j) => ['partial', 'visited'].includes(j.status)).length,
-      failedJobs: state.jobs.filter((j) => ['failed', 'needs-input'].includes(j.status)).length,
-      token: crypto.randomUUID() };
-  }
   const keys = async () => (chrome.storage.local.getKeys ? await chrome.storage.local.getKeys() : Object.keys(await chrome.storage.local.get(null)))
     .filter((k) => k.startsWith(OUTBOX)).sort();
   function schedule(delay = 3000) {
@@ -186,13 +174,6 @@ const HNW_BROWSE = (() => {
       stored.unreadable === 0 && Number.isSafeInteger(stored.stored) && stored.stored >= 0 &&
       Number.isSafeInteger(stored.excluded) && stored.excluded >= 0 && stored.stored + stored.excluded === stored.total;
   }
-  function pinnedZigbang(value) {
-    if (!value || typeof value.stationId !== 'string' || !/^[1-9]\d{0,19}$/.test(value.stationId) || value.radiusKm !== 1 ||
-        typeof value.url !== 'string' || zigbangStation(value.url) !== value.stationId) throw new Error('직방 예약의 역 1km 범위를 확인해 주세요.');
-    const url = new URL(value.url);
-    if (url.search || url.hash || url.hostname !== 'www.zigbang.com') throw new Error('직방 예약의 역 주소를 확인해 주세요.');
-    return { stationId: value.stationId, radiusKm: 1, url: url.href };
-  }
   function dabangRegions(input) {
     if (input === undefined) return [];
     if (!Array.isArray(input) || !input.length || input.length > 50) throw new Error('다방 동별 범위를 확인해 주세요.');
@@ -229,15 +210,15 @@ const HNW_BROWSE = (() => {
       return false;
     } catch { return false; }
   }
-  function siteAvailable(toggles, id, automatic) {
+  function siteAvailable(toggles, id) {
     // 이미 저장된 수동 당근 작업은 일반 탭 설정과 관계없이 이어서 마친다.
-    return (!automatic && id === 'daangn') || hnwEnabled(toggles, HNW_SITES.find((site) => site.id === id));
+    return id === 'daangn' || hnwEnabled(toggles, HNW_SITES.find((site) => site.id === id));
   }
-  async function jobsFor(areas, chosen, runId, automatic = false, naverContext = null) {
+  async function jobsFor(areas, chosen, runId, naverContext) {
     const got = await chrome.storage.local.get(['sites', 'hnw-stations']);
-    const selected = SITES.filter((id) => chosen.includes(id) && siteAvailable(got.sites, id, automatic));
+    const selected = SITES.filter((id) => chosen.includes(id) && siteAvailable(got.sites, id));
     if (!selected.length) throw new Error('조회할 수 있는 사이트를 하나 이상 골라 주세요.');
-    if (automatic && chosen.some((id) => !selected.includes(id))) throw new Error('예약한 사이트가 확장에서 꺼져 있습니다. 사이트를 켠 뒤 다시 실행해 주세요.');
+
     const hadDaangn = chosen.includes('daangn');
     const unique = new Map();
     for (const input of areas) {
@@ -246,32 +227,23 @@ const HNW_BROWSE = (() => {
       const areaSites = selected.filter(site => input.region ? site === 'naver' : site !== 'naver');
       // 이전 대시보드가 당근과 함께 보낸 지역 중 남은 사이트에서 조회할 수 없는 곳은 건너뛴다.
       if (!areaSites.length && hadDaangn) continue;
-      if (!areaSites.length) throw new Error(automatic ? '선택한 사이트와 예약 지역의 범위가 다릅니다.' : '선택한 사이트가 조회할 수 있는 지역을 골라 주세요.');
+      if (!areaSites.length) throw new Error('선택한 사이트가 조회할 수 있는 지역을 골라 주세요.');
       area.browseSites=areaSites;
       area.dabangRegions = dabangRegions(input.dabangRegions);
       if (areaSites.includes('naver') && (!input.region || input.purpose === 'alert' || !['gu','dong'].includes(input.region.kind))) throw new Error('네이버는 수집할 구나 동을 선택해 주세요.');
       if (areaSites.includes('naver') && input.region && input.purpose !== 'alert') {
         const code = input.region.code;
         area.region = {kind:input.region.kind,code,name:input.region.name || area.name};
-        let pinnedContext=naverContext;
-        if(automatic) {
-          pinnedContext=HNW_NAVER_CONTEXT.read({pageUrl:input.naver?.url});
-          const saved=HNW_NAVER_LEDGER.scope(input.naver?.scope);
-          const targetCode=input.region.kind==='gu' && /^\d{5}$/.test(code) ? `${code}00000` : code;
-          if(saved.code!==targetCode || saved.sort!==pinnedContext.sort || !saved.filter || !HNW_NAVER_LEDGER.matchesFilter(saved,pinnedContext.filter))throw new Error('예약에 저장한 네이버 범위와 필터가 다릅니다.');
-        }
-        area.naverContext=pinnedContext;
+        area.naverContext = naverContext;
         area.naverScope = HNW_NAVER_LEDGER.scope({ kind: 'naver-region', code: input.region.kind === 'gu' && /^\d{5}$/.test(code) ? `${code}00000` : code, name: input.region.name || area.name,
-          ...(pinnedContext ? {filter:pinnedContext.filter,sort:pinnedContext.sort} : {}) });
+          ...(naverContext ? {filter:naverContext.filter,sort:naverContext.sort} : {}) });
       }
-      if (automatic && areaSites.includes('zigbang')) area.zigbangStation = pinnedZigbang(input.zigbangStation);
-      unique.set(`${area.lat}|${area.lng}|${area.radiusM}|${JSON.stringify(area.dabangRegions)}|${JSON.stringify(area.zigbangStation)}|${JSON.stringify(area.naverScope)}`, area);
+      unique.set(`${area.lat}|${area.lng}|${area.radiusM}|${JSON.stringify(area.dabangRegions)}|${JSON.stringify(area.naverScope)}`, area);
     }
     const jobs = [];
     for (const area of unique.values()) {
       const links = hnwSiteLinks(area, got['hnw-stations']).filter(l => area.browseSites.includes(l.id));
-      for (const generated of links) {
-        const link = automatic && generated.id === 'zigbang' ? { ...generated, url: area.zigbangStation.url } : generated;
+      for (const link of links) {
         if (link.id === 'naver' && area.naverScope) {
           if (!area.naverContext) throw new Error('현재 네이버 필터를 읽지 못했습니다. 무필터 수집은 시작하지 않았습니다.');
           const copied = HNW_NAVER_CONTEXT.forArea(area,area.naverContext,link.url);
@@ -566,7 +538,7 @@ const HNW_BROWSE = (() => {
     }
     const job = state.jobs[state.index];
     const toggles = (await chrome.storage.local.get('sites')).sites;
-    if (!siteAvailable(toggles, job.site, !!state.automaticRequestId)) {
+    if (!siteAvailable(toggles, job.site)) {
       await finishJob(state, 'needs-input', '확장에서 이 사이트를 꺼서 건너뛰었습니다.'); schedule(); return;
     }
     if (job.status === 'pending') {
@@ -574,7 +546,7 @@ const HNW_BROWSE = (() => {
       await save(state);
       // 별도로 만든 탭만 사용하며 사용자가 열어 둔 다른 탭에는 접근하지 않는다.
       if (state.tabId == null) {
-        const win = await chrome.windows.create({ url: 'about:blank', focused: !state.automaticRequestId });
+        const win = await chrome.windows.create({ url: 'about:blank', focused: true });
         state.tabId = win.tabs?.[0]?.id;
         if (state.tabId == null) throw new Error('조회 탭을 만들지 못했습니다.');
       } else {
@@ -738,36 +710,30 @@ const HNW_BROWSE = (() => {
       }
     }
   });
-  async function command(message, automaticRequestId = null) {
+  async function command(message) {
     let state = await read();
-    let replacedReport = null;
     if (message.command === 'start') {
       if (state?.status === 'running') throw new Error('이미 지역 순회가 진행 중입니다.');
       if ((await keys()).length && state?.status === 'paused' && message.sites?.includes('naver') && state.jobs?.some(job=>job.site==='naver'&&!job.naverScope?.filter)) await flushOutbox(state);
       if ((await keys()).length) throw new Error('보관 중인 응답이 있습니다. 이어하기로 먼저 저장해 주세요.');
       if (!Array.isArray(message.areas) || !message.areas.length || message.areas.length > 100) throw new Error('조회할 지역을 1~100곳 골라 주세요.');
-      const id = automaticRequestId || crypto.randomUUID();
+      const id = crypto.randomUUID();
       const chosen = Array.isArray(message.sites) ? message.sites : ['naver', 'dabang', 'zigbang'];
       if (chosen.includes('daangn') && !SITES.some(site => chosen.includes(site))) {
         throw new Error(DAANGN_GENERAL_ONLY);
       }
-      if (state?.automaticRequestId && state.status === 'paused') {
-        replacedReport = automaticReport(state, 'failed');
-      }
-      state = { id, status: 'running', jobs: [], index: 0, createdAt: Date.now(), updatedAt: Date.now(), tabId: null, logs: [],
-        ...(automaticRequestId ? { automaticRequestId } : {}) };
+      state = { id, status: 'running', jobs: [], index: 0, createdAt: Date.now(), updatedAt: Date.now(), tabId: null, logs: [] };
       record(state, 'start');
       phase(state, 'preparing', '서버에서 지역 바로가기 정보를 확인합니다. 최대 5초까지 기다립니다.', 'hints');
-      // 이전 예약의 종료 보고와 새 수동 상태를 한 번에 저장한다.
-      await save(state, replacedReport);
+      await save(state);
       try {
         await refreshHints();
-        const naverContext = chosen.includes('naver') && !automaticRequestId ? await readNaverContext(message.naverSourceTabId) : null;
+        const naverContext = chosen.includes('naver') ? await readNaverContext(message.naverSourceTabId) : null;
         if (naverContext && message.naverFilterKey && message.naverFilterKey !== naverContext.key) throw new Error('필터가 미리보기와 달라졌습니다. 현재 필터를 다시 읽은 뒤 시작해 주세요.');
-        state.jobs = await jobsFor(message.areas, chosen, id, !!automaticRequestId,naverContext);
+        state.jobs = await jobsFor(message.areas, chosen, id, naverContext);
         phase(state, 'opening', '조회할 지역과 사이트 목록을 준비했습니다. 전용 탭을 여는 중입니다.', 'ready');
       } catch (error) {
-        state.status = automaticRequestId ? 'done' : 'paused';
+        state.status = 'paused';
         phase(state, 'error', `조회 준비에 실패했습니다${Number.isInteger(error?.status) ? ` (HTTP ${error.status})` : ''}. 서버 연결을 확인한 뒤 새 순회를 시작해 주세요.`, 'error');
         await save(state);
         throw error;
@@ -786,12 +752,7 @@ const HNW_BROWSE = (() => {
         const retryable = state.jobs.filter(job => ['failed', 'partial', 'needs-input'].includes(job.status));
         if (retryable.length && retryable.every(job => job.site === 'daangn')) throw new Error(DAANGN_GENERAL_ONLY);
         await refreshHints();
-        // 수동 재시도는 새 조회다. 이전 예약 회차의 저장 확인을 재사용하지 않는다.
-        if (state.automaticRequestId) {
-          replacedReport = automaticReport(state, state.status === 'paused' ? 'failed' : 'done');
-          delete state.automaticRequestId;
-          state.id = crypto.randomUUID();
-        }
+        if (state.automaticRequestId) state.id = crypto.randomUUID();
         const got = await chrome.storage.local.get('hnw-stations');
         for (const job of retryable) {
           if (job.site === 'daangn') continue;
@@ -817,11 +778,12 @@ const HNW_BROWSE = (() => {
       if (state.tabId != null) {
         try { await chrome.tabs.get(state.tabId); } catch { state.tabId = null; }
       }
+      delete state.automaticRequestId;
       state.status = 'running';
       phase(state, 'opening', message.command === 'retry' ? '미확인 작업을 다시 준비했습니다.' : '중단한 조회를 이어갑니다.', message.command === 'retry' ? 'retry' : 'resume');
     } else throw new Error('알 수 없는 순회 명령입니다.');
     if (state) {
-      await save(state, replacedReport);
+      await save(state);
       if (state.status === 'running') {
         await chrome.alarms.create(ALARM, { periodInMinutes: 0.5 });
         schedule();
@@ -829,35 +791,7 @@ const HNW_BROWSE = (() => {
     }
     return state;
   }
-  async function automaticReady() {
-    const state = await read();
-    return !['running', 'paused'].includes(state?.status) && !(await keys()).length;
-  }
-  async function startAutomatic(request) {
-    return locked(async () => {
-      if (!request || typeof request.id !== 'string' || !/^[a-zA-Z0-9._:-]{1,120}$/.test(request.id) ||
-          !Array.isArray(request.sites) || !request.sites.length || request.sites.length > 3 ||
-          new Set(request.sites).size !== request.sites.length || request.sites.some((s) => !['dabang', 'zigbang', 'naver'].includes(s)) ||
-          !Array.isArray(request.areas) || !request.areas.length || request.areas.length > 100 ||
-          request.areas.some((a) => !a || !a.region && request.sites.includes('dabang') && (!Array.isArray(a.dabangRegions) || !a.dabangRegions.length))) throw new Error('invalid automatic request');
-      if (request.sites.includes('zigbang')) for (const area of request.areas.filter(a=>!a.region)) pinnedZigbang(area.zigbangStation);
-      const existing = await read();
-      if (existing?.id === request.id && existing.automaticRequestId === request.id) return existing;
-      const started = (await chrome.storage.local.get(AUTO_STARTED))[AUTO_STARTED];
-      if (started === request.id) throw Object.assign(new Error('automatic request already consumed'), { code: 'consumed' });
-      if (!(await automaticReady())) throw Object.assign(new Error('another tour needs attention'), { code: 'busy' });
-      // 먼저 실행 식별자를 남긴다. 중간에 워커가 종료되면 재실행 대신 확인 필요로 보고한다.
-      await chrome.storage.local.set({ [AUTO_STARTED]: request.id });
-      return command({ command: 'start', areas: request.areas, sites: request.sites }, request.id);
-    });
-  }
   async function message(input, sender) {
-    if(input.type==='naver-preset-save') {
-      if(!isPopup(sender) && !isDashboard(sender))throw new Error('대시보드나 확장 팝업에서 조건을 저장해 주세요.');
-      const current=await readNaverContext(input.tabId);
-      if(current.key!==input.filterKey)throw new Error('필터가 미리보기와 달라졌습니다. 다시 읽은 뒤 저장해 주세요.');
-      return postJson('/api/browse/naver-preset',{pageUrl:current.pageUrl,areaIds:input.areaIds},'PUT',5000);
-    }
     if (input.type === 'naver-filter-tabs') {
       if (!isPopup(sender) && !isDashboard(sender)) throw new Error('대시보드나 확장 팝업에서 네이버 탭을 선택해 주세요.');
       return {tabs:await naverFilterTabs()};
@@ -884,16 +818,21 @@ const HNW_BROWSE = (() => {
     return locked(async () => {
       const state = await read();
       if (!state) return;
-      if (state.status === 'running' && state.phase === 'preparing' && !state.jobs.length) {
+      if (state.status === 'running' && state.automaticRequestId) {
+        state.status = 'paused';
+        phase(state, 'paused', '예약 조회가 종료되어 진행 중이던 작업을 멈췄습니다. 이어하기로 계속할 수 있습니다.', 'recovered');
+        await save(state);
+      } else if (state.status === 'running' && state.phase === 'preparing' && !state.jobs.length) {
         state.status = 'paused';
         phase(state, 'error', '준비 중 확장이 다시 시작됐습니다. 선택한 조건으로 새 순회를 시작해 주세요.', 'recovered');
         await save(state);
+        return;
       } else if (state.status === 'running' || (await keys()).length) {
         record(state, 'recovered');
         await save(state);
-        await chrome.alarms.create(ALARM, { periodInMinutes: 0.5 });
-        schedule();
-      } else report(state);
+      } else { report(state); return; }
+      await chrome.alarms.create(ALARM, { periodInMinutes: 0.5 });
+      schedule();
     });
   }
   chrome.alarms.onAlarm.addListener((alarm) => { if (alarm.name === ALARM) void tick(); });
@@ -919,5 +858,5 @@ const HNW_BROWSE = (() => {
       await save(state);
     }
   }));
-  return { message, capture, tick, read, ownsTab, samePage, hasRegion, recover, diagnostic, startAutomatic, automaticReady };
+  return { message, capture, tick, read, ownsTab, samePage, hasRegion, recover, diagnostic };
 })();

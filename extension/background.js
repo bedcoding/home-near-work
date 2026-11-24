@@ -7,7 +7,7 @@
 // - '한 번에 열기': 팝업, 대시보드에서 누르면 켜 둔 사이트를 새 창 하나에 연다.
 // - 공고 사이트에서 직접 받은 첨부 파일의 위치를 대시보드에 알린다(대시보드가 파일을 읽음).
 
-importScripts('sites.js', 'areas.js', 'daangn-capture.js', 'naver-ledger.js', 'vendor/lz-string.js', 'naver-context.js', 'naver-fetch.js', 'browse-queue.js', 'browse-auto.js');
+importScripts('sites.js', 'areas.js', 'daangn-capture.js', 'naver-ledger.js', 'vendor/lz-string.js', 'naver-context.js', 'naver-fetch.js', 'browse-queue.js');
 
 const SERVER = 'http://127.0.0.1:8787';
 const BATCH = 20;
@@ -152,7 +152,7 @@ async function flush() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return;
-  if (['browse-command', 'browse-status', 'browse-context', 'naver-filter-state', 'naver-filter-tabs', 'naver-preset-save'].includes(message.type)) {
+  if (['browse-command', 'browse-status', 'browse-context', 'naver-filter-state', 'naver-filter-tabs'].includes(message.type)) {
     HNW_BROWSE.message(message, sender).then(sendResponse, (e) => sendResponse({ error: e.message }));
     return true;
   }
@@ -354,22 +354,13 @@ async function checkVersion() {
   }
 }
 
-async function ensureAutoBrowseAlarm() {
-  // 압축해제 확장 새로고침은 installed/startup 없이 워커만 다시 띄울 수 있다.
-  // 이미 있는 알람은 유지해 워커가 깨어날 때마다 다음 실행이 밀리지 않게 한다.
-  const existing = await chrome.alarms.get('hnw-browse-auto');
-  if (!existing) await chrome.alarms.create('hnw-browse-auto', { periodInMinutes: 0.5 });
-}
-
 async function start() {
   chrome.alarms.create('hnw-version', { periodInMinutes: 1 });
-  chrome.alarms.create('hnw-browse-auto', { periodInMinutes: 0.5 });
   await registerSiteScripts();
   await migrateAreas();
   await syncAreas();
   await flushPending();
   await flushPendingFiles();
-  await HNW_AUTO_BROWSE.poll().catch(() => {});
 }
 
 chrome.runtime.onInstalled.addListener(() => void start());
@@ -383,16 +374,11 @@ async function removeLegacyBridgeParser() {
 }
 // 서비스 워커가 뜰 때마다(새 버전으로 다시 불러온 직후 포함) 버전을 바로 알린다. 대시보드가 이것으로 확장이 최신인지 안다.
 void removeLegacyBridgeParser().catch(() => {}).then(checkVersion);
-// 업그레이드 직후와 서비스 워커 재개 때도 예약 요청을 확인한다.
-void ensureAutoBrowseAlarm().catch(() => {});
-void HNW_AUTO_BROWSE.poll().catch(() => {});
+// 이전 버전이 만든 예약 조회 알람을 해제한다.
+void chrome.alarms.clear('hnw-browse-auto').catch(() => {});
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'hnw-browse-auto') { void HNW_AUTO_BROWSE.poll().catch(() => {}); return; }
   if (alarm.name !== 'hnw-version') return;
   void checkVersion();
-  // 알람이 사라져도 기존 버전 확인 알람에서 복구하고 대기 요청을 확인한다.
-  void ensureAutoBrowseAlarm().catch(() => {});
-  void HNW_AUTO_BROWSE.poll().catch(() => {});
   void syncAreas();
   // 대시보드가 다시 켜졌으면 모아 둔 것을 보낸다.
   void flush();

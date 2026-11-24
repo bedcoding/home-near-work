@@ -2,8 +2,8 @@
 // 대시보드의 '한 번에 열기'를 확장 백그라운드로 넘긴다.
 //   대시보드 → { source: 'hnw-dashboard', type: 'ping' | 'open-sites', area }
 //   확장     → { source: 'hnw-extension', type: 'hello', version, sites } / { type: 'opened', ok, names | error }
-//   대시보드 → { type: 'naver-filter-tabs' | 'naver-filter-state' | 'naver-preset-save', tabId, filterKey, areaIds, requestId }
-//   확장     → { type: 'naver-filter', requestId, requestType, tabs | context | preset | error }
+//   대시보드 → { type: 'naver-filter-tabs' | 'naver-filter-state', tabId, requestId }
+//   확장     → { type: 'naver-filter', requestId, requestType, tabs | context | error }
 
 function hnwToPage(message) {
   window.postMessage({ source: 'hnw-extension', ...message }, location.origin);
@@ -51,10 +51,10 @@ window.addEventListener('message', (e) => {
     return;
   }
   // 네이버 필터는 열린 네이버 탭의 주소에서 확장이 읽는다. 대시보드는 탭 목록과 조건 문구만 받는다.
-  const naverField = { 'naver-filter-tabs': 'tabs', 'naver-filter-state': 'context', 'naver-preset-save': 'preset' }[e.data.type];
+  const naverField = { 'naver-filter-tabs': 'tabs', 'naver-filter-state': 'context' }[e.data.type];
   if (naverField) {
-    const { type, tabId, filterKey, areaIds } = e.data;
-    void hnwBrowseRequest({ type, tabId, filterKey, areaIds }, naverField)
+    const { type, tabId } = e.data;
+    void hnwBrowseRequest({ type, tabId }, naverField)
       .then((res) => hnwToPage({ type: 'naver-filter', requestId, requestType: type, ...res }));
     return;
   }

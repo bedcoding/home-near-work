@@ -22,7 +22,6 @@ function worker(storage, status = 503, { ownedTabId = null, ownershipFails = fal
   };
   const context = {
     importScripts() {}, URL, AbortSignal, crypto: { randomUUID },
-    HNW_AUTO_BROWSE: { poll: async () => {} },
     setTimeout() {},
     HNW_BROWSE: {
       ownsTab: async (id) => {
@@ -40,7 +39,7 @@ function worker(storage, status = 503, { ownedTabId = null, ownershipFails = fal
       },
       action: { setBadgeBackgroundColor: async () => {}, setBadgeText: async () => {}, setTitle: async () => {} },
       runtime: { onMessage: { addListener(fn) { handler = fn; } }, onInstalled: event, onStartup: event, getManifest: () => ({ version: 'test' }) },
-      downloads: { onChanged: event }, alarms: { onAlarm: event },
+      downloads: { onChanged: event }, alarms: { onAlarm: event, clear: async () => {} },
     },
     fetch: async (url, options) => {
       if (!url.endsWith('/api/naver/capture')) throw new Error('test ignores version checks');
